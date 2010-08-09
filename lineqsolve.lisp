@@ -61,26 +61,25 @@
 	       ;; (format t "src:~A dst:~A~&" src (aref matrix to0row i))
 	     ))))))
 
-(defun lineqsolve-backward (matrix remaining solutions)
+(defun lineqsolve-backward (matrix diagonal solutions)
 ;;  (declare (optimize (debug 3)))
 ;  (format t "remaining:~A solutions:~A matrix:~A~&" remaining solutions matrix)
-  (if (null remaining)
+  (if (< diagonal 0)
       solutions
       (let-matrix-dims matrix
-	(let* ((diagonal (pop remaining)))
-	  ;; set (r,c) with r=c=diagonal implicitly to 1; 0 for r<diagonal
-	  (symbol-macrolet ((coeff (aref matrix diagonal diagonal))
-			    (value (aref matrix diagonal maxcol)))
-	    (if (= 0 coeff)
-		nil
-		(let* ((solution (/ value coeff)))
-		  (loop for i in remaining do
-		       (symbol-macrolet ((ivalue (aref matrix i maxcol))
-					 (icoeff (aref matrix i diagonal)))
-			 (setf ivalue (- ivalue (* icoeff solution)))))
-		  (lineqsolve-backward matrix
-				       remaining
-				       (cons solution solutions)))))))))
+	;; set (r,c) with r=c=diagonal implicitly to 1; 0 for r<diagonal
+	(symbol-macrolet ((coeff (aref matrix diagonal diagonal))
+			  (value (aref matrix diagonal maxcol)))
+	  (if (= 0 coeff)
+	      nil
+	      (let* ((solution (/ value coeff)))
+		(loop for i from diagonal downto 0 do
+		     (symbol-macrolet ((ivalue (aref matrix i maxcol))
+				       (icoeff (aref matrix i diagonal)))
+		       (setf ivalue (- ivalue (* icoeff solution)))))
+		(lineqsolve-backward matrix
+				     (1- diagonal)
+				     (cons solution solutions))))))))
 
 (defun array-swap-rows (matrix r0 r1)
   "Swaps the two array rows with indices r0 and r1."
@@ -103,7 +102,7 @@ necessarily 1). DIAGONAL must be set to 0"
   (let-matrix-dims matrix
     (if (>= diagonal maxrow)
 	(lineqsolve-backward matrix
-			     (range maxrow :stop 0 :step -1 :incl t)
+			     maxrow
 			     nil)
 	(let ((not0row (loop for i from diagonal upto maxrow
 			  when (/= 0 (aref matrix i diagonal))
@@ -141,13 +140,14 @@ necessarily 1). DIAGONAL must be set to 0"
 (defun test-3d-2 ()
   (let ((a (make-array '(3 4) :initial-contents '((4 3 2 -4) (1 2 3 -6)
 						   (1 2 1 0)))))
-    ;(lineqsolve a) should be '(-1 2 -3)
+    ;; (lineqsolve a) should be '(-1 2 -3)
     a))
 
 (defun test-3d-3 ()
   (let ((a (make-array '(3 4) :initial-contents '((2 4 7 7155)
 						  (3 6 6 7956)
 						  (2 2 3 3561)))))
+    ;; (lineqsolve a) should be '(292 563 617)
     a))
 
 (defun test-3d-4 ()
