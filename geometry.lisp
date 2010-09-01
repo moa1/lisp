@@ -27,28 +27,37 @@
 ;; copy-vector3d -f------ 80.41
 ;; make-vector3d -f------ 80.41
 
+(deftype vector2d ()
+  `(array rational (2)))
+
 (deftype vector3d ()
   `(array rational (3)))
 
-(deftype vector2d ()
-  `(array rational (2)))
+(deftype vector4d ()
+  `(array rational (4)))
 
 (defun make-vector (&rest rest)
   (make-array (list (length rest)) :initial-contents rest))
 
-(defun make-vector3d (&optional (x 0) (y 0) (z 0))
-  (make-array 3 :element-type 'rational :initial-contents (list x y z)))
-
 (defun make-vector2d (&optional (x 0) (y 0))
   (make-array 2 :element-type 'rational :initial-contents (list x y)))
 
+(defun make-vector3d (&optional (x 0) (y 0) (z 0))
+  (make-array 3 :element-type 'rational :initial-contents (list x y z)))
+
+(defun make-vector4d (&optional (w 0) (x 0) (y 0) (z 0))
+  (make-array 4 :element-type 'rational :initial-contents (list x y z w)))
+
 (defun vector= (a b)
+  (equal-array a b))
+
+(defun vector2d= (a b)
   (equal-array a b))
 
 (defun vector3d= (a b)
   (equal-array a b))
 
-(defun vector2d= (a b)
+(defun vector4d= (a b)
   (equal-array a b))
 
 (defstruct (line (:constructor make-line (origin direction)))
@@ -79,26 +88,32 @@
 (define-constant +unit2d-x+ (make-vector2d 1 0) :test 'vector2d=)
 (define-constant +unit2d-y+ (make-vector2d 0 1) :test 'vector2d=)
 
-(defmacro define-2d-and-3d (suffix parameters &body body)
-  (let ((name2d (intern (concatenate 'string "VECTOR2D-" (string suffix))))
-	(name3d (intern (concatenate 'string "VECTOR3D-" (string suffix))))
-	(generic (intern (concatenate 'string "VECTOR-" (string suffix)))))
-    `(progn
-       (defun ,name2d (,@parameters)
-	 ,@body)
-       (defun ,name3d (,@parameters)
-	 ,@body)
-       (defun ,generic (,@parameters)
-	 ,@body))))
+(defmacro define-many-vector (dimension-names suffix parameters &body body)
+  `(progn 
+     ,@(loop for name in dimension-names collect
+	    (let ((symbol
+		   (intern (concatenate 'string
+					"VECTOR"
+					(string-toupper (string name))
+					"-"
+					(string-toupper (string suffix))))))
+	      `(defun ,symbol (,@parameters)
+		,@body)))))
 
-(define-2d-and-3d x (instance)
+(defmacro define-2d-and-3d (suffix parameters &body body)
+  `(define-many-vector ("" "2D" "3D") ,suffix ,parameters ,@body))
+
+(define-many-vector (2d 3d 4d) x (instance)
   (aref instance 0))
 
-(define-2d-and-3d y (instance)
+(define-many-vector (2d 3d 4d) y (instance)
   (aref instance 1))
 
-(defun vector3d-z (instance)
+(define-many-vector (3d 4d) z (instance)
   (aref instance 2))
+
+(define-many-vector (4d) w (instance)
+  (aref instance 3)) ;; this makes the ordering x y z w, not w x y z
 
 (defun arrays-equal-dimensions (&rest arrays)
   (if (consp arrays)
@@ -111,23 +126,29 @@
   (assert (apply #'arrays-equal-dimensions arrays))
   (apply #'map 'vector function (car arrays) (cdr arrays)))
 
-(defmacro define-map-array (suffix parameters function)
-  `(define-2d-and-3d ,suffix (,@parameters &rest vectors)
-     (apply #'map-array ,function vectors)))
+(defmacro define-map-array (dimension-names suffix parameters function)
+  `(define-many-vector ,dimension-names ,suffix (,@parameters
+						 vector &rest more-vectors)
+     (apply #'map-array ,function vector more-vectors)))
 
-(define-map-array add nil #'+)
+(define-map-array ("" 2d 3d 4d) add nil #'+)
 
-(define-map-array sub nil #'-)
+(define-map-array ("" 2d 3d 4d) sub nil #'-)
 
-(define-map-array invert nil #'-)
+(define-map-array ("" 2d 3d) invert nil #'-)
 
-(define-map-array scale (factor) (lambda (x) (* factor x)))
+(define-map-array ("" 2d 3d 4d) scale (factor) (lambda (x) (* factor x)))
 
 (define-2d-and-3d scalar (a b)
   (assert (arrays-equal-dimensions a b))
   (reduce #'+ (map 'list #'* a b)))
 
+(define-many-vector ("" 2d 3d 4d) norm (v)
+  (reduce #'+ (map 'list (lambda (x) (* x x)) v)))
+
 (define-2d-and-3d colinear-scale (a b)
+  "If a and b are colinear, return the factor f so that (vector-scale f b) == a.
+Return NIL otherwise."
   (assert (arrays-equal-dimensions a b))
   (let (factor)
     (loop for i below (length a)
@@ -162,6 +183,53 @@
   "Rotates a 90 degrees counterclockwise in a right-hand coordinate system."
   (make-vector2d (vector2d-y a)
 		 (- (vector2d-x a))))
+
+(defun vector4d-conjugate (q)
+  (make-vector4d (vector4d-w q)
+		 (- (vector4d-x q))
+		 (- (vector4d-y q))
+		 (- (vector4d-z q))))
+
+(defun vector4d-* (p q)
+  (let* ((vp (make-vector3d (vector4d-x p) (vector4d-y p) (vector4d-z p)))
+	 (vq (make-vector3d (vector4d-x q) (vector4d-y q) (vector4d-z q)))
+	 (wp (vector4d-w p))
+	 (wq (vector4d-w q))
+	 (vr (vector3d-add (vector3d-cross vp vq)
+			   (vector3d-scale wp vq)
+			   (vector3d-scale wq vp))))
+    (make-vector4d (- (* wp wq) (vector3d-scalar vp vq))
+		   (vector3d-x vr) (vector3d-y vr) (vector3d-z vr))))
+
+(defun vector4d-inverse (q)
+  (vector4d-scale (/ 1 (vector4d-norm q)) (vector4d-conjugate q)))
+
+(defun vector4d-unit-p (q)
+  (= 1 (vector4d-norm q)))
+
+(define-constant +vector4d-*-identity+ (make-vector4d 1 0 0 0) :test 'vector4d=)
+(define-constant +vector4d-+-identity+ (make-vector4d 0 0 0 0) :test 'vector4d=)
+
+(defun vector3d-to-4d (v)
+  (make-vector4d 0 (vector3d-x v) (vector3d-y v) (vector3d-z v)))
+
+(defun vector4d-to-3d (q)
+  (assert (= 0 (vector4d-w q)))
+  (make-vector3d (vector4d-x q) (vector4d-y q) (vector4d-z q)))
+
+(defun vector3d-rotate-quaternion (v q)
+  (assert (vector4d-unit-p q))
+  (vector4d-to-3d
+   (vector4d-* (vector4d-* q (vector3d-to-4d v))
+	       (vector4d-inverse q))))
+
+(defun vector3d-rotate-axis (v axis angle)
+  (let* ((angle2 (/ angle 2))
+	 (u-axis (vector3d-scale (sin-rational angle2) axis)))
+    (vector3d-rotate-quaternion v (make-vector4d (cos-rational angle2)
+						 (vector3d-x u-axis)
+						 (vector3d-y u-axis)
+						 (vector3d-z u-axis)))))
 
 (defun valid-plane (plane)
   (/= 0 (vector3d-scalar (plane-normal plane) (plane-normal plane))))
