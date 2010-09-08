@@ -1,4 +1,4 @@
-(asdf:oos 'asdf:load-op 'utils)
+;;(asdf:oos 'asdf:load-op 'utils)
 ;;(use-package 'alexandria)
 ;; in slime: (load ".../geometry.lisp") avoids the undefined function
 ;; make-vector3d, make-vector2d error of (define-constant)
@@ -146,6 +146,10 @@
 (define-many-vector ("" 2d 3d 4d) norm (v)
   (reduce #'+ (map 'list (lambda (x) (* x x)) v)))
 
+;;(define-many-vector ("" 2d 3d 4d) length (v)
+;;  damn irrational numbers
+;;  (sqrt (vector-norm v)))
+
 (define-2d-and-3d colinear-scale (a b)
   "If a and b are colinear, return the factor f so that (vector-scale f b) == a.
 Return NIL otherwise."
@@ -224,12 +228,24 @@ Return NIL otherwise."
 	       (vector4d-inverse q))))
 
 (defun vector3d-rotate-axis (v axis angle)
+  (assert (= 1 (vector3d-norm axis)))
   (let* ((angle2 (/ angle 2))
 	 (u-axis (vector3d-scale (sin-rational angle2) axis)))
     (vector3d-rotate-quaternion v (make-vector4d (cos-rational angle2)
 						 (vector3d-x u-axis)
 						 (vector3d-y u-axis)
 						 (vector3d-z u-axis)))))
+
+(defun unit-circle-parametrization (pt)
+  (let ((d (+ 1 (pow2 pt))))
+    (make-vector2d (/ (- 1 (pow2 pt)) d)
+		   (/ (* 2 pt) d))))
+
+(defun unit-sphere-parametrization (ps pt)
+  (let ((d (+ (pow2 ps) (pow2 pt) 1)))
+    (make-vector3d (/ (* 2 ps) d)
+		   (/ (* 2 pt) d)
+		   (/ (+ (pow2 ps) (pow2 pt) -1) d))))
 
 (defun valid-plane (plane)
   (/= 0 (vector3d-scalar (plane-normal plane) (plane-normal plane))))
@@ -242,6 +258,11 @@ Return NIL otherwise."
 				     (vector3d-scale line-fraction
 						     (line-direction line)))))
     (values intersection line-fraction)))
+
+(defun plane-side (plane point)
+  "Return which side a point is on. 0 is on the plane."
+  (let ((diff (vector3d-sub point (plane-origin plane))))
+    (vector3d-scalar diff (plane-normal plane))))
 
 (defun vector3d-perpendicular-any (a)
   (if (null (vector3d-colinear-scale a +unit3d-x+))
@@ -460,7 +481,7 @@ function projects the vector into the coordinate system given by the VECTORS."
 	 (m (make-array (list dims dims)
 			:initial-contents (mapcar #'vector->list vectors)))
 	 (m-1 (matrix-inverse m)))
-    (format t "~A~%" m)
+    ;;(format t "~A~%" m)
     (if (null m-1)
 	nil
 	(lambda (v)
@@ -471,9 +492,24 @@ function projects the vector into the coordinate system given by the VECTORS."
   (let ((projector (apply #'projector-into vectors)))
     (funcall projector vector)))
 
+(defun test-project-into ()
+  (vector3d= #(1/2 1/2 1/2) (project-into (make-vector3d 1 1 1)
+					  (vector3d-scale 2 +unit3d-x+)
+					  (vector3d-scale 2 +unit3d-y+)
+					  (vector3d-scale 2 +unit3d-z+))))
+
+
+
 ;;;; polygon stuff
 
-(defun make-polygon (&rest points)
+;;(defstruct (polygon (:constructor make-polygon (points lines)))
+;;  points
+;;  lines)
+
+;;(defun make-polygon-circular (points)
+;;  (make-polygon points (mappair* #'list points)))
+
+(defun make-polygon (points)
   points)
 
 (defun eql-polygon (a b)
@@ -481,6 +517,9 @@ function projects the vector into the coordinate system given by the VECTORS."
   (mapc (lambda (x y) (if (not (vector= x y)) (return-from eql-polygon nil)))
 	a b)
   t)
+
+;;(defun polygon-p (p)
+;;  ;; no 3 consecutive points colinear
 
 (defun equal-polygon (a b)
   "Return T if polygon A is only rotated with respect to polygon B."
@@ -510,6 +549,9 @@ function projects the vector into the coordinate system given by the VECTORS."
 		       (return-from convex-polygon2d-p nil)))))
 	   polygon))
   t)
+
+(defun map-polygon (function polygon)
+  (apply #'make-polygon (map 'list function polygon)))
 
 (defun intersect2d-line-line (line1 line2)
   ;; what holds at the intersection of two lines?
