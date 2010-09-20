@@ -24,7 +24,16 @@
 	 (2over . ,(4l (destructuring-bind (w x y z &rest r) d
 			 (setf d (nconc (list y z w x y z) r)))))
 	 ;; 2drop 2dup sf2.html
-	 ; conditionals fehlen noch
+	 (= . ,(4l (if (length>= d 2) (push (if (eq (pop d) (pop d)) -1 0) d)
+		       (error "="))))
+	 (< . ,(4l (push (let ((a (pop d)) (b (pop d)))
+			   (if (and (typep a 'real) (typep b 'real))
+			       (if (< a b) -1 0)
+			       (error "<")))
+			 d)))
+	 ;; > 0= 0< 0> invert and or sf4.html
+	 
+	 
 	 ;; word sf10.html
 	 ;; variables(symbols) create ,(Initializing an Array) sf8.html
 	 ;; ' ['] execute here sp@ sp0 sf9.html
@@ -103,7 +112,15 @@
 		     ((1 2 3 2over) :fail)
 		     ((1 2 2over) :fail)
 		     ((1 2over) :fail)
-		     ((2over) :fail))))
+		     ((2over) :fail)
+		     ((1 1 =) (1))
+		     ((1 2 =) (0))
+		     ((1 =) :fail)
+		     ((=) :fail)
+		     ((1 2 <) (0))
+		     ((2 1 <) (1))
+		     ((1 <) :fail)
+		     ((<) :fail))))
     (let ((tests
 	   (mapcar (lambda (par)
 		     (let* ((code (car par))
