@@ -12,16 +12,10 @@
 (defmacro m4di (name &body body)
   `(cons ',name (make-4dict :xt
 			    (lambda (d c f)
-			      (handler-case
-				  (multiple-value-bind (d2 c2 f2)
-				      (funcall (4l ,@body) d c f)
-				    (setq d d2 c c2 f f2))
-				(error (condition)
-				  (format nil "error ~A~%ins:~A~%d:~A"
-					  condition ',name d))
-				(:no-error (x)
-				  (declare (ignore x))
-				  (values nil d c f))))
+			      (multiple-value-bind (d2 c2 f2)
+				  (funcall (4l ,@body) d c f)
+				(setq d d2 c c2 f f2))
+			      (values d c f))
 			    :data ',body)))
 
 (defmacro m4dc (name &body body)
@@ -78,19 +72,21 @@
 					 (setq dic (4dict-xt d))
 					 (setq dic w)))))
 			     (push dic d))
-			   (error "find")))
+			   (error "find-xt")))
 	 (m4di execute (if (length>= d 1)
-			   (multiple-value-bind (failed d2 c2 f2)
+			   (multiple-value-bind (d2 c2 f2)
 			       (funcall (pop d) d c f)
-			     (if failed
-				 (error failed)
-				 (setq d d2 c c2 f f2)))
+			     (setq d d2 c c2 f f2))
 			   (error "execute")))
 	 (m4di newlist (push nil d))
 	 (m4di pushlist (if (length>= d 2)
 			    (let ((o (pop d)) (l (pop d)))
 			      (push (cons o l) d))
 			    (error "pushlist")))
+	 (m4di appendlist (if (length>= d 2)
+			      (let ((o (pop d)) (l (pop d)))
+				(push (nconc l (list o)) d))
+			      (error "appendlist")))
 	 (m4di set-xt
 	   (if (length>= d 2)
 	       (let* ((l (pop d))
@@ -100,28 +96,108 @@
 					`(push ',x d)
 					`(progn
 					   (push ',x d)
-					   (multiple-value-bind (failed d2 c2 f2)
+					   (multiple-value-bind (d2 c2 f2)
 					       (funcall
 						(4dict-xt
 						 (gethash 'execute ,ht))
 						d c f)
-					     (if failed
-						 (return (values failed d c f))
-						 (setq d d2 c c2 f f2))))))
+					     (setq d d2 c c2 f f2)))))
 				  l))
 		      (m (make-4dict)))
 		 (setf (4dict-xt m)  (eval `(lambda (d c f)
 					      (block nil
 						,@lc
-						(values nil d c f)))))
+						(values d c f)))))
 		 (setf (gethash s f) m))
 	       (error "set-xt")))
+	 (m4di while (if (length>= d 2)
+			 (let* ((loop-xt (pop d))
+				(stop-xt (pop d)))
+			   (macrolet ((call ()
+					`(multiple-value-bind (d2 c2 f2)
+					     (funcall
+					      (4dict-xt (gethash 'execute ht))
+					      d c f)
+					   (setq d d2 c c2 f f2))))
+			     (do nil ((progn (push stop-xt d)
+					     (call)
+					     (= (pop d) 0)))
+			       (push loop-xt d)
+			       (call))))
+			 (error "while")))
+	 ;; (word f1 newlist set-xt word f2 newlist 0 pushlist 9
+	 ;;  pushlist set-xt 1 word f1 find-xt word f2 find-xt while)
 	 ))
        )
   (dolist (alist alists)
     (setf (gethash (car alist) ht) (cdr alist)))
   (defparameter *f* ht)
   (defparameter *insertions* (cons 1 (mapcar #'car alists))))
+
+;; (inter nil
+;;        '(word |'| newlist
+;; 	 word word find-xt appendlist
+;; 	 word find-xt find-xt appendlist
+;; 	 set-xt)
+;;        (make-hash-table))
+;; (* (expt (* i p_word r) 4)
+;;    (expt (* i p_|'| r) 1)
+;;    (expt (* i p_newlist r) 1)
+;;    (expt (* i p_find-xt r) 3)
+;;    (expt (* i p_appendlist r) 2)
+;;    (expt (* i p_set-xt r) 1))
+;; what do the p_* have to be so that the product is maximal?
+;; (under the condition that the sum of all p_* == 1)
+;;
+;; ex: (* (expt p_a 2) (expt p_b 1)) ==
+;;     (* (expt p_a 2) (expt (- 1 p_a) 1)) ==
+;;     (* (expt p_a 2) (- 1 p_a)) ==
+;;     (- (expt p_a 2) (expt p_a 3)) where is this maximal? derivate
+;;     (- (* 2 p_a) (* 3 (expt p_a 2))) = 0
+;;     (* 2 p_a) = (* 3 (expt p_a 2))
+;;
+;; so applied to above text:
+;; (* (expt (* i p_word r) 4)
+;;    (expt (* i p_|'| r) 1)
+;;    (expt (* i p_newlist r) 1)
+;;    (expt (* i p_find-xt r) 3)
+;;    (expt (* i p_appendlist r) 2)
+;;    (expt (* i p_set-xt r) 1)) ==
+;; (* (expt (* i p_word r) 4)
+;;    (expt (* i p_find-xt r) 3)
+;;    (expt (* i p_appendlist r) 2)
+;;    (expt (* i p_1 r) 3))
+;;
+;; (defun fitness-p-exp-2 (s)
+;;   (let* ((sum (reduce #'+ s))
+;; 	 (sumnorm (if (= 0 sum) 1 sum))
+;; 	 (scaled (mapcar (lambda (x) (/ x sumnorm)) s))
+;; 	 (log-default (lambda (x) (if (<= x 0) -10000 (log x)))))
+;;     (+ (funcall log-default (* (expt (elt scaled 0) 1)
+;; 			       (expt (elt scaled 1) 1)
+;; 			       (expt (elt scaled 2) 1)
+;; 			       (expt (elt scaled 3) 2)
+;; 			       (expt (elt scaled 4) 3)
+;; 			       (expt (elt scaled 5) 4)))
+;;        ;; todo: try to evolve programs that are more robust with
+;;        ;; respect to the fitness function steepness
+;;        ;; (i.e. without #'log above)
+;;        (if (> sum 1) (/ sum) sum))))
+;;
+;; (defun offsp-p-exp (population)
+;;   (let ((p1 (choice population)))
+;;     (case (choice '(:mut :cross))
+;;       (:mut (mapcar (lambda (x) (clamp (+ (- x .1) (random .2)) 0 1))
+;; 		    p1))
+;;       (:cross (let ((p2 (choice population)))
+;; 		(mapcar (lambda (x y) (/ (+ x y) 2)) p1 p2))))))
+;;
+;; (genetic (repeat '(0 0 0 0 0 0) 2)
+;; 	 #'fitness-p-exp-2
+;; 	 500000
+;; 	 #'offsp-p-exp :verbose nil)
+;; (the best solution is '(1/12 1/12 1/12 2/12 3/12 4/12))
+
 
 (defun inter (d c f)
   (if (endp c)
@@ -132,12 +208,14 @@
 	    (push ins d)
 	    (progn
 	      (push ins c)
-	      (dolist (doins '(word find-xt execute))
-		(multiple-value-bind (failed d2 c2 f2)
-		    (funcall (4dict-xt (gethash doins *f*)) d c f)
-		  (setq fail failed d d2 c c2 f f2)
-		  (if failed
-		      (return))))))
+	      (handler-case
+		  (dolist (doins '(word find-xt execute))
+		    (multiple-value-bind (d2 c2 f2)
+			(funcall (4dict-xt (gethash doins *f*)) d c f)
+		      (setq d d2 c c2 f f2)))
+		(error (condition)
+		  (setf fail (format nil "error ~A~%ins:~A~%d:~A"
+				     condition ins d))))))
 	(if fail
 	    (values :fail fail nil)
 	    (inter d c f)))))
@@ -208,7 +286,8 @@
 	     ((2 1 <) (-1))
 	     ((1 <) :fail)
 	     ((<) :fail)
-	     ((word f1 newlist word + find-xt pushlist 5 pushlist set-xt 1 f1) (6))
+	     ((word f1 newlist word + find-xt pushlist 5 pushlist set-xt 1 f1)
+	      (6))
 	     )))
     (let ((tests
 	   (mapcar (lambda (par)
@@ -252,22 +331,27 @@
 	  (offsp (cons off nil))
 	  (copy-list off)))))
 
-(defun genetic (ancestors fitness generations foffspring)
+(defun genetic (ancestors fitness generations foffspring &key verbose)
   (let ((size (length ancestors))
 	(population (copy-list ancestors))
-	(bestf (lambda (p) (reduce (lambda (x y)
-				     (if (> (funcall fitness x)
-					    (funcall fitness y)) x y)) p))))
-    
-    (dotimes (gen generations (funcall bestf population))
-      (prind gen)
+	(bestf (lambda (p) (reduce (lambda (x y) (if (> (funcall fitness x)
+							(funcall fitness y))
+						     x y))
+				   p))))
+    (dotimes (gen generations (avalues (funcall bestf population)
+				       (funcall fitness it)))
+      (when (not (null verbose))
+	(prind gen)
+	(when (and (numberp verbose) (>= verbose 2))
+	  (prind population)))
       (let* ((fit (loop for i below size collect
 		       (let ((s (elt population i)))
 			 (cons s (funcall fitness s)))))
 	     (worst (reduce (lambda (x y) (if (< (cdr x) (cdr y)) x y)) fit)))
 	(setf population
-	      (let ((p (mapcar #'car (remove worst fit))))
-		(cons (funcall foffspring p) p)))
+	      (let ((child (funcall foffspring population))
+		    (p (mapcar #'car (remove worst fit))))
+		(cons child p)))
 	))))
 
 (defun fit-find-number (number)
@@ -326,3 +410,36 @@
 
 ;;  (let ((data (4m-data machine))
 ;;	(code (4m-code machine)))
+
+(defun inter-cont (c0 c1 &key d0 (f0 (make-hash-table)))
+  (multiple-value-bind (d c f)
+      (inter d0 c0 f0)
+    (declare (ignore c))
+    (if (eq d :fail)
+	:fail
+	(multiple-value-bind (d c f)
+	    (inter d c1 f)
+	  (values d c f)))))
+
+(defun |fit-find-'| ()
+  ;;  (let ((*insertions* '(word |'| newlist find-xt appendlist
+  ;;			set-xt)))
+  (let ((word-xt (gethash 'word *f*)))
+    (flet ((fit1 (s)
+	     (multiple-value-bind (d c f)
+		 (inter nil s (make-hash-table))
+	       (declare (ignorable d c))
+	       (if (eq d :fail)
+		   0
+		   (+ 1 (if (length>= s 100) 0 1)
+		    (multiple-value-bind (data)
+			(inter nil '(|'| word) f)
+		      (if (or (eq data :fail)
+			      (not (length>= data 1))
+			      (not (functionp (car data))))
+			  0
+			  (if (equal (car data) word-xt)
+			      2
+			      1))))))))
+      #'fit1)))
+
