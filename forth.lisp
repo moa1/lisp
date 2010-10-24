@@ -706,3 +706,110 @@
 		     (offsp (cons child population))
 		     child))))
       #'offsp)))
+
+
+;; (defstruct sicfo
+;;   ancestor
+;;   normalize)
+
+;; (defun sicfo.iid (&rest rest)
+;;   (lambda (c)
+;;     (declare (ignore c))
+;;     (make-sicfo :ancestor 0
+;; 		:normalize (constantly (constantly nil)))))
+
+;; (defun sicfo.const (value)
+;;   (lambda (c)
+;;     (declare (ignore c))
+;;     (make-sicfo :ancestor value
+;; 		:normalize (lambda (pos)
+;; 			     (lambda (mem &rest rest)
+;; 			       (declare (ignore rest))
+;; 			       (setf (elt mem pos) value))))))
+
+;; (defun sicfo.forall (name &rest list)
+;;   (lambda (c)
+;; ;; (values name
+;; ;; 	  (let ((value 0))
+;; ;; 	    (lambda (size)
+;; ;; 	      (incf value)
+;; ;; 	      (if (>= value size) nil value)))))    
+    
+;; ))
+
+;; (defstruct sictype
+;;   memsize
+;;   masker)
+  
+
+;; ;; genetic-sicfo must be a macro, otherwise the length of the sic must be given explicitly
+;; (defmacro genetic-sicfo (list &key sic-masker)
+;;   (let* ((masker (or sic-masker #'sic-masker))
+;; 	 (c (make-sictype :memsize (length list)
+;; 			  :masker masker))
+;; 	 ancestors
+;; 	 fitness
+;; 	 generations
+;; 	 foffspring)
+;;     (mapc (lambda (x)
+;; 	    (let* ((sicfo-inst (funcall x c))
+;; 		   (ancestor (sicfo-ancestor sicfo-inst))
+;; 		   (normalize (sicfo-normalize sicfo-inst)))
+;; 	      ;; generate ancestors, fitness, foffspring
+;; 	      ....
+;; 	      ))
+
+;; 	  list)))
+
+
+
+
+
+
+;; (genetic-sic (genetic-sicfo (append (repeat (sicfo.iid) (* 3 2))
+;; 				    (sicfo.forall x
+;; 						  (sicfo.io-slot 
+;; 						   :input x
+;; 						   :goal (1+ x)))
+;; 				    (sicfo.const 0))
+;; 			    ))
+
+
+;; ;;(defun make-genetic-sic (sic-content)
+;; ;;   (defstruct
+;; ;;   (labels ((iid (&rest rest)
+;; ;; 	     (make-sicfo :ancestor 0
+;; ;; 			 :normalize (constantly nil)))
+;; ;; 	   (forall (name)
+;; ;; 	     (values name
+;; ;; 		     (let ((value 0))
+;; ;; 		       (lambda (size)
+;; ;; 			 (incf value)
+;; ;; 			 (if (>= value size) nil value)))))
+;; ;; 	   (test (&key :input 
+	 
+
+  
+  
+
+;; (defclass sicfo.iid ()
+;;   ())
+
+;; (defmethod sicfo-ancestor ((i sicfo.iid) (size fixnum))
+;;   (declare (ignore i size))
+;;   0)
+
+
+  
+  
+;; ;; goal:
+;; (genetic-sic (make-genetic-sic (append (repeat (sicfo.iid) (* 3 2))
+;; 				       (forall x
+					       
+;; 					 (test :input (forall x)
+;; 					  :goal (1+ x))
+;; 					 (const 0)))))
+
+
+
+
