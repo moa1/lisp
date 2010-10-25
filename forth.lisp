@@ -347,7 +347,8 @@
 	  (offsp (cons off nil))
 	  (copy-list off)))))
 
-(defun genetic (ancestors fitness generations foffspring &key verbose)
+(defun genetic (ancestors fitness generations foffspring &key verbose
+		(unfit :serial))
   (let* ((population (copy-list ancestors))
 	 (fit (mapcar fitness population)))
     (dotimes (gen generations (let ((i (max-index fit)))
@@ -356,10 +357,24 @@
 	(prind gen)
 	(when (and (numberp verbose) (>= verbose 2))
 	  (prind population)))
-      (let ((child (funcall foffspring population))
-	    (index (min-index fit)))
-	(setf (elt population index) child)
-	(setf (elt fit index) (funcall fitness child))))))
+      (ecase unfit
+	(:serial
+	 (let ((child (funcall foffspring population))
+	       (index (min-index fit)))
+	   (setf (elt population index) child)
+	   (setf (elt fit index) (funcall fitness child))))
+	((:parallel :parallel-strict)
+	 (let ((minfit (apply #'min fit))
+	       (oldpop (copy-list population)))
+	   (dotimes (index (length population))
+	     (if (= (elt fit index) minfit)
+		 (let* ((child (funcall foffspring oldpop))
+			(child-fit (funcall fitness child)))
+		   (when (ecase unfit
+			   (:parallel (>= child-fit minfit))
+			   (:parallel-strict (> child-fit minfit)))
+		     (setf (elt population index) child)
+		     (setf (elt fit index) child-fit)))))))))))
 
 (defun fit-find-number (number)
   (flet ((fit1 (s)
@@ -511,10 +526,85 @@
 	  (setf ip (funcall mask (+ 3 ip))))))
   (values sics ip))
 
-(defun make-sic (contents)
-  (make-array (length contents)
-	      :element-type 'fixnum
-	      :initial-contents contents))
+(defun make-sic (contents &optional (sic-masker #'sic-masker))
+  (let ((mask (funcall sic-masker (length contents))))
+    (values (make-array (length contents)
+			:element-type 'fixnum
+			:initial-contents (mapcar mask contents))
+	    mask)))
+
+(defun copy-sic (contents)
+  (copy-array contents))
+
+(defun add-product-cases (cases fun)
+  "Build the product of CASES into (C0 C1...) and sum the results of
+calling (FITFUN C0 C1...)."
+  (reduce #'+
+	  (apply #'map-product
+		 fun
+		 cases)))
+
+(defun fit-asic-2 (code)
+  (destructuring-bind (ticks length siccode) code
+    (add-product-cases (list (range length) (range length))
+		       (lambda (a b)
+			 (multiple-value-bind (sic mask)
+			     (make-sic siccode)
+			   (setf (ith -1 sic) (funcall mask a))
+			   (setf (ith -2 sic) (funcall mask b))
+			   (sic ticks sic 0)
+			   ;;(prind a b (ith -1 sic) (funcall mask (- a b)))
+			   (if (= (ith -1 sic)
+				  (funcall mask (- a b)))
+			       0 -1))))))
+
+(defun fit-asic+2 (code)
+  (destructuring-bind (ticks length siccode) code
+    (add-product-cases (list (range length) (range length))
+		       (lambda (a b)
+			 (multiple-value-bind (sic mask)
+			     (make-sic siccode)
+			   (setf (ith -1 sic) (funcall mask a))
+			   (setf (ith -2 sic) (funcall mask b))
+			   (sic ticks sic 0)
+			   ;;(prind a b (ith -1 sic) (funcall mask (- a b)))
+			   (if (= (ith -1 sic)
+				  (funcall mask (+ a b)))
+			       0 -1))))))
+
+(defun offsp-fit-asic-2 (population)
+  (declare (optimize (debug 3)))
+  (destructuring-bind (a-ticks a-length a-siccode) (choice population)
+    (ecase (choice '(:crossover :mutate        ))
+      (:mutate (let* ((n-ticks (clamp (+ a-ticks (choice '(-1 0 1))) 1 100))
+		      (mcode (let ((e (random a-length))
+				   (c (copy-list a-siccode)))
+			       (incf (elt c e) (choice '(-1 0 1)))
+			       c))
+		      (n-siccode (head (append mcode (list (random a-length)))
+				       (clamp (+ a-length (choice '(-1 0 1)))
+					      3 100)))
+		      (n-length (length n-siccode)))
+		 (list n-ticks n-length n-siccode)))
+      (:crossover (destructuring-bind (b-ticks b-length b-siccode)
+		      (choice population)
+		    (let* ((n-ticks (truncate (+ a-ticks b-ticks) 2))
+			   (mcode (mapcar (lambda (x y) (choice (list x y)))
+					  a-siccode b-siccode))
+			   (g-siccode (if (> a-length b-length)
+					  a-siccode b-siccode))
+			   (rest-diff (- (max a-length b-length)
+					 (length g-siccode)))
+			   (rest-len (if (= rest-diff 0) 0 (random rest-diff)))
+			   (n-siccode (append mcode (last g-siccode rest-len)))
+			   (n-length (length n-siccode)))
+		      (list n-ticks n-length n-siccode)))))))
+
+;; (genetic (repeat '(1 4 (0 0 0 0)) 2)
+;; 		  #'fit-asic-2
+;; 		  10000
+;; 		  #'offsp-fit-asic-2
+;; 		  :verbose 2)
 
 (defun fit-sic- (length &key verbose)
   (flet ((fit (s_tick)
