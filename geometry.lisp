@@ -260,7 +260,8 @@ Return NIL otherwise."
 (defun valid-plane (plane)
   (/= 0 (vector3d-scalar (plane-normal plane) (plane-normal plane))))
 
-(defun vector3d-intersect-line-plane (line plane)
+(defun intersect-line-plane (line plane)
+  "Return the intersection point and the fraction of the line that intersects"
   (assert (valid-plane plane))
   (let* ((diff (vector3d-sub (plane-origin plane) (line-origin line)))
 	 (line-fraction (vector3d-scalar diff (plane-normal plane)))
@@ -268,6 +269,9 @@ Return NIL otherwise."
 				     (vector3d-scale line-fraction
 						     (line-direction line)))))
     (values intersection line-fraction)))
+
+;;(defun intersect-plane-line (plane line)
+;;  "Return the plane coordinates"
 
 (defun plane-side (plane point)
   "Return which side a point is on. 0 is on the plane."
@@ -558,12 +562,13 @@ function projects the vector into the coordinate system given by the VECTORS."
 				 (vector2d-sub +unit2d-y+)))
   :test #'equal-polygon)
 
-(defun polygon-connections (polygon)
+(defun polygon-corners (polygon)
+  "List all corners of the POLYGON"
   (let (points)
     (mapc (lambda (l)
 	    (setf points (nconc (list (line-origin l) (line-target l)) points)))
 	  polygon)
-    points))
+    (unique points :test #'vector=)))
 
 
 (defun convex-convexpolygon2d-p (polygon)
