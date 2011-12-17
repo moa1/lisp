@@ -97,3 +97,39 @@
     (type-error () 'error)
     (division-by-zero () 'error)))
 
+(defparameter joy-ops '(+ and apply compose cons dec dip / dup eq false ifte
+			inc list * not or papply pop quote rem - swap true
+			uncons define))
+
+(defun choice (seq)
+  (let ((l (length seq)))
+    (elt seq (random l))))
+
+(defun mutate (exp prob)
+  (cond
+    ((null exp) (if (< (random 1.0) prob) ;extend
+		    (cons (if (< (random 1.0) .1)
+			      (choice '(a b c d e 1 2 4 8 16))
+			      (choice joy-ops))
+			  nil)))
+    ((listp exp) (if (< (random 1.0) prob)
+		     (if (< (random 1.0) .1) ; de-branch
+			 (choice '(a b c d e 1 2 4 8 16))
+			 (choice joy-ops))
+		     (cons (mutate (car exp) prob)
+			   (if (and (= 1 (length (cdr exp)))
+				    (< (random 1.0) .1))
+			       nil ; shorten
+			       (mutate (cdr exp) prob)))))
+    (t (if (< (random 1.0) prob)
+	   (if (< (random 1.0) .1)
+	       (cons (if (< (random 1.0) prob)
+			 (if (< (random 1.0) .1) ; branch
+			     (choice '(a b c d e 1 2 4 8 16))
+			     (choice joy-ops))
+			 exp)
+		     nil)
+	       (if (< (random 1.0) .1) ; substitute
+		   (choice '(a b c d e 1 2 4 8 16))
+		   (choice joy-ops)))
+	   exp))))
