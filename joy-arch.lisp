@@ -12,11 +12,6 @@
 (define-condition joy-error (error)
   ((text :initarg :text :reader :text)))
 
-(defmethod joy-pop ((arch joy))
-  (if (null (joy-stack arch))
-      (error 'joy-error :text "stack underrun")
-      (pop (joy-stack arch))))
-
 (defun joy-eval (stk exp &key (p (make-hash-table)))
   (print (list "stk" stk "exp" exp))
   (if (null exp)
@@ -95,3 +90,10 @@
 (joy-test nil '(5 list 4 cons uncons) '(4 (5)))
 (joy-test nil '(2 (1) superman define superman) '(1 2))
 (joy-test nil '(1 a) '(a 1))
+
+(defun joy-eval-handler (stk exp &key (p (make-hash-table)))
+  (handler-case (joy-eval stk exp :p p)
+    (simple-type-error () 'error)
+    (type-error () 'error)
+    (division-by-zero () 'error)))
+
