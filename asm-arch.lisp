@@ -236,4 +236,4 @@
 	      (print (list "contestant" (asm-code contestant) "child" (asm-code child)))
 	      (setf (elt pool contestant-num) child)))))))
 
-(mapcar (lambda (x) (asm-code x)) (tournament 100 2))
+(mapcar (lambda (x) (list (asm-code x) (asm-result x))) (tournament 100 2))
