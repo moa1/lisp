@@ -212,9 +212,9 @@ represent the relative chance of picking that item. Sum of w must not be 0."
     (type-error () 'error)
     (division-by-zero () 'error)))
 
-(defparameter joy-ops '(+ and apply compose cons dec dip / dup eq false ifte
-			inc list * nil not or papply pop quote rem - swap true
-			uncons concat i step define))
+(defparameter *joy-ops* '(+ and apply compose cons dec dip / dup eq false ifte
+			  inc list * nil not or papply pop quote rem - swap true
+			  uncons concat i step define))
 
 (defun mutate (exp p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 
 	       q1 q2 q3 q4 q5 q6 q7 q8 q9 q10
@@ -227,7 +227,7 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 	       (weighted-choice (list q1 q2 q3 q4 q5 q6 q7 q8 q9 q10)
 				'(a b c d e 1 2 4 8 16))
 	       (weighted-choice (list r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30)
-				joy-ops))))
+				*joy-ops*))))
     (cond
       ((null exp) (if (< (random 1.0) p1) ;extend
 		      (cons (random-final p2)
