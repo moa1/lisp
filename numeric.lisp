@@ -93,3 +93,12 @@
 (defun num/ (&rest r)
   (reduce #'num/-2 r))
 
+(defun matrix-dim (m)
+  ;; m is a matrix
+  (cons (length m) (length (car m))))
+
+(defun outer (a b &optional (f #'*))
+  ;; a, b are vectors
+  (loop for x in a collect
+       (loop for y in b collect
+	    (funcall f x y))))
