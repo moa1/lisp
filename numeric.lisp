@@ -98,7 +98,7 @@
   (cons (length m) (length (car m))))
 
 (defun outer (a b &optional (f #'*))
-  ;; a, b are vectors
+  "a, b are vectors. computes the outer product of a * b (or, if f is specified (f a b))"
   (loop for x in a collect
        (loop for y in b collect
 	    (funcall f x y))))
