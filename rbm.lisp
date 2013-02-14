@@ -25,24 +25,30 @@
     (loop for i below v-size for wi in w collect
 	 (sigmoid (loop for j below h-size for hj in h sum
 		       (progn 
-;;			 (format t "i:~A j:~A wij:~A~%" i j (elt wi j))
+;;				   (format t "i:~A j:~A wij:~A~%" i j (elt wi j))
 			 (* hj (elt wi j))))))))
+
+(defun activate (n)
+  (loop for p in n collect
+       (if (<= (random 1.0) p) 1 0)))
 
 (defun learn (v w rate)
   ;; v are the input layer values, w is the connection matrix
   (let* ((h (h-from-v v w))
+	 (ha (activate h))
 	 (pos (outer v h))
-	 (v1 (v-from-h w h))
+	 (v1 (v-from-h w ha))
 	 (h1 (h-from-v v1 w))
 	 (neg (outer v1 h1))
 	 (update (num* rate (num- pos neg))))
     update))
 
 (defun recall (v w &optional (verbose nil))
-  (let* ((h (h-from-v v w)))
+  (let* ((h (h-from-v v w))
+	 (ha (activate h)))
     (when verbose
       (format t "h:~A~%" h))
-    (v-from-h w h)))
+    (v-from-h w ha)))
 
 ;; learn a simple relation between a and a+.5
 (defun test1 (num-hidden)
@@ -67,9 +73,12 @@
 
 ;;(let ((w '((-1.5 -.4 .2) (-.3 .1 -2.2) (-2.0 1.1 .5))))
 (let ((w (loop for i below 3 collect (loop for j below 3 collect (1- (random 2.0))))))
+    ;;((w (loop for i below 3 collect (loop for j below 3 collect 0))))
   (loop for i below 1000 do
-       (let* ((a (random .5))
-	      (v (list a (+ .5 a) 1)))
+;;       (let* ((a (random .5))
+;;	      (v (list a (+ .5 a) 1)))
+       (let* ((a (random 2))
+	      (v (list a (abs (1- a)) 1)))
 	 (format t "~%i:~A v:~A~%" i v)
 	 (setf w (num+ w (learn v w .05)))
 	 (format t "new w:~A~%h:~A~%" w (h-from-v v w))
@@ -107,3 +116,30 @@
   (loop for i below 10 do
        (setf v (recall v w))
        (format t "i:~A v-recall:~A~%" i v)))
+
+(let ((w '((-4.742946 -0.4842313 7.7389503) (3.0957246 1.8130138 -8.688931)
+	   (1.7329597 5.417793 0.75563663)))
+      (v '(1 0 1.0)))
+  (loop for i below 10 do
+       (setf v (recall v w))
+       (format t "i:~A v-recall:~A~%" i v)))
+
+(defun test2 (num-hidden)
+  (let ((w (loop for i below 10 collect (loop for j below num-hidden collect (- (random 0.2) 0.1)))))
+    (loop for i below 1000 do
+	 (let* ((a (random 3))
+		(v (ecase a
+		     (0 '(1 1 1 0 0 0 0 0 0 1))
+		     (1 '(0 0 0 1 1 1 0 0 0 1))
+		     (2 '(0 0 0 0 0 0 1 1 1 1)))))
+	   (format t "~%i:~A v:~A~%" i v)
+	   (setf w (num+ w (learn v w .05)))
+	   (format t "new w:~A~%h:~A~%" w (h-from-v v w))
+	   (format t "v-recall:~A~%" (recall v w))))
+    w))
+
+(defun recall-test2 (w)
+  (loop for v in '((1 1 1 0 0 0 0 0 0 1)
+		   (0 0 0 1 1 1 0 0 0 1)
+		   (0 0 0 0 0 0 1 1 1 1)) collect
+       (h-from-v v w)))
