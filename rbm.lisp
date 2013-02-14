@@ -32,14 +32,21 @@
   (loop for p in n collect
        (if (<= (random 1.0) p) 1 0)))
 
+(defun bias (n)
+  "set last element to 1 (bias node)"
+  (let ((m (loop for i in n collect i)))
+    (setf (elt m (1- (length m))) 1)
+    m))
+
 (defun learn (v w rate)
   ;; v are the input layer values, w is the connection matrix
   (let* ((h (h-from-v v w))
 	 (ha (activate h))
 	 (pos (outer v h))
 	 (v1 (v-from-h w ha))
-	 (h1 (h-from-v v1 w))
-	 (neg (outer v1 h1))
+	 (v1b (bias v1))
+	 (h1 (h-from-v v1b w))
+	 (neg (outer v1b h1))
 	 (update (num* rate (num- pos neg))))
     update))
 
