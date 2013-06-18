@@ -63,7 +63,7 @@
 (defun weighted-choice-index (w)
   "Returns the index of the picked weight from w. Elements of w are numbers and
 represent the relative chance of picking that item. Sum of w must not be 0."
-  (let ((s (reduce (lambda (a b) (+ a b)) w)))
+  (let ((s (reduce #'+ w)))
     (labels ((rec (x w i)
 	       (let ((x0 (- x (car w))))
 		 (if (< x0 0)
@@ -80,8 +80,8 @@ represent the relative chance of picking that item. Sum of w must not be 0."
       nil))
 
 ;; '((1) 1 DEFINE 1)
-(defun joy-eval (stk exp &key (p (make-hash-table)) (c (make-counter 0)))
-;;  (print (list "stk" stk "exp" exp))
+(defun joy-eval (stk exp &key (heap (make-hash-table)) (c (make-counter 0)))
+  ;;  (print (list "stk" stk "exp" exp))
   (declare (optimize (debug 0) (compilation-speed 0) (speed 3) (space 0)))
   (if (<= (funcall c) 0)
       (return-from joy-eval 'overrun))
@@ -91,18 +91,18 @@ represent the relative chance of picking that item. Sum of w must not be 0."
        (case (car exp)
 	 (+       (cons (+ (cadr stk) (car stk)) (cddr stk)))
 	 (and     (cons (and (car stk) (cadr stk)) (cddr stk)))
-	 (apply   (joy-eval (cdr stk) (car stk) :p p :c c))
+	 (apply   (joy-eval (cdr stk) (car stk) :heap heap :c c))
 	 (compose (cons (append (car stk) (cadr stk)) (cddr stk)))
 	 (cons    (cons (cons (cadr stk) (car stk)) (cddr stk)))
 	 (dec     (cons (- (car stk) 1) (cdr stk)))
-	 (dip     (cons (cadr stk) (joy-eval (cddr stk) (car stk) :p p :c c)))
+	 (dip     (cons (cadr stk) (joy-eval (cddr stk) (car stk) :heap heap :c c)))
 	 (/       (cons (/ (cadr stk) (car stk)) (cddr stk)))
 	 (dup     (cons (car stk) stk))
 	 (eq      (cons (eq (cadr stk) (car stk)) (cddr stk)))
 	 (false   (cons nil stk))
-	 (ifte    (if (car (joy-eval (cdddr stk) (caddr stk) :p p :c c))
-		      (joy-eval (cdddr stk) (cadr stk) :p p :c c)
-		      (joy-eval (cdddr stk) (car stk) :p p :c c)))
+	 (ifte    (if (car (joy-eval (cdddr stk) (caddr stk) :heap heap :c c))
+		      (joy-eval (cdddr stk) (cadr stk) :heap heap :c c)
+		      (joy-eval (cdddr stk) (car stk) :heap heap :c c)))
 	 (inc     (cons (+ (car stk) 1) (cdr stk)))
 	 (list    (cons (list (car stk)) (cdr stk)))
 	 (*       (cons (* (car stk) (cadr stk)) (cddr stk)))
@@ -118,19 +118,19 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 	 (uncons  (cons (cdar stk) (cons (caar stk) nil)))
 	 ;; my own definitions
 	 (concat  (cons (append (cadr stk) (car stk)) (cddr stk)))
-	 (i       (joy-eval (cdr stk) (car stk) :p p :c c))
+	 (i       (joy-eval (cdr stk) (car stk) :heap heap :c c))
 	 (step    (let ((res (cddr stk)))
 		    (loop for i in (cadr stk) do
-			 (setf res (joy-eval (cons i res) (car stk) :p p :c c)))
+			 (setf res (joy-eval (cons i res) (car stk) :heap heap :c c)))
 		    res))
-	 (define  (setf (gethash (car stk) p) (cadr stk)) (cddr stk))
+	 (define  (setf (gethash (car stk) heap) (cadr stk)) (cddr stk))
 	 ;; implement a "undefine", which ends the scope of a "define"d program, but leaves defined programs (and programs on the stack) using the to be "undefine"d program running intact. this would require replacing the "define"d name with an anonymous name.
 	 (t
-	  (multiple-value-bind (value present-p) (gethash (car exp) p)
+	  (multiple-value-bind (value present-p) (gethash (car exp) heap)
 	    (if present-p
 		(progn (setf exp (append '(1) value (cdr exp))) stk)
 		(cons (car exp) stk)))))
-       (cdr exp) :p p :c c)))
+       (cdr exp) :heap heap :c c)))
 
 ;; For example, the step combinator can be used to access all elements of an aggregate in sequence. For strings and lists this means the order of their occurrence, for sets it means the underlying order. The following will step through the members of the second list and swons them into the initially empty first list. The effect is to reverse the non-empty list, yielding [5 6 3 8 2].  
 ;;        []  [2 8 3 6 5]  [swons]  step
@@ -206,8 +206,8 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 	    1 fac))
 
 
-(defun joy-eval-handler (stk exp &key (p (make-hash-table)) (c (make-counter)))
-  (handler-case (joy-eval stk exp :p p :c c)
+(defun joy-eval-handler (stk exp &key (heap (make-hash-table)) (c (make-counter)))
+  (handler-case (joy-eval stk exp :heap heap :c c)
     (simple-type-error () 'error)
     (type-error () 'error)
     (division-by-zero () 'error)))
@@ -448,9 +448,9 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
 	(when (= 0 (mod c 1000))
 	  (print (list c new-fit c2-fit)))
 	(when (= 0 (mod c 10000))
-	  (log-mut-stats (sort (zip-array 'list pop fit mut) #'< :key (lambda (x) (nth 1 x))) logstream))))
+	  (log-mut-stats (sort (zip-array 'list pop fit mut) #'< :key #'first) logstream))))
     (close logstream)
-    (sort (zip-array 'list pop fit mut) #'< :key (lambda (x) (nth 1 x)))))
+    (sort (zip-array 'list pop fit mut) #'< :key #'first)))
 
 (defun mut-stats (res)
   (let ((mut (mapcar #'caddr res)))
