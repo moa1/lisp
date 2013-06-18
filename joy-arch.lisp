@@ -396,16 +396,55 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
 			   10 10 100)
 	     sum (valid-reverse i))))))
 
+(defun absdiff (a b)
+  (abs (- a b)))
+
+(defun result-one-value (r goal score-fn)
+  "calculates the score of the joy-eval-result r against the goal. r should be a list of one value, otherwise -1000 is returned. score-fn is called with r and goal as parameters and must return the score of (car r) against goal."
+  (if (or (not (listp r)) (not (numberp (car r))) (not (= (length r) 1)))
+      -1000
+      (funcall score-fn (car r) goal)))
+
 (defun fitness-sqrt (o)
-  (flet ((fun (x) (sqrt x))
-	 (valdiff (a b) (- (abs (- a b)))))
+  (flet ((fun (x) (sqrt x)))
     (loop for x in '(0 1 5 10 20 40 80 100 200 250 1000 10000 100000)
        sum (let* ((value (fun x))
 		  (r (joy-eval-handler (list x) o :c (make-counter 1000))))
 ;;	     (print (list "x" x "value" value "r" r))
-	     (if (or (not (listp r)) (not (numberp (car r))) (not (= (length r) 1)))
-		 -1000
-		 (valdiff value (car r)))))))
+	     (fitness-sqrt-score r value)))))
+
+(defun fitness-sqrt-generate ()
+  "generate one test case."
+  (let* ((c '(0 1 5 10 20 40 80 100 200 250 1000 10000 100000))
+	 (r (random (1- (length c))))
+	 (a (elt c r))
+	 (b (elt c (1+ r))))
+    (+ a (random (- b a)))))
+
+(defun fitness-sqrt-goal (x)
+  "return goal of case x."
+  (sqrt x))
+
+(defun fitness-sqrt-score (r goal)
+  (result-one-value r goal (lambda (res goal) (- (absdiff goal res)))))
+
+(defstruct test-cases
+  (generate nil :type function :read-only t)
+  (goal nil :type function :read-only t)
+  (score nil :type function :read-only t))
+
+(defparameter *fitness-sqrt-test*
+  (make-test-cases :generate #'fitness-sqrt-generate
+		   :goal #'fitness-sqrt-goal
+		   :score #'fitness-sqrt-score))
+
+;; re-definition of fitness-sqrt using *fitness-sqrt-test*-functions
+(defun fitness-sqrt-1 (o)
+  (loop for x in '(0 1 5 10 20 40 80 100 200 250 1000 10000 100000)
+     sum (let* ((value (funcall (test-cases-goal *fitness-sqrt-test*) x))
+		(r (joy-eval-handler (list x) o :c (make-counter 1000))))
+;;	   (print (list "x" x "value" value "r" r))
+	   (funcall (test-cases-score *fitness-sqrt-test*) r value))))
 
 (defun tournament-new (o size cycles fitness)
   (let* ((pop (make-array size :initial-element o))
@@ -477,3 +516,65 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
 (defun restore-res (filename)
   (with-open-file (stream filename :direction :input)
     (read stream)))
+
+;; systematic program fitness measurement
+
+(defun copy-hash-table (ht)
+  "returns a copy of ht. (keys and) values are not copied."
+  (let ((copy (make-hash-table :test (hash-table-test ht) 
+							   :size (hash-table-size ht)
+							   :rehash-size (hash-table-rehash-size ht)
+							   :rehash-threshold
+							   (hash-table-rehash-threshold ht))))
+	(maphash (lambda (key value) (setf (gethash key copy) value)) ht)
+	copy))
+
+(defun ops-map (i &optional (joy-ops *joy-ops*))
+  "maps i to an array of joy-ops elements, e.g. 1 is mapped to (+), and (+ 1 (* 30 1)) is mapped to (+ +)"
+  (mapcar (lambda (x) (nth x joy-ops)) i))
+
+(defun extend-and-evaluate (l-1-exp l-1-stk l-1-heap ins goal-value fitness-fn max-ticks)
+  "appends ins to l-1-exp and calculates the fitness for each possibility.
+l-1-stk and l-1-heap must be the stack and heap returned when executing l-1-exp."
+  (let* ((lins (list ins))
+	 (exp (append l-1-exp lins))
+	 (heap (copy-hash-table l-1-heap))
+	 (res (joy-eval-handler l-1-stk lins :heap heap :c (make-counter max-ticks)))
+	 (fit (funcall fitness-fn res goal-value)))
+    (values exp res heap fit)))
+;;(systematicmapping nil '(5) (make-hash-table) (first *joy-ops*) (sqrt 5) #'fitness-sqrt-score)
+
+;; TODO: add computing the systematic mapping for more than one test-value
+(defun systematicmapping (maxlevel test-case test-value joy-ops max-ticks)
+  "systematically walks through the joy expression possibilities (taken from joy-ops) of a certain length maxlevel and saves the best performing expression under a certain test-case generator for a test-value. max-ticks is the maximum joy-eval counter."
+  (let ((goal-value (funcall (test-cases-goal test-case) test-value))
+	(score-fn (test-cases-score test-case)))
+    (flet ((score (exp heap)
+	     (funcall score-fn
+		      (joy-eval-handler (list test-value) exp :heap heap)
+		      goal-value)))
+      (let* ((best-exp nil)
+	     (best-heap (make-hash-table))
+	     (best-fit (score best-exp best-heap)))
+	(labels ((rec (l l-1-exp l-1-stk l-1-heap)
+		   (if (>= l maxlevel)
+		       nil
+		       (progn
+;;			 (format t "l:~A best-exp:~A best-fit:~A l-1-exp:~A~%" l best-exp best-fit l-1-exp)
+			 (loop for ins in joy-ops do
+			      (multiple-value-bind (exp res heap fit)
+				  (extend-and-evaluate l-1-exp l-1-stk l-1-heap
+						       ins goal-value score-fn
+						       max-ticks)
+				;;			      (format t "exp:~A stk:~A heap:~A fit:~A ins:~A~%" exp res heap fit ins)
+				(when (listp res) ; only pursue if no error
+				  (when (> fit best-fit)
+				    (setf best-exp exp)
+				    (setf best-heap heap)
+				    (setf best-fit fit))
+				  (rec (1+ l) exp res heap))))))))
+	  (rec 0 best-exp (list test-value) best-heap)
+	  (values best-exp best-fit))))))
+			    
+
+;;(systematicmapping 5 *fitness-sqrt-test* 5 (cons '(1) *joy-ops*) 1000)
