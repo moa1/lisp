@@ -533,48 +533,60 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
   "maps i to an array of joy-ops elements, e.g. 1 is mapped to (+), and (+ 1 (* 30 1)) is mapped to (+ +)"
   (mapcar (lambda (x) (nth x joy-ops)) i))
 
-(defun extend-and-evaluate (l-1-exp l-1-stk l-1-heap ins goal-value fitness-fn max-ticks)
+(defun extend-and-evaluate (l-1-stk l-1-heap ins goal-value fitness-fn max-ticks)
   "appends ins to l-1-exp and calculates the fitness for each possibility.
 l-1-stk and l-1-heap must be the stack and heap returned when executing l-1-exp."
   (let* ((lins (list ins))
-	 (exp (append l-1-exp lins))
 	 (heap (copy-hash-table l-1-heap))
 	 (res (joy-eval-handler l-1-stk lins :heap heap :c (make-counter max-ticks)))
 	 (fit (funcall fitness-fn res goal-value)))
-    (values exp res heap fit)))
-;;(systematicmapping nil '(5) (make-hash-table) (first *joy-ops*) (sqrt 5) #'fitness-sqrt-score)
+;;    (format t "eae. l-1-stk:~A ins:~A res:~A fit:~A~%" l-1-stk ins res fit)
+    (values res heap fit)))
 
 ;; TODO: add computing the systematic mapping for more than one test-value
-(defun systematicmapping (maxlevel test-case test-value joy-ops max-ticks)
+(defun systematicmapping (maxlevel test-case test-values joy-ops max-ticks)
   "systematically walks through the joy expression possibilities (taken from joy-ops) of a certain length maxlevel and saves the best performing expression under a certain test-case generator for a test-value. max-ticks is the maximum joy-eval counter."
-  (let ((goal-value (funcall (test-cases-goal test-case) test-value))
+  (let ((goal-values (mapcar (test-cases-goal test-case) test-values))
 	(score-fn (test-cases-score test-case)))
-    (flet ((score (exp heap)
-	     (funcall score-fn
-		      (joy-eval-handler (list test-value) exp :heap heap)
-		      goal-value)))
+    (labels ((score (exp heap test-value goal-value)
+	       (funcall score-fn
+			(joy-eval-handler (list test-value) exp :heap heap)
+			goal-value))
+	     (score-sum (exp heaps)
+	       (reduce #'+ (mapcar (lambda (test-value goal-value heap)
+				     (score exp heap test-value goal-value))
+				   test-values goal-values heaps))))
       (let* ((best-exp nil)
-	     (best-heap (make-hash-table))
-	     (best-fit (score best-exp best-heap)))
-	(labels ((rec (l l-1-exp l-1-stk l-1-heap)
+	     (best-heaps (loop for i below (length test-values) collect (make-hash-table)))
+	     (best-fit (score-sum best-exp best-heaps)))
+	(labels ((rec (l l-1-exp l-1-stks l-1-heaps)
 		   (if (>= l maxlevel)
 		       nil
 		       (progn
 ;;			 (format t "l:~A best-exp:~A best-fit:~A l-1-exp:~A~%" l best-exp best-fit l-1-exp)
+;;			 (format t "l:~A l-1-exp:~A l-1-stks:~A~%" l l-1-exp l-1-stks)
 			 (loop for ins in joy-ops do
-			      (multiple-value-bind (exp res heap fit)
-				  (extend-and-evaluate l-1-exp l-1-stk l-1-heap
-						       ins goal-value score-fn
-						       max-ticks)
-				;;			      (format t "exp:~A stk:~A heap:~A fit:~A ins:~A~%" exp res heap fit ins)
-				(when (listp res) ; only pursue if no error
-				  (when (> fit best-fit)
-				    (setf best-exp exp)
-				    (setf best-heap heap)
-				    (setf best-fit fit))
-				  (rec (1+ l) exp res heap))))))))
-	  (rec 0 best-exp (list test-value) best-heap)
+			      (let (l-stks l-heaps (fit-sum 0) (exp (append l-1-exp (list ins))))
+				(loop
+				   for l-1-stk in l-1-stks
+				   for l-1-heap in l-1-heaps
+				   for goal-value in goal-values
+				   do
+				     (multiple-value-bind (res heap fit)
+					 (extend-and-evaluate l-1-stk l-1-heap ins goal-value score-fn max-ticks)
+;;				       (format t "exp:~A goal-value stk:~A fit:~A~%" (append l-1-exp (list ins)) goal-value res fit)
+				       (when (listp res) ; only pursue if no error
+					 (setf l-stks (cons res l-stks))
+					 (setf l-heaps (cons heap l-heaps)))
+				       (setf fit-sum (+ fit-sum fit))))
+;;				(format t "exp:~A fit-sum:~A~%" exp fit-sum)
+				(when (> fit-sum best-fit)
+				  (setf best-exp exp)
+				  (setf best-fit fit-sum))
+				(when (not (null l-stks)) ; only pursue if one test-case is without error
+				  (rec (1+ l) exp (nreverse l-stks) (nreverse l-heaps)))))))))
+	  (rec 0 best-exp (mapcar #'list test-values) best-heaps)
 	  (values best-exp best-fit))))))
 			    
 
-;;(systematicmapping 5 *fitness-sqrt-test* 5 (cons '(1) *joy-ops*) 1000)
+;;(systematicmapping 3 *fitness-sqrt-test* '(0 1 5) (cons 1 *joy-ops*) 1000)
