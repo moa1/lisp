@@ -1,3 +1,5 @@
+;;(declaim (optimize speed))
+
 (defclass joy ()
   ((stack :accessor joy-stack
 	  :initform nil
@@ -26,6 +28,7 @@
 	  nil)))
 
 (defun make-counter (&optional (counter 0))
+  (declare (type fixnum counter))
   (if (<= counter 0)
       (lambda () 1)
       (let ((c counter))
@@ -88,7 +91,7 @@ represent the relative chance of picking that item. Sum of w must not be 0."
     u))
 
 ;; '((1) 1 DEFINE 1)
-(defun joy-eval (stk exp &key (heap (make-hash-table)) (c (make-counter 0)))
+(defun joy-eval (stk exp &key (heap nil) (c (make-counter 0)))
   ;;  (print (list "stk" stk "exp" exp))
   (declare (optimize (debug 0) (compilation-speed 0) (speed 3) (space 0)))
   (if (<= (funcall c) 0)
@@ -99,10 +102,10 @@ represent the relative chance of picking that item. Sum of w must not be 0."
        (case (car exp)
 	 (+       (cons (+ (cadr stk) (car stk)) (cddr stk)))
 	 (and     (cons (and (car stk) (cadr stk)) (cddr stk)))
-	 (apply   (joy-eval (cdr stk) (car stk) :heap heap :c c))
-	 (compose (cons (append (car stk) (cadr stk)) (cddr stk)))
-	 (cons    (cons (cons (cadr stk) (car stk)) (cddr stk)))
-	 (dec     (cons (- (car stk) 1) (cdr stk)))
+	 (apply   (joy-eval (cdr stk) (car stk) :heap heap :c c)) ;same as i
+	 (compose (cons (append (car stk) (cadr stk)) (cddr stk))) ; almost same as concat (swapped arguments)
+	 (cons    (cons (cons (cadr stk) (car stk)) (cddr stk))) ; same as papply
+	 (dec     (cons (1- (car stk)) (cdr stk)))
 	 (dip     (cons (cadr stk) (joy-eval (cddr stk) (car stk) :heap heap :c c)))
 	 (/       (cons (/ (cadr stk) (car stk)) (cddr stk)))
 	 (dup     (cons (car stk) stk))
@@ -111,8 +114,8 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 	 (ifte    (if (car (joy-eval (cdddr stk) (caddr stk) :heap heap :c c))
 		      (joy-eval (cdddr stk) (cadr stk) :heap heap :c c)
 		      (joy-eval (cdddr stk) (car stk) :heap heap :c c)))
-	 (inc     (cons (+ (car stk) 1) (cdr stk)))
-	 (list    (cons (list (car stk)) (cdr stk)))
+	 (inc     (cons (1+ (car stk)) (cdr stk)))
+	 (list    (cons (list (car stk)) (cdr stk))) ; same as quote
 	 (*       (cons (* (car stk) (cadr stk)) (cddr stk)))
 	 (not     (cons (not (car stk)) (cdr stk)))
 	 (or      (cons (or (car stk) (cadr stk)) (cddr stk)))
@@ -131,13 +134,16 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 		    (loop for i in (cadr stk) do
 			 (setf res (joy-eval (cons i res) (car stk) :heap heap :c c)))
 		    res))
-	 (define  (setf (gethash (car stk) heap) (cadr stk)) (cddr stk))
-	 ;; implement a "undefine", which ends the scope of a "define"d program, but leaves defined programs (and programs on the stack) using the to be "undefine"d program running intact. this would require replacing the "define"d name with an anonymous name.
-	 (t
-	  (multiple-value-bind (value present-p) (gethash (car exp) heap)
-	    (if present-p
-		(progn (setf exp (append '(1) value (cdr exp))) stk)
-		(cons (car exp) stk)))))
+	 (define  (if (null heap) (error "define doesn't work for a nil heap")
+		      (progn (setf (gethash (car stk) heap) (cadr stk)) (cddr stk))))
+	 ;; implement an "undefine", which ends the scope of a "define"d program, but leaves defined programs (and programs on the stack) using the to be "undefine"d program running intact. this would require replacing the "define"d name with an anonymous name.
+	 (t 
+	  (if (null heap)
+	      (cons (car exp) stk)
+	      (multiple-value-bind (value present-p) (gethash (car exp) heap)
+		(if present-p
+		    (progn (setf exp (append '(1) value (cdr exp))) stk)
+		    (cons (car exp) stk))))))
        (cdr exp) :heap heap :c c)))
 
 ;; For example, the step combinator can be used to access all elements of an aggregate in sequence. For strings and lists this means the order of their occurrence, for sets it means the underlying order. The following will step through the members of the second list and swons them into the initially empty first list. The effect is to reverse the non-empty list, yielding [5 6 3 8 2].  
@@ -159,7 +165,7 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 ;;	R and F are the rest and the first of non-empty aggregate A.
 
 (defun joy-test (stk exp res)
-  (let ((r (joy-eval stk exp)))
+  (let ((r (joy-eval stk exp :heap (make-hash-table))))
     (if (not (equal r res))
 	(error (format nil "joy-test failed for stk:~A exp:~A res:~A r:~A"
 		       stk exp res r)))))
@@ -211,7 +217,7 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 (joy-eval nil
 	  '(((dup cons) swap concat dup cons i) y define
 	    (((pop null) (pop inc) ((dup dec) dip i *) ifte) y) fac define
-	    1 fac))
+	    1 fac) :heap (make-hash-table))
 
 
 (defun joy-eval-handler (stk exp &key (heap (make-hash-table)) (c (make-counter)))
@@ -220,9 +226,13 @@ represent the relative chance of picking that item. Sum of w must not be 0."
     (type-error () 'error)
     (division-by-zero () 'error)))
 
+(defparameter *joy-ops-with-duplicates* '(+ and apply compose cons dec dip / dup eq false ifte
+					  inc list * nil not or papply pop quote rem - swap true
+					  uncons concat i step define))
+
 (defparameter *joy-ops* '(+ and apply compose cons dec dip / dup eq false ifte
-			  inc list * nil not or papply pop quote rem - swap true
-			  uncons concat i step define))
+			  inc list * nil not or pop rem - swap true
+			  uncons step define))
 
 (defun mutate (exp p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 
 	       q1 q2 q3 q4 q5 q6 q7 q8 q9 q10
@@ -406,23 +416,7 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
 (defun absdiff (a b)
   (abs (- a b)))
 
-(defun result-one-value (r goal score-fn)
-  "calculates the score of the joy-eval-result r against the goal. r should be a list of one value, otherwise -1000 is returned. score-fn is called with r and goal as parameters and must return the score of (car r) against goal."
-  (if (or (not (listp r)) (not (numberp (car r))) (not (= (length r) 1)))
-      -1000
-      (funcall score-fn (car r) goal)))
-
-(defun fitness-sqrt (o)
-  (flet ((fun (x) (sqrt x)))
-;;    (loop for x in '(0 1 5 10 20 40 80 100 200 250 1000 10000 100000)
-    (loop for x in '(1 5 10)
-       sum (let* ((value (fun x))
-		  (r (joy-eval-handler (list x) o :c (make-counter 1000)))
-		  (fit (fitness-sqrt-score r value)))
-	     (print (list "x" x "value" value "r" r "fit" fit))
-	     fit))))
-
-(defun fitness-sqrt-generate ()
+(defun fitness-smallpref-generate ()
   "generate one test case."
   (let* ((c '(0 1 5 10 20 40 80 100 200 250 1000 10000 100000))
 	 (r (random (1- (length c))))
@@ -430,30 +424,58 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
 	 (b (elt c (1+ r))))
     (+ a (random (- b a)))))
 
-(defun fitness-sqrt-goal (x)
-  "return goal of case x."
-  (sqrt x))
-
-(defun fitness-sqrt-score (r goal)
-  (result-one-value r goal (lambda (res goal) (- (absdiff goal res)))))
+(defun fitness-oneval-diff-score (r goal)
+  "calculates the score of the joy-eval-result r against the goal.
+r should be a list of one value, otherwise -1000 is returned."
+  (if (or (not (listp r)) (not (numberp (car r))) (not (= (length r) 1)))
+      -1000
+      (- (absdiff goal (car r)))))
 
 (defstruct test-cases
-  (generate nil :type function :read-only t)
+  (values nil :type list :read-only t)
+  (generate (constantly nil) :type function :read-only t)
   (goal nil :type function :read-only t)
   (score nil :type function :read-only t))
 
 (defparameter *fitness-sqrt-test*
-  (make-test-cases :generate #'fitness-sqrt-generate
-		   :goal #'fitness-sqrt-goal
-		   :score #'fitness-sqrt-score))
+  (make-test-cases :values '(1 5 10 1000)
+		   :generate #'fitness-smallpref-generate
+		   :goal #'sqrt
+		   :score #'fitness-oneval-diff-score))
 
 ;; re-definition of fitness-sqrt using *fitness-sqrt-test*-functions
-(defun fitness-sqrt-1 (o)
-  (loop for x in '(0 1 5 10 20 40 80 100 200 250 1000 10000 100000)
-     sum (let* ((value (funcall (test-cases-goal *fitness-sqrt-test*) x))
-		(r (joy-eval-handler (list x) o :c (make-counter 1000))))
-;;	   (print (list "x" x "value" value "r" r))
-	   (funcall (test-cases-score *fitness-sqrt-test*) r value))))
+(defun fitness-generator (fitness-test-case)
+  (lambda (o)
+    (loop for x in (test-cases-values fitness-test-case)
+       sum (let* ((value (funcall (test-cases-goal fitness-test-case) x))
+		  (r (joy-eval-handler (list x) o :c (make-counter 1000)))
+		  (fit (funcall (test-cases-score fitness-test-case) r value)))
+	     (print (list "x" x "value" value "r" r "fit" fit))
+	     fit))))
+
+(defparameter *fitness-sqrt* (fitness-generator *fitness-sqrt-test*))
+
+(defparameter *fitness-expt2-test*
+  (make-test-cases :values '(1 5 10)
+		   :generate #'fitness-smallpref-generate
+		   :goal (lambda (x) (expt 2 x))
+		   :score #'fitness-oneval-diff-score))
+
+(defparameter *fitness-expt2* (fitness-generator *fitness-expt2-test*))
+
+(defun fitness-stacklength-score (r goal)
+  (if (not (listp r))
+      -1000
+      (- (absdiff (length r) goal))))
+
+(defparameter *fitness-stacklength-test*
+  (make-test-cases :values '(1 5 10)
+		   :goal (lambda (x) x)
+		   :score #'fitness-stacklength-score))
+
+(defparameter *fitness-stacklength* (fitness-generator *fitness-stacklength-test*))
+
+;; (INC DUP * DUP *)
 
 (defun tournament-new (o size cycles fitness)
   (let* ((pop (make-array size :initial-element o))
@@ -538,15 +560,13 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
     (maphash (lambda (key value) (setf (gethash key copy) value)) ht)
     copy))
 
-(defun ops-map (i &optional (joy-ops *joy-ops*))
-  "maps i to an array of joy-ops elements, e.g. 1 is mapped to (+), and (+ 1 (* 30 1)) is mapped to (+ +)"
-  (mapcar (lambda (x) (nth x joy-ops)) i))
-
 (defun extend-and-evaluate (l-1-stk l-1-heap ins goal-value fitness-fn max-ticks)
   "appends ins to l-1-exp and calculates the fitness for each possibility.
 l-1-stk and l-1-heap must be the stack and heap returned when executing l-1-exp."
+  (declare (ignorable l-1-heap) (type (function (list number) number) fitness-fn))
   (let* ((lins (list ins))
-	 (heap (copy-hash-table l-1-heap))
+	 ;;(heap (copy-hash-table l-1-heap)) ; this takes a lot of time
+	 (heap l-1-heap)
 	 (res (joy-eval-handler l-1-stk lins :heap heap :c (make-counter max-ticks)))
 	 (fit (funcall fitness-fn res goal-value)))
 ;;    (format t "eae. l-1-stk:~A ins:~A res:~A fit:~A~%" l-1-stk ins res fit)
@@ -620,45 +640,67 @@ max-ticks is the maximum joy-eval counter."
 
 ;;(systematicmapping 3 *fitness-sqrt-test* '(0 1 5) (cons 1 *joy-ops*) 1000)
 
-(defun extend-exp-and-test (ext-nodes fitness-test-case l-1-exp l-1-stks l-1-heaps l-1-fits goal-values best-exp best-fit joy-ops max-ticks)
-  "Extend l-1-exp with an arbitrary tree of at most ext-nodes nodes.
+(defun extend-exp-and-test (max-ext-nodes fitness-test-case l-1-exp l-1-stks l-1-heaps l-1-fits goal-values best-exp best-fit joy-ops max-ticks)
+  "Extend l-1-exp with an arbitrary tree of at most max-ext-nodes nodes.
 Test with all fitness-test-cases and extend those expressions whose result had no error.
 l-1-fits must be a list of fitnesses which must be nil if the previous level yielded no error."
-  (assert (<= 0 (+ (count-tree-nodes l-1-exp) ext-nodes)))
-  (if (= 0 ext-nodes)
+  (if (= 0 max-ext-nodes)
       (values best-exp best-fit)
-      (let* ((ext-structs (unique (mapcar #'car (enumerate-tree-structures ext-nodes))
+      (let* ((ext-structs (unique (mapcar #'car (enumerate-tree-structures max-ext-nodes))
 				  #'equal)) ;extension tree structures
 	     (score-fn (test-cases-score fitness-test-case)))
+	;;(format t "ext-structs:~A~%" ext-structs)
 	(loop for ext-struct in ext-structs do
-	     (when (> ext-nodes 2)
-	       (format t "l-1-exp:~A ext-nodes:~A ext-struct:~A~%" l-1-exp ext-nodes ext-struct))
-	     (let ((number-symbols (count-tree-nodes ext-struct)))
+	     (let ((ext-nodes (count-tree-nodes ext-struct))
+		   (ext-symbols (count-symbols-in-tree ext-struct))
+		   (enum-fill-start-time (get-internal-real-time)))
+	       (when (> max-ext-nodes 3)
+	         (format t "max-ext-nodes:~A l-1-exp:~A ext-struct:~A ext-nodes:~A ext-symbols:~A~%" max-ext-nodes l-1-exp ext-struct ext-nodes ext-symbols)
+		 )
 	       (flet ((f1 (ins-set)
-			(let ((ins (replace-symbols-in-tree ext-struct ins-set)))
-			  (let ((l-exp (append l-1-exp (list ins))))
-			    (multiple-value-bind
-				  (l-stks l-heaps l-fits fit-sum)
-				(evaluate-tests ins l-1-stks l-1-heaps l-1-fits goal-values score-fn max-ticks)
-			      ;;(format t "l-exp:~A fit-sum:~A~%" l-exp fit-sum)
-			      (when (> fit-sum best-fit)
-				(setf best-exp l-exp)
-				(setf best-fit fit-sum))
-			      (multiple-value-bind (best-exp+ best-fit+)
-				  (extend-exp-and-test (- ext-nodes number-symbols) fitness-test-case l-exp l-stks l-heaps l-fits goal-values best-exp best-fit joy-ops max-ticks)
-				(when (> best-fit+ best-fit)
-				  (setf best-exp best-exp+)
-				  (setf best-fit best-fit+))))))))
-		 (let* ((ins-sets (loop for i below number-symbols collect joy-ops)))
-		   (enumerate-set-combinations ins-sets #'f1)))))
+			(let* ((ins (replace-symbols-in-tree ext-struct ins-set))
+			       (l-exp (append l-1-exp (list ins))))
+			  (multiple-value-bind
+				(l-stks l-heaps l-fits fit-sum)
+			      (evaluate-tests ins l-1-stks l-1-heaps l-1-fits goal-values score-fn max-ticks)
+			    ;;(format t "  l-exp:~A fit-sum:~A      #sym:~A #nodes:~A~%" l-exp fit-sum (count-symbols-in-tree l-exp) (count-tree-nodes l-exp))
+			    (when (> fit-sum best-fit)
+			      (setf best-exp l-exp)
+			      (setf best-fit fit-sum))
+			    (multiple-value-bind (best-exp+ best-fit+)
+				(extend-exp-and-test (- max-ext-nodes ext-nodes) fitness-test-case l-exp l-stks l-heaps l-fits goal-values best-exp best-fit joy-ops max-ticks)
+			      (when (> best-fit+ best-fit)
+				(setf best-exp best-exp+)
+				(setf best-fit best-fit+)))))))
+		 (let* ((ins-sets (loop for i below ext-symbols collect joy-ops)))
+		   (enumerate-set-combinations ins-sets #'f1)))
+	       (let ((enum-fill-elapsed-seconds (float (/ (- (get-internal-real-time) enum-fill-start-time) internal-time-units-per-second))))
+		 (when (> max-ext-nodes 3)
+		   (format t "l-1-exp:~A elapsed-real-time:~A~%" l-1-exp enum-fill-elapsed-seconds)
+		   )
+		 )))
 	(values best-exp best-fit))))
 
-(defun systematicmapping2 (maxlevel fitness-test-case test-values joy-ops max-ticks)
-  (let* ((goal-values (mapcar (test-cases-goal fitness-test-case) test-values))
-	 (l0-heaps (loop for i below (length test-values) collect (make-hash-table)))
+(defun systematicmapping2 (maxlevel fitness-test-case joy-ops max-ticks)
+  (let* ((test-values (test-cases-values fitness-test-case))
+	 (goal-values (mapcar (test-cases-goal fitness-test-case) test-values))
+	 (l0-heaps (loop for i below (length test-values) collect (make-hash-table :size 0)))
 	 (l0-stks (mapcar (lambda (s h) (joy-eval-handler nil (list s) :heap h)) test-values l0-heaps))
 	 (fitn (mapcar (test-cases-score fitness-test-case) l0-stks goal-values))
 	 (l0-fits (mapcar (lambda (s f) (if (listp s) nil f)) l0-stks fitn))
 	 (best-fit (apply #'+ fitn)))
-;;    (format t "nil fitn:~A best-fit:~A~%" fitn best-fit)
-    (extend-exp-and-test maxlevel *fitness-sqrt-test* nil l0-stks l0-heaps l0-fits goal-values nil best-fit joy-ops max-ticks)))
+    (format t "nil fitn:~A best-fit:~A~%" fitn best-fit)
+    (extend-exp-and-test maxlevel fitness-test-case nil l0-stks l0-heaps l0-fits goal-values nil best-fit joy-ops max-ticks)))
+
+;;(time (systematicmapping2 4 *fitness-sqrt-test* (cons 1 (remove 'define *joy-ops*)) 1000))
+
+;;(require :sb-sprof)
+;;(sb-sprof:with-profiling (:max-samples 1000 :report :flat :loop nil)
+;;  (systematicmapping2 4 *fitness-sqrt-test* (cons 1 (remove 'define *joy-ops*)) 1000))
+;;(sb-sprof:with-profiling (:max-samples 1000 :mode :alloc :report :flat)
+;;  (systematicmapping2 4 *fitness-sqrt-test* (cons 1 (remove 'define *joy-ops*)) 1000))
+
+;;(time (systematicmapping2 4 *fitness-sqrt-test* '(1 5 10) (remove 'define *joy-ops-with-duplicates*) 1000))
+;; (1 SWAP REM INC) 11.219
+;; (1 INC SWAP REM INC) 279.084 seconds
+;; (DUP DEC DEC REM INC) 7951.128 seconds
