@@ -114,45 +114,41 @@ represent the relative chance of picking that item. Sum of w must not be 0."
       stk
       (joy-eval
        (case (car exp)
-	 (+       (cons (+ (cadr stk) (car stk)) (cddr stk)))
+	 (+       (cons (+ (cadr stk) (car stk)) (cddr stk))) ;add
 	 (and     (cons (and (car stk) (cadr stk)) (cddr stk)))
 	 (apply   (joy-eval (cdr stk) (car stk) :heap heap :c c :cd cd)) ;same as i
-	 (compose (cons (append (car stk) (cadr stk)) (cddr stk))) ; almost same as concat (swapped arguments)
-	 (cons    (cons (cons (cadr stk) (car stk)) (cddr stk))) ; same as papply
-	 (dip     (cons (cadr stk) (joy-eval (cddr stk) (car stk) :heap heap :c c :cd cd)))
-	 (/       (cons (/ (cadr stk) (car stk)) (cddr stk)))
-	 (dup     (cons (car stk) stk))
-	 (equal   (cons (equal (cadr stk) (car stk)) (cddr stk)))
-	 (false   (cons nil stk))
-	 (ifte    (if (car (joy-eval (cdddr stk) (caddr stk) :heap heap :c c :cd cd)) ; similar to branch
-		      (joy-eval (cdddr stk) (cadr stk) :heap heap :c c :cd cd)
-		      (joy-eval (cdddr stk) (car stk) :heap heap :c c :cd cd)))
-	 (list    (cons (list (car stk)) (cdr stk))) ; same as quote
-	 (*       (cons (* (car stk) (cadr stk)) (cddr stk)))
-	 (not     (cons (not (car stk)) (cdr stk))) ; can be emulated by branch
-	 (or      (cons (or (car stk) (cadr stk)) (cddr stk)))
-	 (papply  (cons (cons (cadr stk) (car stk)) (cddr stk)))
-	 (pop     (cdr stk))
-	 (pred    (cons (1- (car stk)) (cdr stk)))
-	 (quote   (cons (list (car stk)) (cdr stk)))
-	 (rem     (cons (mod (cadr stk) (car stk)) (cddr stk)))
-	 (-       (cons (- (cadr stk) (car stk)) (cddr stk)))
-	 (succ    (cons (1+ (car stk)) (cdr stk)))
-	 (swap    (cons (cadr stk) (cons (car stk) (cddr stk))))
-	 (true    (cons t stk))
-	 (uncons  (cons (cdar stk) (cons (caar stk) nil)))
-	 ;; my own definitions
-	 (<       (cons (< (cadr stk) (car stk)) (cddr stk)))
 	 (branch  (if (caddr stk)
 		      (joy-eval (cdddr stk) (cadr stk) :heap heap :c c :cd cd)
 		      (joy-eval (cdddr stk) (car stk) :heap heap :c c :cd cd)))
 	 (concat  (cons (append (cadr stk) (car stk)) (cddr stk)))
+	 (cons    (cons (cons (cadr stk) (car stk)) (cddr stk))) ; same as papply
+	 (dip     (cons (cadr stk) (joy-eval (cddr stk) (car stk) :heap heap :c c :cd cd)))
+	 (/       (cons (/ (cadr stk) (car stk)) (cddr stk))) ;divide
+	 (dup     (cons (car stk) stk))
+	 (equal   (cons (equal (cadr stk) (car stk)) (cddr stk)))
+	 (false   (cons nil stk))
 	 (i       (joy-eval (cdr stk) (car stk) :heap heap :c c :cd cd))
+	 (ifte    (if (car (joy-eval (cdddr stk) (caddr stk) :heap heap :c c :cd cd)) ; similar to branch
+		      (joy-eval (cdddr stk) (cadr stk) :heap heap :c c :cd cd)
+		      (joy-eval (cdddr stk) (car stk) :heap heap :c c :cd cd)))
+	 (*       (cons (* (car stk) (cadr stk)) (cddr stk))) ;multiply
+	 (not     (cons (not (car stk)) (cdr stk))) ; can be emulated by branch
+	 (or      (cons (or (car stk) (cadr stk)) (cddr stk)))
+	 (pop     (cdr stk))
+	 (pred    (cons (1- (car stk)) (cdr stk)))
+	 (quote   (cons (list (car stk)) (cdr stk)))
+	 (rem     (cons (mod (cadr stk) (car stk)) (cddr stk)))
+	 (<       (cons (< (cadr stk) (car stk)) (cddr stk))) ;smaller
 	 (stack   (cons stk stk))
 	 (step    (let ((res (cddr stk)))
 		    (loop for i in (cadr stk) do
 			 (setf res (joy-eval (cons i res) (car stk) :heap heap :c c :cd cd)))
 		    res))
+	 (-       (cons (- (cadr stk) (car stk)) (cddr stk))) ;subtract
+	 (succ    (cons (1+ (car stk)) (cdr stk)))
+	 (swap    (cons (cadr stk) (cons (car stk) (cddr stk))))
+	 (true    (cons t stk))
+	 (uncons  (cons (cdar stk) (cons (caar stk) nil)))
 	 (unstack (car stk))
 	 (while   (let ((res (cddr stk)))
 		    (do () ((not (car (joy-eval res (cadr stk) :heap heap :c c :cd cd))))
@@ -213,7 +209,9 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 (joy-test nil '(nil 5 and) '(nil))
 (joy-test nil '(3 5 and) '(3))
 (joy-test nil '(5 4 (+) apply) '(9))
-(joy-test nil '((+) (-) compose) '((- +)))
+(joy-test nil '(true (1) (2) branch) '(1))
+(joy-test nil '(false (1) (2) branch) '(2))
+(joy-test nil '(0 (1 2 3) (4 5 6) concat) '((1 2 3 4 5 6) 0))
 (joy-test nil '(4 (3) cons) '((4 3)))
 (joy-test nil '(1 2 5 (+) dip) '(5 3))
 (joy-test nil '(5 2 /) '(5/2))
@@ -223,33 +221,27 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 (joy-test nil '((3) (3) equal) '(t))
 (joy-test nil '((3) (true) equal) '(nil))
 (joy-test nil '(false) '(nil))
+(joy-test nil '(2 (3 +) i) '(5))
 (joy-test nil '((true) (1) (2) ifte) '(1))
 (joy-test nil '((false) (1) (2) ifte) '(2))
 (joy-test nil '((0 true) (1) (2) ifte) '(1))
-(joy-test nil '(3 list) '((3)))
 (joy-test nil '(3 4 *) '(12))
 (joy-test nil '(true not) '(nil))
 (joy-test nil '(nil 5 or) '(5))
 (joy-test nil '(nil nil or) '(nil))
-(joy-test nil '(1 (equal) papply) '((1 equal)))
 (joy-test nil '(5 4 pop) '(5))
 (joy-test nil '(5 pred) '(4))
 (joy-test nil '(5 quote) '((5)))
 (joy-test nil '(9 4 rem) '(1))
+(joy-test nil '(1 2 <) '(t))
+(joy-test nil '(2 1 <) '(nil))
+(joy-test nil '(1 2 stack) '((2 1) 2 1))
+(joy-test nil '((swap cons) swons define 0 nil (1 2 3) (swons) step) '((3 2 1) 0))
 (joy-test nil '(4 5 -) '(-1))
 (joy-test nil '(3 succ) '(4))
 (joy-test nil '(1 2 swap) '(1 2))
 (joy-test nil '(true) '(t))
-(joy-test nil '(4 5 list cons uncons) '((5) 4))
-;; own tests
-(joy-test nil '(1 2 <) '(t))
-(joy-test nil '(2 1 <) '(nil))
-(joy-test nil '(true (1) (2) branch) '(1))
-(joy-test nil '(false (1) (2) branch) '(2))
-(joy-test nil '(0 (1 2 3) (4 5 6) concat) '((1 2 3 4 5 6) 0))
-(joy-test nil '(2 (3 +) i) '(5))
-(joy-test nil '(1 2 stack) '((2 1) 2 1))
-(joy-test nil '((swap cons) swons define 0 nil (1 2 3) (swons) step) '((3 2 1) 0))
+(joy-test nil '(4 5 quote cons uncons) '((5) 4))
 (joy-test nil '(0 (1 2) unstack) '(1 2))
 (joy-test nil '(1 2 3 4 5 6 7 (pop pop stack (1) equal not) (pop) while) '(3 2 1))
 ;; 5 [0 < not] [[1] dip pred] while stack . ;; puts -1 and 6 ones on the stack
@@ -257,7 +249,7 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 (joy-test nil '(2 (dup +) superman define) '(2))
 (joy-test nil '(2 (1) superman define superman) '(1 2))
 (joy-test nil '(1 a) '(a 1))
-;; own defines
+;; own defines. maybe write fitness tests for letting them find
 (joy-test nil '((0 equal) null define 0 null) '(t))
 (joy-test nil '((0 equal) null define 1 null) '(nil))
 (joy-test nil '((pred) dec define 5 dec) '(4))
@@ -277,9 +269,9 @@ represent the relative chance of picking that item. Sum of w must not be 0."
     (floating-point-invalid-operation () 'error)
     (floating-point-overflow () 'error)))
 
-(defparameter *joy-ops* '(+ and apply compose cons dip / dup equal false
-			  list * not or pop pred rem - succ swap true
-			  uncons < branch stack step unstack while define))
+(defparameter *joy-ops* '(+ and apply branch concat cons dip / dup equal false
+			  i * not or pop pred quote rem < stack step - succ swap
+			  true uncons unstack while define))
 
 (defun mutate (exp debranch-p p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 
 	       q1 q2 q3 q4 q5 q6 q7 q8 q9 q10
@@ -459,6 +451,107 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
 			   10 10 100)
 	     sum (valid-reverse i))))))
 
+(defun valid-joy-exp (exp)
+  "Returns whether the expression exp is a valid joy expression.
+For example, ((1) pred) is not valid, since pred cannot operate on a list."
+  (labels ((pred (rexp n)
+	     "Checks if rexp has n predecessors (or actually successors, because rexp is reversed."
+	     (>= (length rexp) (1+ n)))
+	   (valid-reverse (rexp)
+	     ;;(print (list "rexp" rexp))
+	     (if (null rexp)
+		 t
+		 (and (listp rexp)
+		      (case (car rexp)
+			(+       (not (listp (cadr rexp))))
+			(and     (not (listp (cadr rexp))))
+			(apply   (and (pred rexp 1) (listp (cadr rexp))))
+			(branch  (and (pred rexp 2) (listp (cadr rexp)) (listp (caddr rexp))))
+			(concat  t)
+			(cons    t)
+			(dip     (and (pred rexp 1) (listp (cadr rexp))))
+			(/       (not (listp (cadr rexp))))
+			(dup     t)
+			(equal   t)
+			(false   t)
+			(i       (and (pred rexp 1) (listp (cadr rexp))))
+			(ifte    (and (pred rexp 3) (listp (cadr rexp)) (listp (caddr rexp)) (listp (cadddr rexp))))
+			(*       (not (listp (cadr rexp))))
+			(not     (not (listp (cadr rexp))))
+			(or      (not (listp (cadr rexp))))
+			(pop     t)
+			(pred    (not (listp (cadr rexp))))
+			(quote   t)
+			(rem     (not (listp (cadr rexp))))
+			(<       t)
+			(stack   t)
+			(-       (not (listp (cadr rexp))))
+			(succ    (not (listp (cadr rexp))))
+			(swap    t)
+			(true    t)
+			(uncons  t)
+			(while   (and (pred rexp 2) (listp (cadr rexp)) (listp (caddr rexp))))
+			(t       (if (listp (car rexp)) ;sub-expression?
+				     (valid-reverse (reverse (car rexp))) ;validate sub-expressions
+				     t))) ;accept all other symbols
+		      (valid-reverse (cdr rexp))))))
+    (and (listp exp) (valid-reverse (reverse exp)))))
+
+(assert (eq nil (valid-joy-exp 4)))
+(assert (eq nil (valid-joy-exp '(() +))))
+(assert (eq t   (valid-joy-exp '(1 +))))
+(assert (eq nil (valid-joy-exp '(() and))))
+(assert (eq t   (valid-joy-exp '(true false and))))
+(assert (eq nil (valid-joy-exp '(1 apply))))
+(assert (eq t   (valid-joy-exp '((1) apply))))
+(assert (eq nil (valid-joy-exp '(1 () branch))))
+(assert (eq nil (valid-joy-exp '(() 1 branch))))
+(assert (eq t   (valid-joy-exp '(() () branch))))
+(assert (eq t   (valid-joy-exp '(concat))))
+(assert (eq t   (valid-joy-exp '(cons))))
+(assert (eq nil (valid-joy-exp '(1 dip))))
+(assert (eq t   (valid-joy-exp '(() dip))))
+(assert (eq nil (valid-joy-exp '(() /))))
+(assert (eq t   (valid-joy-exp '(1 /))))
+(assert (eq t   (valid-joy-exp '(dup))))
+(assert (eq t   (valid-joy-exp '(equal))))
+(assert (eq t   (valid-joy-exp '(false))))
+(assert (eq nil (valid-joy-exp '(1 i))))
+(assert (eq t   (valid-joy-exp '(() i))))
+(assert (eq nil (valid-joy-exp '(1 () () ifte))))
+(assert (eq nil (valid-joy-exp '(() 1 () ifte))))
+(assert (eq nil (valid-joy-exp '(() () 1 ifte))))
+(assert (eq t   (valid-joy-exp '(() () () ifte))))
+(assert (eq nil (valid-joy-exp '(() *))))
+(assert (eq t   (valid-joy-exp '(1 *))))
+(assert (eq nil (valid-joy-exp '(() not))))
+(assert (eq t   (valid-joy-exp '(true not))))
+(assert (eq nil (valid-joy-exp '(() or))))
+(assert (eq t   (valid-joy-exp '(true or))))
+(assert (eq t   (valid-joy-exp '(pop))))
+(assert (eq nil (valid-joy-exp '(() pred))))
+(assert (eq t   (valid-joy-exp '(1 pred))))
+(assert (eq t   (valid-joy-exp '(quote))))
+(assert (eq nil (valid-joy-exp '(() rem))))
+(assert (eq t   (valid-joy-exp '(1 rem))))
+(assert (eq t   (valid-joy-exp '(<))))
+(assert (eq t   (valid-joy-exp '(stack))))
+(assert (eq nil (valid-joy-exp '(() -))))
+(assert (eq t   (valid-joy-exp '(1 -))))
+(assert (eq nil (valid-joy-exp '(() succ))))
+(assert (eq t   (valid-joy-exp '(1 succ))))
+(assert (eq t   (valid-joy-exp '(swap))))
+(assert (eq t   (valid-joy-exp '(true))))
+(assert (eq t   (valid-joy-exp '(uncons))))
+(assert (eq nil (valid-joy-exp '(1 () while))))
+(assert (eq nil (valid-joy-exp '(() 1 while))))
+(assert (eq t   (valid-joy-exp '(() () while))))
+;sub-expressions
+(assert (eq nil (valid-joy-exp '((() +)))))
+(assert (eq t   (valid-joy-exp '((1 +)))))
+;symbols
+(assert (eq t   (valid-joy-exp '(A))))
+
 (defun absdiff (a b)
   (abs (- a b)))
 
@@ -470,11 +563,13 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
 	 (b (elt c (1+ r))))
     (+ a (random (- b a)))))
 
+(defparameter *fitness-invalid* -1000000) ;score for invalid joy-expressions or invalid results
+
 (defun fitness-oneval-diff-score (r goal)
   "calculates the score of the joy-eval-result r against the goal.
-r should be a list of one value, otherwise -1000 is returned."
+r should be a list of one value, otherwise *fitness-invalid* is returned."
   (if (or (not (listp r)) (not (numberp (car r))) (not (eq (cdr r) nil)))
-      -1000
+      *fitness-invalid*
       (- (absdiff goal (car r)))))
 
 (defstruct test-cases
@@ -512,7 +607,7 @@ r should be a list of one value, otherwise -1000 is returned."
 
 (defun fitness-stacklength-score (r goal)
   (if (or (not (listp r)) (not (proper-list-p r)))
-      -1000
+      *fitness-invalid*
       (- (absdiff (length r) goal))))
 
 (defparameter *fitness-stacklength-test*
@@ -521,8 +616,6 @@ r should be a list of one value, otherwise -1000 is returned."
 		   :score #'fitness-stacklength-score))
 
 (defparameter *fitness-stacklength* (fitness-generator *fitness-stacklength-test*))
-
-;; (INC DUP * DUP *)
 
 (defparameter *mut-length* (+ 11 10 (length *joy-ops*)))
 
@@ -537,6 +630,7 @@ r should be a list of one value, otherwise -1000 is returned."
 	 (pop (make-array size :initial-contents (loop for i in res collect (car i))))
 	 (mut (make-array size :initial-contents (loop for i in res collect (caddr i)))))
     (tournament pop mut cycles fitness)))
+
 (defun tournament (pop mut cycles fitness)
   (assert (= (length pop) (length mut)))
   (let* ((size (length pop))
@@ -554,16 +648,17 @@ r should be a list of one value, otherwise -1000 is returned."
 	     (new-mut (mutate-mutate .1 (mutate-crossover c1-mut c2-mut)))
 ;;	     (new-mut c2-mut)
 	     (new (apply #'crossover-and-mutate (elt pop c1) (elt pop c2)
-			 new-mut))
-	     (new-fit (funcall fitness new)))
-	;;(print (list "c1" c1 "c2" c2 "c2-fit" c2-fit "new-fit" new-fit))
-	(if (> new-fit c2-fit)
-	    (progn (setf (elt pop c2) new)
-		   (setf (elt fit c2) new-fit)
-		   (setf (elt mut c2) new-mut)
-		   (print (list "new" new "new-fit" new-fit "new-mut" new-mut "c2-fit" c2-fit))))
+			 new-mut)))
+	(when (valid-joy-exp new)
+	  (let ((new-fit (funcall fitness new)))
+	    ;;(print (list "c1" c1 "c2" c2 "c2-fit" c2-fit "new-fit" new-fit))
+	    (when (> new-fit c2-fit)
+	      (setf (elt pop c2) new)
+	      (setf (elt fit c2) new-fit)
+	      (setf (elt mut c2) new-mut)
+	      (print (list "new" new "new-fit" new-fit "new-mut" new-mut "c2-fit" c2-fit)))))
 	(when (= 0 (mod c 1000))
-	  (print (list c new-fit c2-fit)))
+	  (print (list c c2-fit)))
 	(when (= 0 (mod c 10000))
 	  (log-mut-stats (sort (zip-array 'list pop fit mut) #'< :key #'second) logstream))))
     (close logstream)
@@ -619,18 +714,24 @@ l-1-stk and l-1-heap must be the stack and heap returned when executing l-1-exp.
 ;;    (format t "eae. l-1-stk:~A ins:~A res:~A fit:~A~%" l-1-stk ins res fit)
     (values res heap fit)))
 
-(defun evaluate-tests (ins l-1-stks l-1-heaps l-1-fits goal-values score-fn max-ticks max-seconds)
+(defun evaluate-tests (ins l-exp l-1-stks l-1-heaps l-1-fits goal-values score-fn max-ticks max-seconds)
   "Run ins on the joy-machines specified by l-1-stks and l-1-heaps and calculate the new fitness, and whether an error was returned.
 l-1-fits must be a list of fitnesses which must be nil if the previous calls yielded no error."
-  (let (l-stks l-heaps l-fits (fit-sum 0) pursue)
+  (let (l-stks l-heaps l-fits (fit-sum 0) (valid-exp (valid-joy-exp l-exp)) pursue)
     (loop
        for l-1-stk in l-1-stks
        for l-1-heap in l-1-heaps
        for l-1-fit in l-1-fits
        for goal-value in goal-values
        do
-	 (if (null l-1-fit) ;no error in level above
-	     (multiple-value-bind (res heap fit)
+	 (if (or (not (null l-1-fit)) (not valid-exp)) ;error in level above or invalid expression
+	     (progn
+	       (setf l-stks (cons l-1-stk l-stks))
+	       (setf l-heaps (cons l-1-heap l-heaps))
+	       (setf l-fits (cons l-1-fit l-fits))
+	       ;;(setf fit-sum (+ fit-sum l-1-fit))) ;if the shorter expression failed, so will this longer one
+	       (setf fit-sum (+ fit-sum *fitness-invalid*)))
+	     (multiple-value-bind (res heap fit) ;no error in level above
 		 (extend-and-evaluate l-1-stk l-1-heap ins goal-value score-fn max-ticks max-seconds)
 	       ;;(format t "goal-value:~A stk:~A fit:~A~%" goal-value res fit)
 	       (setf l-stks (cons res l-stks))
@@ -640,12 +741,7 @@ l-1-fits must be a list of fitnesses which must be nil if the previous calls yie
 		     (setf l-fits (cons nil l-fits))
 		     (setf pursue t))
 		   (setf l-fits (cons fit l-fits)))
-	       (setf fit-sum (+ fit-sum fit)))
-	     (progn
-	       (setf l-stks (cons l-1-stk l-stks))
-	       (setf l-heaps (cons l-1-heap l-heaps))
-	       (setf l-fits (cons l-1-fit l-fits))
-	       (setf fit-sum (+ fit-sum l-1-fit)))))
+	       (setf fit-sum (+ fit-sum fit)))))
     ;; pursue is nil if all tests failed with an error, t otherwise
     (values (nreverse l-stks) (nreverse l-heaps) (nreverse l-fits) fit-sum pursue)))
 
@@ -676,7 +772,7 @@ max-seconds is the maximum joy-eval timeout."
 			      ;;(format t "l-exp:~A l-1-stks:~A l-1-fits:~A goal-values:~A~%" l-exp l-1-stks l-1-fits goal-values)
 			      (multiple-value-bind
 				    (l-stks l-heaps l-fits fit-sum pursue)
-				  (evaluate-tests ins l-1-stks l-1-heaps l-1-fits goal-values score-fn max-ticks max-seconds)
+				  (evaluate-tests ins l-exp l-1-stks l-1-heaps l-1-fits goal-values score-fn max-ticks max-seconds)
 				(format t "l-exp:~A fit-sum:~A pursue:~A~%" l-exp fit-sum pursue)
 				(when (> fit-sum best-fit)
 				  (setf best-exp l-exp)
@@ -710,7 +806,7 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
 			       (l-exp (append l-1-exp (list ins))))
 			  (multiple-value-bind
 				(l-stks l-heaps l-fits fit-sum)
-			      (evaluate-tests ins l-1-stks l-1-heaps l-1-fits goal-values score-fn max-ticks max-seconds)
+			      (evaluate-tests ins l-exp l-1-stks l-1-heaps l-1-fits goal-values score-fn max-ticks max-seconds)
 			    ;;(format t "  l-exp:~A fit-sum:~A      #sym:~A #nodes:~A~%" l-exp fit-sum (count-symbols-in-tree l-exp) (count-tree-nodes l-exp))
 			    (when (> fit-sum best-fit)
 			      (setf best-exp l-exp)
@@ -749,6 +845,7 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
 ;;  (systematicmapping2 4 *fitness-sqrt-test* (cons '(1 A) *joy-ops*) 1000 .01))
 
 ;;(time (systematicmapping2 4 *fitness-sqrt-test* '(1 5 10) (remove 'define *joy-ops-with-duplicates*) 1000))
+;;auf Susi's PC
 ;; (1 SWAP REM INC) 11.219
 ;; (1 INC SWAP REM INC) 279.084 seconds
 ;; (DUP DEC DEC REM INC) 7951.128 seconds
