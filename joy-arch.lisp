@@ -102,7 +102,7 @@ represent the relative chance of picking that item. Sum of w must not be 0."
     u))
 
 ;; '((1) 1 DEFINE 1)
-(defun joy-eval (stk exp &key (heap nil) (c (make-counter 0)) (cd (make-countdown 0.0)))
+(defun joy-eval (stk exp &key (heap (make-hash-table)) (c (make-counter 0)) (cd (make-countdown 0.0)))
   (declare (optimize (debug 0) (compilation-speed 0) (speed 3) (space 0)))
   (let ((c (funcall c)) (cd (funcall cd)))
     ;;(print (list "stk" stk "exp" exp "c" c "cd" cd))
@@ -119,7 +119,6 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 	 (apply   (joy-eval (cdr stk) (car stk) :heap heap :c c :cd cd)) ;same as i
 	 (compose (cons (append (car stk) (cadr stk)) (cddr stk))) ; almost same as concat (swapped arguments)
 	 (cons    (cons (cons (cadr stk) (car stk)) (cddr stk))) ; same as papply
-	 (dec     (cons (1- (car stk)) (cdr stk)))
 	 (dip     (cons (cadr stk) (joy-eval (cddr stk) (car stk) :heap heap :c c :cd cd)))
 	 (/       (cons (/ (cadr stk) (car stk)) (cddr stk)))
 	 (dup     (cons (car stk) stk))
@@ -128,16 +127,17 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 	 (ifte    (if (car (joy-eval (cdddr stk) (caddr stk) :heap heap :c c :cd cd)) ; similar to branch
 		      (joy-eval (cdddr stk) (cadr stk) :heap heap :c c :cd cd)
 		      (joy-eval (cdddr stk) (car stk) :heap heap :c c :cd cd)))
-	 (inc     (cons (1+ (car stk)) (cdr stk)))
 	 (list    (cons (list (car stk)) (cdr stk))) ; same as quote
 	 (*       (cons (* (car stk) (cadr stk)) (cddr stk)))
 	 (not     (cons (not (car stk)) (cdr stk))) ; can be emulated by branch
 	 (or      (cons (or (car stk) (cadr stk)) (cddr stk)))
 	 (papply  (cons (cons (cadr stk) (car stk)) (cddr stk)))
 	 (pop     (cdr stk))
+	 (pred    (cons (1- (car stk)) (cdr stk)))
 	 (quote   (cons (list (car stk)) (cdr stk)))
 	 (rem     (cons (mod (cadr stk) (car stk)) (cddr stk)))
 	 (-       (cons (- (cadr stk) (car stk)) (cddr stk)))
+	 (succ    (cons (1+ (car stk)) (cdr stk)))
 	 (swap    (cons (cadr stk) (cons (car stk) (cddr stk))))
 	 (true    (cons t stk))
 	 (uncons  (cons (cdar stk) (cons (caar stk) nil)))
@@ -215,7 +215,6 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 (joy-test nil '(5 4 (+) apply) '(9))
 (joy-test nil '((+) (-) compose) '((- +)))
 (joy-test nil '(4 (3) cons) '((4 3)))
-(joy-test nil '(5 dec) '(4))
 (joy-test nil '(1 2 5 (+) dip) '(5 3))
 (joy-test nil '(5 2 /) '(5/2))
 (joy-test nil '(3 dup) '(3 3))
@@ -227,7 +226,6 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 (joy-test nil '((true) (1) (2) ifte) '(1))
 (joy-test nil '((false) (1) (2) ifte) '(2))
 (joy-test nil '((0 true) (1) (2) ifte) '(1))
-(joy-test nil '(3 inc) '(4))
 (joy-test nil '(3 list) '((3)))
 (joy-test nil '(3 4 *) '(12))
 (joy-test nil '(true not) '(nil))
@@ -235,9 +233,11 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 (joy-test nil '(nil nil or) '(nil))
 (joy-test nil '(1 (equal) papply) '((1 equal)))
 (joy-test nil '(5 4 pop) '(5))
+(joy-test nil '(5 pred) '(4))
 (joy-test nil '(5 quote) '((5)))
 (joy-test nil '(9 4 rem) '(1))
 (joy-test nil '(4 5 -) '(-1))
+(joy-test nil '(3 succ) '(4))
 (joy-test nil '(1 2 swap) '(1 2))
 (joy-test nil '(true) '(t))
 (joy-test nil '(4 5 list cons uncons) '((5) 4))
@@ -252,6 +252,7 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 (joy-test nil '((swap cons) swons define 0 nil (1 2 3) (swons) step) '((3 2 1) 0))
 (joy-test nil '(0 (1 2) unstack) '(1 2))
 (joy-test nil '(1 2 3 4 5 6 7 (pop pop stack (1) equal not) (pop) while) '(3 2 1))
+;; 5 [0 < not] [[1] dip pred] while stack . ;; puts -1 and 6 ones on the stack
 ;; define is special
 (joy-test nil '(2 (dup +) superman define) '(2))
 (joy-test nil '(2 (1) superman define superman) '(1 2))
@@ -259,12 +260,12 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 ;; own defines
 (joy-test nil '((0 equal) null define 0 null) '(t))
 (joy-test nil '((0 equal) null define 1 null) '(nil))
-(joy-test nil '((dec) pred define 5 pred) '(4))
-(joy-test nil '((inc) succ define 5 succ) '(6))
+(joy-test nil '((pred) dec define 5 dec) '(4))
+(joy-test nil '((succ) inc define 5 inc) '(6))
 (joy-test nil '((swap cons) swons define (2) 1 swons) '((1 2)))
 (joy-eval nil
 	  '(((dup cons) swap concat dup cons i) y define
-	    (((pop null) (pop inc) ((dup dec) dip i *) ifte) y) fac define
+	    (((pop null) (pop succ) ((dup pred) dip i *) ifte) y) fac define
 	    1 fac) :heap (make-hash-table))
 
 
@@ -276,52 +277,47 @@ represent the relative chance of picking that item. Sum of w must not be 0."
     (floating-point-invalid-operation () 'error)
     (floating-point-overflow () 'error)))
 
-(defparameter *joy-ops-with-duplicates* '(+ and apply compose cons dec dip / dup equal false ifte
-					  inc list * nil not or papply pop quote rem - swap true
-					  uncons concat i step define))
-
-(defparameter *joy-ops* '(+ and apply compose cons dec dip / dup equal false
-			  inc list * not or pop rem - swap true
+(defparameter *joy-ops* '(+ and apply compose cons dip / dup equal false
+			  list * not or pop pred rem - succ swap true
 			  uncons < branch stack step unstack while define))
 
-(defun mutate (exp p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 
+(defun mutate (exp debranch-p p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 
 	       q1 q2 q3 q4 q5 q6 q7 q8 q9 q10
-	       r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30
-	       &optional (debranch-p t))
+	       &rest ops-p)
 ;;  (print (list "exp" exp))
   (flet ((random-final (p)
 	   (if (< (random 1.0) p)
 	       (weighted-choice (list q1 q2 q3 q4 q5 q6 q7 q8 q9 q10)
 				'(a b c d e 1 2 4 8 16))
-	       (weighted-choice (list r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30)
-				*joy-ops-with-duplicates*))))
+	       (weighted-choice ops-p *joy-ops*))))
     (cond
       ((null exp) (if (< (random 1.0) p1) ;extend
 		      (cons (random-final p2)
 			    nil)))
       ((listp exp) (if (and debranch-p (< (random 1.0) p3))
 		       (random-final p4) ; de-branch
-		       (cons (mutate (car exp) p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 q1 q2 q3 q4 q5 q6 q7 q8 q9 q10 r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30)
+		       (cons (apply #'mutate (car exp) t p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 q1 q2 q3 q4 q5 q6 q7 q8 q9 q10 ops-p)
 			     (if (and (= 1 (length (cdr exp)))
 				      (< (random 1.0) p5))
 				 nil ; shorten
-				 (mutate (cdr exp) p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 q1 q2 q3 q4 q5 q6 q7 q8 q9 q10 r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 nil)))))
+				 (apply #'mutate (cdr exp) nil p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 q1 q2 q3 q4 q5 q6 q7 q8 q9 q10 ops-p)))))
       (t (if (< (random 1.0) p6)
 	     (if (< (random 1.0) p7)
 		 (cons (if (< (random 1.0) p8)
 			   (random-final p9) ; branch
 			   exp)
-		       nil)		 (random-final p10)) ; substitute
+		       nil)	
+		 (random-final p10)) ; substitute
 	     exp)))))
-    
+   
 (defun mutate-rec (exp &rest probs)
   (declare (optimize (debug 3)))
 ;;  (print (list "exp" exp "p0" p0))
   (let ((p0 (car probs))
 	(prest (cdr probs)))
     (if (< (random 1.0) p0)
-	(apply #'mutate-rec (apply #'mutate exp prest) probs)
-	(apply #'mutate exp prest))))
+	(apply #'mutate-rec (apply #'mutate exp t prest) probs)
+	(apply #'mutate exp t prest))))
 
 (defun mutate-mutate (p0 probs)
   (labels ((rnd (a)
@@ -528,10 +524,11 @@ r should be a list of one value, otherwise -1000 is returned."
 
 ;; (INC DUP * DUP *)
 
+(defparameter *mut-length* (+ 11 10 (length *joy-ops*)))
+
 (defun tournament-new (o size cycles fitness)
   (let* ((pop (make-array size :initial-element o))
-	 (mut (make-array size :initial-element ;(loop for i below 53 collect .1)
-			  '(0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1))))
+	 (mut (make-array size :initial-element (loop for i below *mut-length* collect .1))))
 ;;    (dotimes (s size) (setf (aref mut s) (loop for i below 11 collect (random .9))))
     (tournament pop mut cycles fitness)))
 
@@ -574,7 +571,7 @@ r should be a list of one value, otherwise -1000 is returned."
 
 (defun mut-stats (res)
   (let ((mut (mapcar #'caddr res)))
-    (loop for i below 53 collect
+    (loop for i below *mut-length* collect
 	 (let ((pn (mapcar (lambda (x) (nth i x)) mut)))
 ;;	   (print (list "pn" pn))
 	   (list (mean pn) (stddev-corr pn))))))
