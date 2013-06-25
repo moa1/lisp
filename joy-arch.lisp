@@ -147,6 +147,9 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 	 (-       (cons (- (cadr stk) (car stk)) (cddr stk))) ;subtract
 	 (succ    (cons (1+ (car stk)) (cdr stk)))
 	 (swap    (cons (cadr stk) (cons (car stk) (cddr stk))))
+	 (times   (let ((res (cddr stk)) (n (cadr stk)))
+		    (dotimes (i n res)
+		      (setf res (joy-eval res (car stk) :heap heap :c c :cd cd)))))
 	 (true    (cons t stk))
 	 (uncons  (cons (cdar stk) (cons (caar stk) nil)))
 	 (unstack (car stk))
@@ -240,11 +243,14 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 (joy-test nil '(4 5 -) '(-1))
 (joy-test nil '(3 succ) '(4))
 (joy-test nil '(1 2 swap) '(1 2))
+(joy-test nil '(5 (1) times) '(1 1 1 1 1))
+(joy-test nil '(2 5 (2 *) times) '(64))
 (joy-test nil '(true) '(t))
 (joy-test nil '(4 5 quote cons uncons) '((5) 4))
 (joy-test nil '(0 (1 2) unstack) '(1 2))
 (joy-test nil '(1 2 3 4 5 6 7 (pop pop stack (1) equal not) (pop) while) '(3 2 1))
 ;; 5 [0 < not] [[1] dip pred] while stack . ;; puts -1 and 6 ones on the stack
+;; (joy-eval '(5) '((pred dup 0 < () ((1) dip a) branch) a define a))
 ;; define is special
 (joy-test nil '(2 (dup +) superman define) '(2))
 (joy-test nil '(2 (1) superman define superman) '(1 2))
@@ -271,7 +277,7 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 
 (defparameter *joy-ops* '(+ and apply branch concat cons dip / dup equal false
 			  i * not or pop pred quote rem < stack step - succ swap
-			  true uncons unstack while define))
+			  times true uncons unstack while define))
 
 (defun mutate (exp debranch-p p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 
 	       q1 q2 q3 q4 q5 q6 q7 q8 q9 q10
@@ -586,10 +592,10 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 
 ;; re-definition of fitness-sqrt using *fitness-sqrt-test*-functions
 (defun fitness-generator (fitness-test-case)
-  (lambda (o &optional (print nil))
+  (lambda (o max-ticks max-seconds &optional (print nil))
     (loop for x in (test-cases-values fitness-test-case)
        sum (let* ((value (funcall (test-cases-goal fitness-test-case) x))
-		  (r (joy-eval-handler (list x) o :c (make-counter 1000) :cd (make-countdown .01)))
+		  (r (joy-eval-handler (list x) o :c (make-counter max-ticks) :cd (make-countdown max-seconds)))
 		  (fit (funcall (test-cases-score fitness-test-case) r value)))
 	     (when print
 	       (print (list "x" x "value" value "r" r "fit" fit)))
@@ -619,30 +625,30 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 
 (defparameter *mut-length* (+ 11 10 (length *joy-ops*)))
 
-(defun tournament-new (o size cycles fitness)
+(defun tournament-new (o size cycles fitness max-ticks max-seconds)
   (let* ((pop (make-array size :initial-element o))
 	 (mut (make-array size :initial-element (loop for i below *mut-length* collect .1))))
 ;;    (dotimes (s size) (setf (aref mut s) (loop for i below 11 collect (random .9))))
-    (tournament pop mut cycles fitness)))
+    (tournament pop mut cycles fitness max-ticks max-seconds)))
 
-(defun tournament-res (res cycles fitness)
+(defun tournament-res (res cycles fitness max-ticks max-seconds)
   (let* ((size (length res))
 	 (pop (make-array size :initial-contents (loop for i in res collect (car i))))
 	 (mut (make-array size :initial-contents (loop for i in res collect (caddr i)))))
-    (tournament pop mut cycles fitness)))
+    (tournament pop mut cycles fitness max-ticks max-seconds)))
 
-(defun tournament (pop mut cycles fitness)
+(defun tournament (pop mut cycles fitness max-ticks max-seconds)
   (assert (= (length pop) (length mut)))
   (let* ((size (length pop))
 	 (n (loop for i below size collect i))
 	 (fit (make-array size :initial-element 0))
 	 (logstream (open "/tmp/log.txt" :direction :output :if-exists :rename-and-delete :if-does-not-exist :create)))
-    (dotimes (s size) (setf (aref fit s) (funcall fitness (aref pop s))))
+    (dotimes (s size) (setf (aref fit s) (funcall fitness (aref pop s) max-ticks max-seconds)))
     (dotimes (c cycles)
       (let* ((c1 (choice n))
 	     (c2 (choice n))
 	     ;;(c2-fit (elt fit c2))
-	     (c2-fit (funcall fitness (elt pop c2))) ;; fairer for randomized fitnesses
+	     (c2-fit (funcall fitness (elt pop c2) max-ticks max-seconds)) ;; fairer for randomized fitnesses
 	     (c1-mut (elt mut c1))
 	     (c2-mut (elt mut c2))
 	     (new-mut (mutate-mutate .1 (mutate-crossover c1-mut c2-mut)))
@@ -650,7 +656,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 	     (new (apply #'crossover-and-mutate (elt pop c1) (elt pop c2)
 			 new-mut)))
 	(when (valid-joy-exp new)
-	  (let ((new-fit (funcall fitness new)))
+	  (let ((new-fit (funcall fitness new max-ticks max-seconds)))
 	    ;;(print (list "c1" c1 "c2" c2 "c2-fit" c2-fit "new-fit" new-fit))
 	    (when (> new-fit c2-fit)
 	      (setf (elt pop c2) new)
@@ -784,46 +790,36 @@ max-seconds is the maximum joy-eval timeout."
 
 ;;(systematicmapping 3 *fitness-sqrt-test* '(0 1 5) (cons 1 *joy-ops*) 1000)
 
-(defun extend-exp-and-test (max-ext-nodes fitness-test-case l-1-exp l-1-stks l-1-heaps l-1-fits goal-values best-exp best-fit joy-ops max-ticks max-seconds)
+(defun extend-exp-and-test (max-ext-nodes fitness-test-case l-1-exp l-1-stks l-1-heaps l-1-fits goal-values collectfit joy-ops max-ticks max-seconds)
   "Extend l-1-exp with an arbitrary tree of at most max-ext-nodes nodes.
 Test with all fitness-test-cases and extend those expressions whose result had no error.
 l-1-fits must be a list of fitnesses which must be nil if the previous level yielded no error."
-  (if (= 0 max-ext-nodes)
-      (values best-exp best-fit)
-      (let* ((ext-structs (unique (mapcar #'car (enumerate-tree-structures max-ext-nodes))
-				  #'equal)) ;extension tree structures
-	     (score-fn (test-cases-score fitness-test-case)))
-	;;(format t "ext-structs:~A~%" ext-structs)
-	(loop for ext-struct in ext-structs do
-	     (let ((ext-nodes (count-tree-nodes ext-struct))
-		   (ext-symbols (count-symbols-in-tree ext-struct))
-		   (enum-fill-start-time (get-internal-real-time)))
-	       (when (> max-ext-nodes 3)
-	         (format t "max-ext-nodes:~A l-1-exp:~A ext-struct:~A ext-nodes:~A ext-symbols:~A~%" max-ext-nodes l-1-exp ext-struct ext-nodes ext-symbols)
-		 )
-	       (flet ((f1 (ins-set)
-			(let* ((ins (replace-symbols-in-tree ext-struct ins-set))
-			       (l-exp (append l-1-exp (list ins))))
-			  (multiple-value-bind
-				(l-stks l-heaps l-fits fit-sum)
-			      (evaluate-tests ins l-exp l-1-stks l-1-heaps l-1-fits goal-values score-fn max-ticks max-seconds)
-			    ;;(format t "  l-exp:~A fit-sum:~A      #sym:~A #nodes:~A~%" l-exp fit-sum (count-symbols-in-tree l-exp) (count-tree-nodes l-exp))
-			    (when (> fit-sum best-fit)
-			      (setf best-exp l-exp)
-			      (setf best-fit fit-sum))
-			    (multiple-value-bind (best-exp+ best-fit+)
-				(extend-exp-and-test (- max-ext-nodes ext-nodes) fitness-test-case l-exp l-stks l-heaps l-fits goal-values best-exp best-fit joy-ops max-ticks max-seconds)
-			      (when (> best-fit+ best-fit)
-				(setf best-exp best-exp+)
-				(setf best-fit best-fit+)))))))
-		 (let* ((ins-sets (loop for i below ext-symbols collect joy-ops)))
-		   (enumerate-set-combinations ins-sets #'f1)))
-	       (when (> max-ext-nodes 3)
-		 (let ((elapsed-seconds (float (/ (- (get-internal-real-time) enum-fill-start-time) internal-time-units-per-second))))
-		   (format t "max-ext-nodes:~A l-1-exp:~A ext-struct:~A ext-nodes:~A ext-symbols:~A elapsed-seconds:~A~%" max-ext-nodes l-1-exp ext-struct ext-nodes ext-symbols elapsed-seconds))
-		 )
-	       ))
-	(values best-exp best-fit))))
+  (when (> max-ext-nodes 0)
+    (let* ((ext-structs (unique (mapcar #'car (enumerate-tree-structures max-ext-nodes))
+				#'equal)) ;extension tree structures
+	   (score-fn (test-cases-score fitness-test-case)))
+      ;;(format t "ext-structs:~A~%" ext-structs)
+      (loop for ext-struct in ext-structs do
+	   (let ((ext-nodes (count-tree-nodes ext-struct))
+		 (ext-symbols (count-symbols-in-tree ext-struct))
+		 (enum-fill-start-time (get-internal-real-time)))
+	     (when (> max-ext-nodes 3)
+	       (format t "max-ext-nodes:~A l-1-exp:~A ext-struct:~A ext-nodes:~A ext-symbols:~A~%" max-ext-nodes l-1-exp ext-struct ext-nodes ext-symbols)
+	       )
+	     (flet ((f1 (ins-set)
+		      (let* ((ins (replace-symbols-in-tree ext-struct ins-set))
+			     (l-exp (append l-1-exp (list ins))))
+			(multiple-value-bind
+			      (l-stks l-heaps l-fits fit-sum)
+			    (evaluate-tests ins l-exp l-1-stks l-1-heaps l-1-fits goal-values score-fn max-ticks max-seconds)
+			  ;;(format t "  l-exp:~A fit-sum:~A      #sym:~A #nodes:~A~%" l-exp fit-sum (count-symbols-in-tree l-exp) (count-tree-nodes l-exp))
+			  (funcall collectfit l-exp fit-sum)
+			  (extend-exp-and-test (- max-ext-nodes ext-nodes) fitness-test-case l-exp l-stks l-heaps l-fits goal-values collectfit joy-ops max-ticks max-seconds)))))
+	       (let* ((ins-sets (loop for i below ext-symbols collect joy-ops)))
+		 (enumerate-set-combinations ins-sets #'f1)))
+	     (when (> max-ext-nodes 3)
+	       (let ((elapsed-seconds (float (/ (- (get-internal-real-time) enum-fill-start-time) internal-time-units-per-second))))
+		 (format t "max-ext-nodes:~A l-1-exp:~A ext-struct:~A ext-nodes:~A ext-symbols:~A elapsed-seconds:~A~%" max-ext-nodes l-1-exp ext-struct ext-nodes ext-symbols elapsed-seconds))))))))
 
 (defun systematicmapping2 (maxlevel fitness-test-case joy-ops max-ticks max-seconds)
   (let* ((test-values (test-cases-values fitness-test-case))
@@ -832,9 +828,16 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
 	 (l0-stks (mapcar (lambda (s h) (joy-eval-handler nil (list s) :heap h)) test-values l0-heaps))
 	 (fitn (mapcar (test-cases-score fitness-test-case) l0-stks goal-values))
 	 (l0-fits (mapcar (lambda (s f) (if (listp s) nil f)) l0-stks fitn))
-	 (best-fit (apply #'+ fitn)))
-    (format t "nil fitn:~A best-fit:~A~%" fitn best-fit)
-    (extend-exp-and-test maxlevel fitness-test-case nil l0-stks l0-heaps l0-fits goal-values nil best-fit joy-ops max-ticks max-seconds)))
+	 (best-fit (apply #'+ fitn))
+	 (best-exp (list nil)))
+    (flet ((collectfit (exp fit)
+	     (if (> fit best-fit)
+		 (progn (setf best-fit fit) (setf best-exp (list exp)))
+		 (when (= fit best-fit)
+		   (setf best-exp (cons exp best-exp))))))
+      (format t "nil fitn:~A best-fit:~A~%" fitn best-fit)
+      (extend-exp-and-test maxlevel fitness-test-case nil l0-stks l0-heaps l0-fits goal-values #'collectfit joy-ops max-ticks max-seconds)
+      (values best-exp best-fit))))
 
 ;;(time (systematicmapping2 4 *fitness-sqrt-test* (cons '(1 A) *joy-ops*) 1000 .01))
 
