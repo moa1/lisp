@@ -105,6 +105,7 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 (defun joy-eval (stk exp &key (heap (make-hash-table)) (c (make-counter 0)) (cd (make-countdown 0.0)))
   (declare (optimize (debug 0) (compilation-speed 0) (speed 3) (space 0)))
   ;; note that this function does not fail for the same inputs as the joy implementation by Manfred von Thun, e.g. '(branch) returns nil, but would fail for the real implementation.
+  ;; however, it should raise an error for cases when the stack becomes a non-list.
   (let ((c (funcall c)) (cd (funcall cd)))
     ;;(print (list "stk" stk "exp" exp "c" c "cd" cd))
     (when (<= c 0)
@@ -121,7 +122,7 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 		      (joy-eval (cdddr stk) (cadr stk) :heap heap :c c :cd cd)
 		      (joy-eval (cdddr stk) (car stk) :heap heap :c c :cd cd)))
 	 (concat  (cons (append (cadr stk) (car stk)) (cddr stk)))
-	 (cons    (cons (cons (cadr stk) (let ((a (car stk))) (if (listp a) a (error "cons")))) (cddr stk))) ; same as papply
+	 (cons    (cons (cons (cadr stk) (let ((a (car stk))) (if (listp a) a (error (make-condition 'type-error :datum a :expected-type 'list))))) (cddr stk))) ; same as papply
 	 (dip     (cons (cadr stk) (joy-eval (cddr stk) (car stk) :heap heap :c c :cd cd)))
 	 (/       (cons (/ (cadr stk) (car stk)) (cddr stk))) ;divide
 	 (dup     (cons (car stk) stk))
@@ -132,6 +133,7 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 		      (joy-eval (cdddr stk) (cadr stk) :heap heap :c c :cd cd)
 		      (joy-eval (cdddr stk) (car stk) :heap heap :c c :cd cd)))
 	 (*       (cons (* (car stk) (cadr stk)) (cddr stk))) ;multiply
+	 (nill    (cons nil stk))
 	 (not     (cons (not (car stk)) (cdr stk))) ; can be emulated by branch
 	 (or      (cons (or (car stk) (cadr stk)) (cddr stk)))
 	 (pop     (cdr stk))
@@ -152,7 +154,7 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 		      (setf res (joy-eval res (car stk) :heap heap :c c :cd cd)))))
 	 (true    (cons t stk))
 	 (uncons  (cons (cdar stk) (cons (caar stk) nil)))
-	 (unstack (let ((a (car stk))) (if (listp a) (car stk) (error "unstack"))))
+	 (unstack (let ((a (car stk))) (if (listp a) (car stk) (error (make-condition 'type-error :datum a :expected-type 'list)))))
 	 (while   (let ((res (cddr stk)))
 		    (do () ((not (car (joy-eval res (cadr stk) :heap heap :c c :cd cd))))
 		      (setf res (joy-eval res (car stk) :heap heap :c c :cd cd)))
@@ -228,6 +230,7 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 (joy-test nil '((false) (1) (2) ifte) '(2))
 (joy-test nil '((0 true) (1) (2) ifte) '(1))
 (joy-test nil '(3 4 *) '(12))
+(joy-test nil '(nill) '(()))
 (joy-test nil '(true not) '(nil))
 (joy-test nil '(nil 5 or) '(5))
 (joy-test nil '(nil nil or) '(nil))
@@ -274,9 +277,8 @@ represent the relative chance of picking that item. Sum of w must not be 0."
     (floating-point-invalid-operation () 'error)
     (floating-point-overflow () 'error)))
 
-(defparameter *joy-ops* '(+ and branch concat cons dip / dup equal false
-			  i * not or pop pred quote rem < stack step - succ swap
-			  times true uncons unstack while define))
+(defparameter *joy-ops* 
+  '(+ and branch concat cons dip / dup equal false i * nill not or pop pred quote rem < stack step - succ swap times true uncons unstack while define))
 
 (defun mutate (exp debranch-p p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 
 	       q1 q2 q3 q4 q5 q6 q7 q8 q9 q10
@@ -460,6 +462,126 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
 ;; This function cannot exclude expressions for instructions that expect list(s), since the instruction before could leave list(s) on the stack but are not lists themselves.
 ;; In addition, the function worked recursively on sub-expressions. Therefore, the expression '(+) cannot be excluded since it is valid in '(1 2 (+) i).
 
+;; the next try for syntactically excluding expression is creating a database that contains the expected and remaining types on the stack.
+;; the order of the types is in the same order as in "A Joy Library for Online Help Generation.html", i.e. in the order in that the objects appear on the expression stream.
+;; :any means the instruction can modify the stack in any way.
+(defparameter *joy-ops-types*
+  '((+       (number number) (number))
+    (and     (t t) (boolean))
+    (branch  (t list list) (:any))
+    (concat  (list list) (list))
+    (cons    (t list) (list))
+    (dip     (t list) (:any))
+    (/       (number number) (number))
+    (dup     (t) (t t))
+    (equal   (t t) (boolean))
+    (false   () (boolean))
+    (i       (list) (:any))
+    (ifte    (list list list) (:any))
+    (*       (number number) (number))
+    (nill    () (list))
+    (not     (t) (boolean))
+    (or      (t t) (boolean))
+    (pop     (t) nil)
+    (pred    (number) (number))
+    (quote   (t) (list))
+    (rem     (number number) (number))
+    (<       (number number) (boolean))
+    (stack   nil (list))
+    (step    (list list) (:any))
+    (-       (number number) (number))
+    (succ    (number) (number))
+    (swap    (t t) (t t))
+    (times   (number list) (:any))
+    (true    () (boolean))
+    (uncons  (list) (t list)) ;t is top of stack, list is 2nd of stack
+    (unstack (list) (:any))
+    (while   (list list) (:any))
+    (define  (list t) nil)))
+
+(defun make-expected-remaining-mappings ()
+  (let ((ht-ex (make-hash-table :test 'eq :size (length *joy-ops-types*)))
+	(ht-re (make-hash-table :test 'eq :size (length *joy-ops-types*))))
+    (loop for types in *joy-ops-types* do
+	 (let ((op (car types))
+	       (ex (cadr types))
+	       (re (caddr types)))
+	   (setf (gethash op ht-ex) ex)
+	   (setf (gethash op ht-re) re)))
+    (values ht-ex ht-re)))
+
+(defparameter *joy-ops-types-expected* (nth-value 0 (make-expected-remaining-mappings)))
+(defparameter *joy-ops-types-remaining* (nth-value 1 (make-expected-remaining-mappings)))
+
+(defun typep-symbol (type-symbol type)
+  "Return whether the type-symbol is of type type.
+For example 'float is of type 'number, but 'number is not of type 'float.
+This should hold: (typep val type) = (typep-symbol (type-of val) type), but doesn't always, because e.g. (type-of 5) returns (INTEGER 0 4611686018427387903)."
+  ;;(format t "type-symbol:~A type:~A~%" type-symbol type)
+  (or (eq type t)
+      (eq type-symbol type)
+      (ecase type-symbol
+	(float (or (eq type 'number) (eq type 'float) (eq type 'short-float) (eq type 'single-float) (eq type 'double-float) (eq type 'long-float)))
+	(number nil) ;there is no type more general than number, except t, which was tested above
+	(list nil)
+	(boolean nil)
+	;;more types to be implemented as necessary
+	)))
+
+(defun typep-symbol-joy (type-symbol type)
+  "Returns whether type-symbol is of type type or type-symbol is T."
+  (or (eq type-symbol t) (typep-symbol type-symbol type)))
+
+(defun expect-stk-type (ex stk)
+  "Returns whether ex, the list of expected types is present in stk, the list of present types.
+For example, (expect-stk-type '(list :any number) '(list list)) is T, but (expect-stk-type '(list number) '(list list)) is NIL.
+As a second value, the remainder of stk is returned, or :error if the stack didn't contain the expected types."
+  (if (null ex)
+      (values t stk) ;nothing expected
+      (if (null stk)
+	  (values nil :error) ;there is an expected type, but stk is empty
+	  (if (eq (car stk) :any)
+	      (values t stk) ;there is an expected type and stk could be anything
+	      (and (typep-symbol-joy (car stk) (car ex))
+		   (expect-stk-type (cdr ex) (cdr stk)))))))
+
+(defun valid-joy-exp (exp &optional (stk nil))
+  "Return whether exp can be a syntactically valid joy expression."
+  (labels ((rec (exp stk)
+	     ;;(format t "exp:~A stk:~A~%" exp stk)
+	     (if (null exp)
+		 t
+		 (if (listp (car exp))
+		     (and (rec (car exp) '(:any)) ;stack could be anything for subexpressions
+			  (rec (cdr exp) (cons 'list stk)))
+		     (let ((op (car exp)))
+		       (multiple-value-bind (ex op-p)
+			   (gethash op *joy-ops-types-expected*)
+			 (if op-p
+			     (multiple-value-bind (matches stk-nthcdr)
+				 (expect-stk-type ex stk)
+			       (and matches
+				    (let ((re (gethash op *joy-ops-types-remaining*)))
+				      (rec (cdr exp) (append re stk-nthcdr))))) ;this can also append (:any)
+			     (if (numberp op)
+				 (rec (cdr exp) (cons 'number stk))
+				 (rec (cdr exp) (cons :any stk)))))))))) ;func call
+    (rec exp stk)))
+
+(assert (eq t (valid-joy-exp nil))) ;test nil
+(assert (eq t (valid-joy-exp '(1 2 +)))) ;test number matching
+(assert (eq nil (valid-joy-exp '(true 2 +))))
+(assert (eq nil (valid-joy-exp '(1 i)))) ;test list matching
+(assert (eq t (valid-joy-exp '(() i))))
+(assert (eq t (valid-joy-exp '(1 2 true pop +)))) ;test pop
+(assert (eq t (valid-joy-exp '((1 2 +) i)))) ;test sub-expressions
+(assert (eq nil (valid-joy-exp '((1 true +) i))))
+(assert (eq nil (valid-joy-exp '(1 () +))))
+(assert (eq t (valid-joy-exp '(1 2 swap () ifte)))) ;test type conversion
+(assert (eq t (valid-joy-exp '(() uncons cons uncons)))) ;test multiple type order matching
+(assert (eq nil (valid-joy-exp '(() cons uncons))))
+(assert (eq t (valid-joy-exp '(1 2 swap nil ifte))))
+
 (defun absdiff (a b)
   (abs (- a b)))
 
@@ -495,11 +617,11 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 
 ;; re-definition of fitness-sqrt using *fitness-sqrt-test*-functions
 (defun fitness-generator (fitness-test-case)
-  (lambda (o max-ticks max-seconds &optional (print nil))
+  (lambda (exp max-ticks max-seconds &optional (print nil))
     (loop for x in (test-cases-values fitness-test-case)
        sum (let* ((value (funcall (test-cases-goal fitness-test-case) x))
-		  (r (joy-eval-handler (list x) o :c (make-counter max-ticks) :cd (make-countdown max-seconds)))
-		  (fit (funcall (test-cases-score fitness-test-case) r value)))
+		  (r (joy-eval-handler (list x) exp :c (make-counter max-ticks) :cd (make-countdown max-seconds)))
+		  (fit (funcall (test-cases-score fitness-test-case) r value exp)))
 	     (when print
 	       (print (list "x" x "value" value "r" r "fit" fit)))
 	     fit))))
@@ -532,7 +654,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 		   :generate #'fitness-smallpref-generate
 		   :goal #'length
 		   :score #'fitness-oneval-diff-score))  
- 
+
 (defun generate-fitness-systematicmapping-oks (exp-nodes)
   (let ((goal-c 0)
 	(ok-c 0)
@@ -582,7 +704,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 ;;	     (new-mut c2-mut)
 	     (new (apply #'crossover-and-mutate (elt pop c1) (elt pop c2)
 			 new-mut)))
-	(when (valid-joy-exp new)
+	(when (and (listp new) (valid-joy-exp new '(:any)))
 	  (let ((new-fit (funcall fitness new max-ticks max-seconds)))
 	    ;;(print (list "c1" c1 "c2" c2 "c2-fit" c2-fit "new-fit" new-fit))
 	    (when (> new-fit c2-fit)
@@ -653,8 +775,9 @@ l-1-stk and l-1-heap must be the stack and heap returned when executing l-1-exp.
 l-1-fits must be a list of fitnesses which must be nil if the previous calls yielded no error."
   (declare (ignorable l-exp))
   (let (l-stks l-heaps l-fits (fit-sum 0) 
-	       ;(valid-exp* (valid-joy-exp l-exp))
-	       (valid-exp t) pursue)
+	       (valid-exp (valid-joy-exp l-exp '(:any)))
+	       ;(valid-exp t)
+	       pursue)
     (loop
        for l-1-stk in l-1-stks
        for l-1-heap in l-1-heaps
@@ -756,8 +879,9 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
   (let* ((test-values (test-cases-values fitness-test-case))
 	 (goal-values (mapcar (test-cases-goal fitness-test-case) test-values))
 	 (l0-heaps (loop for i below (length test-values) collect (make-hash-table :size 0)))
-	 (l0-stks (mapcar (lambda (s h) (joy-eval-handler nil (list s) :heap h)) test-values l0-heaps))
-	 (fitn (mapcar (test-cases-score fitness-test-case) l0-stks goal-values (loop for i below (length test-values) collect nil)))
+	 (l0-exps (mapcar #'list test-values))
+	 (l0-stks (mapcar (lambda (e h) (joy-eval-handler nil e :heap h)) l0-exps l0-heaps))
+	 (fitn (mapcar (test-cases-score fitness-test-case) l0-stks goal-values l0-exps))
 	 (l0-fits (mapcar (lambda (s f) (if (not (eq s 'error)) nil f)) l0-stks fitn))
 	 (best-fit (apply #'+ fitn))
 	 (best-exp (list nil)))
@@ -767,6 +891,7 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
 		 (when (= fit best-fit)
 		   (setf best-exp (cons exp best-exp))))))
       (format t "nil fitn:~A best-fit:~A~%" fitn best-fit)
+      (warn "this function is erroneous, since it does not find '(dup /) for (systematicmapping2 3 *fitness-sqrt-test* *joy-ops* 1000 .01)")
       (extend-exp-and-test maxlevel fitness-test-case nil l0-stks l0-heaps l0-fits goal-values #'collectfit joy-ops max-ticks max-seconds)
       (values best-exp best-fit))))
 
