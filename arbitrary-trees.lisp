@@ -93,11 +93,12 @@ Returns the new tree."
 (assert (equal (replace-symbols-in-tree '((A A) A) '(1 2 3)) '((1 2) 3)))
 (assert (equal (replace-symbols-in-tree '(((() A)) A) '(1 2)) '(((() 1)) 2)))
 
-(defun enumerate-trees (n symbols f)
+(defun enumerate-trees (n symbols new-struct-f f)
   "Enumerates all tree structures and fill each with every possible symbol combination.
 Repeatedly calls f with each possible tree as parameter."
   (let ((structs (enumerate-tree-structures n)))
     (loop for struct in structs do
+	 (funcall new-struct-f struct)
 	 (let* ((c (count-symbols-in-tree struct))
 		(symset (loop for i below c collect symbols)))
 	   (flet ((replace-and-call (symcomb)

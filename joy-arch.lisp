@@ -460,6 +460,7 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
 (defun valid-joy-exp (exp)
   "Returns whether the expression exp is a valid joy expression.
 For example, ((1) pred) is not valid, since pred cannot operate on a list."
+  (print "valid-joy-exp doesn't work, check the exps returning no error from (systematicmapping2 1 (generate-fitness-systematicmapping-oks) *joy-ops* 1000 .01) and compare them to the exps traversed by (count-error-joy-expressions 1 '(0) *joy-ops* 1000 .01)")
   (labels ((pred (rexp n)
 	     "Checks if rexp has n predecessors (or actually successors, because rexp is reversed."
 	     (>= (length rexp) (1+ n)))
@@ -623,6 +624,20 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 
 (defparameter *fitness-stacklength* (fitness-generator *fitness-stacklength-test*))
 
+ 
+(defun generate-fitness-systematicmapping-oks ()
+  (let ((goal-c 0)
+	(ok-c 0)
+	(error-c 0))
+    (values 
+     (make-test-cases :values '(0)
+		      :goal (lambda (x) (declare (ignore x)) (incf goal-c) 0)
+		      :score (lambda (r goal) (declare (ignore goal))
+			       (if (eq r 'error) 
+				   (progn (incf error-c) *fitness-invalid*)
+				   (progn (incf ok-c) 0))))
+     (lambda () (values goal-c ok-c error-c)))))
+
 (defparameter *mut-length* (+ 11 10 (length *joy-ops*)))
 
 (defun tournament-new (o size cycles fitness max-ticks max-seconds)
@@ -723,7 +738,9 @@ l-1-stk and l-1-heap must be the stack and heap returned when executing l-1-exp.
 (defun evaluate-tests (ins l-exp l-1-stks l-1-heaps l-1-fits goal-values score-fn max-ticks max-seconds)
   "Run ins on the joy-machines specified by l-1-stks and l-1-heaps and calculate the new fitness, and whether an error was returned.
 l-1-fits must be a list of fitnesses which must be nil if the previous calls yielded no error."
-  (let (l-stks l-heaps l-fits (fit-sum 0) (valid-exp (valid-joy-exp l-exp)) pursue)
+  (let (l-stks l-heaps l-fits (fit-sum 0) 
+	       ;(valid-exp* (valid-joy-exp l-exp))
+	       (valid-exp t) pursue)
     (loop
        for l-1-stk in l-1-stks
        for l-1-heap in l-1-heaps
@@ -857,3 +874,23 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
 ; 0.050 0.637 5.773 136.033
 ; with heap
 ; 0.070 0.878 7.364 161.580
+
+(defun count-error-joy-expressions (n stk joy-ops max-ticks max-seconds)
+  (let ((errors 0) (oks 0))
+    (flet ((try (exp)
+	     (let ((ret (joy-eval-handler stk exp :c (make-counter max-ticks) :cd (make-countdown max-seconds))))
+	       (format t "exp:~A ret:~A~%" exp ret)
+	       (if (eq ret 'error)
+		   (incf errors)
+		   (incf oks)))))
+      (enumerate-trees n joy-ops #'print #'try))
+    (values errors oks)))
+
+; (count-error-joy-expressions 5 '(0) *joy-ops* 1000 .01)
+; errors: 12 592 23077 850875 30945104
+; oks:    19 400 9628  257189 7524718
+
+;(multiple-value-bind (test-cases get-counts)
+;	     (generate-fitness-systematicmapping-oks)
+;	   (systematicmapping2 1 test-cases *joy-ops* 1000 .01)
+;	   (funcall get-counts))
