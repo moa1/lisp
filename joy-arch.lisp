@@ -104,6 +104,7 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 ;; '((1) 1 DEFINE 1)
 (defun joy-eval (stk exp &key (heap (make-hash-table)) (c (make-counter 0)) (cd (make-countdown 0.0)))
   (declare (optimize (debug 0) (compilation-speed 0) (speed 3) (space 0)))
+  ;; note that this function does not fail for the same inputs as the joy implementation by Manfred von Thun, e.g. '(branch) returns nil, but would fail for the real implementation.
   (let ((c (funcall c)) (cd (funcall cd)))
     ;;(print (list "stk" stk "exp" exp "c" c "cd" cd))
     (when (<= c 0)
@@ -116,18 +117,17 @@ represent the relative chance of picking that item. Sum of w must not be 0."
        (case (car exp)
 	 (+       (cons (+ (cadr stk) (car stk)) (cddr stk))) ;add
 	 (and     (cons (and (car stk) (cadr stk)) (cddr stk)))
-	 (apply   (joy-eval (cdr stk) (car stk) :heap heap :c c :cd cd)) ;same as i
 	 (branch  (if (caddr stk)
 		      (joy-eval (cdddr stk) (cadr stk) :heap heap :c c :cd cd)
 		      (joy-eval (cdddr stk) (car stk) :heap heap :c c :cd cd)))
 	 (concat  (cons (append (cadr stk) (car stk)) (cddr stk)))
-	 (cons    (cons (cons (cadr stk) (car stk)) (cddr stk))) ; same as papply
+	 (cons    (cons (cons (cadr stk) (let ((a (car stk))) (if (listp a) a (error "cons")))) (cddr stk))) ; same as papply
 	 (dip     (cons (cadr stk) (joy-eval (cddr stk) (car stk) :heap heap :c c :cd cd)))
 	 (/       (cons (/ (cadr stk) (car stk)) (cddr stk))) ;divide
 	 (dup     (cons (car stk) stk))
 	 (equal   (cons (equal (cadr stk) (car stk)) (cddr stk)))
 	 (false   (cons nil stk))
-	 (i       (joy-eval (cdr stk) (car stk) :heap heap :c c :cd cd))
+	 (i       (joy-eval (cdr stk) (car stk) :heap heap :c c :cd cd)) ;same as apply
 	 (ifte    (if (car (joy-eval (cdddr stk) (caddr stk) :heap heap :c c :cd cd)) ; similar to branch
 		      (joy-eval (cdddr stk) (cadr stk) :heap heap :c c :cd cd)
 		      (joy-eval (cdddr stk) (car stk) :heap heap :c c :cd cd)))
@@ -152,7 +152,7 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 		      (setf res (joy-eval res (car stk) :heap heap :c c :cd cd)))))
 	 (true    (cons t stk))
 	 (uncons  (cons (cdar stk) (cons (caar stk) nil)))
-	 (unstack (car stk))
+	 (unstack (let ((a (car stk))) (if (listp a) (car stk) (error "unstack"))))
 	 (while   (let ((res (cddr stk)))
 		    (do () ((not (car (joy-eval res (cadr stk) :heap heap :c c :cd cd))))
 		      (setf res (joy-eval res (car stk) :heap heap :c c :cd cd)))
@@ -211,7 +211,6 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 (joy-test nil '(5 4 +) '(9))
 (joy-test nil '(nil 5 and) '(nil))
 (joy-test nil '(3 5 and) '(3))
-(joy-test nil '(5 4 (+) apply) '(9))
 (joy-test nil '(true (1) (2) branch) '(1))
 (joy-test nil '(false (1) (2) branch) '(2))
 (joy-test nil '(0 (1 2 3) (4 5 6) concat) '((1 2 3 4 5 6) 0))
@@ -275,7 +274,7 @@ represent the relative chance of picking that item. Sum of w must not be 0."
     (floating-point-invalid-operation () 'error)
     (floating-point-overflow () 'error)))
 
-(defparameter *joy-ops* '(+ and apply branch concat cons dip / dup equal false
+(defparameter *joy-ops* '(+ and branch concat cons dip / dup equal false
 			  i * not or pop pred quote rem < stack step - succ swap
 			  times true uncons unstack while define))
 
@@ -457,107 +456,9 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
 			   10 10 100)
 	     sum (valid-reverse i))))))
 
-(defun valid-joy-exp (exp)
-  "Returns whether the expression exp is a valid joy expression.
-For example, ((1) pred) is not valid, since pred cannot operate on a list."
-  (print "valid-joy-exp doesn't work, check the exps returning no error from (systematicmapping2 1 (generate-fitness-systematicmapping-oks) *joy-ops* 1000 .01) and compare them to the exps traversed by (count-error-joy-expressions 1 '(0) *joy-ops* 1000 .01)")
-  (labels ((pred (rexp n)
-	     "Checks if rexp has n predecessors (or actually successors, because rexp is reversed."
-	     (>= (length rexp) (1+ n)))
-	   (valid-reverse (rexp)
-	     ;;(print (list "rexp" rexp))
-	     (if (null rexp)
-		 t
-		 (and (listp rexp)
-		      (case (car rexp)
-			(+       (not (listp (cadr rexp))))
-			(and     (not (listp (cadr rexp))))
-			(apply   (and (pred rexp 1) (listp (cadr rexp))))
-			(branch  (and (pred rexp 2) (listp (cadr rexp)) (listp (caddr rexp))))
-			(concat  t)
-			(cons    t)
-			(dip     (and (pred rexp 1) (listp (cadr rexp))))
-			(/       (not (listp (cadr rexp))))
-			(dup     t)
-			(equal   t)
-			(false   t)
-			(i       (and (pred rexp 1) (listp (cadr rexp))))
-			(ifte    (and (pred rexp 3) (listp (cadr rexp)) (listp (caddr rexp)) (listp (cadddr rexp))))
-			(*       (not (listp (cadr rexp))))
-			(not     (not (listp (cadr rexp))))
-			(or      (not (listp (cadr rexp))))
-			(pop     t)
-			(pred    (not (listp (cadr rexp))))
-			(quote   t)
-			(rem     (not (listp (cadr rexp))))
-			(<       t)
-			(stack   t)
-			(-       (not (listp (cadr rexp))))
-			(succ    (not (listp (cadr rexp))))
-			(swap    t)
-			(true    t)
-			(uncons  t)
-			(while   (and (pred rexp 2) (listp (cadr rexp)) (listp (caddr rexp))))
-			(t       (if (listp (car rexp)) ;sub-expression?
-				     (valid-reverse (reverse (car rexp))) ;validate sub-expressions
-				     t))) ;accept all other symbols
-		      (valid-reverse (cdr rexp))))))
-    (and (listp exp) (valid-reverse (reverse exp)))))
-
-(assert (eq nil (valid-joy-exp 4)))
-(assert (eq nil (valid-joy-exp '(() +))))
-(assert (eq t   (valid-joy-exp '(1 +))))
-(assert (eq nil (valid-joy-exp '(() and))))
-(assert (eq t   (valid-joy-exp '(true false and))))
-(assert (eq nil (valid-joy-exp '(1 apply))))
-(assert (eq t   (valid-joy-exp '((1) apply))))
-(assert (eq nil (valid-joy-exp '(1 () branch))))
-(assert (eq nil (valid-joy-exp '(() 1 branch))))
-(assert (eq t   (valid-joy-exp '(() () branch))))
-(assert (eq t   (valid-joy-exp '(concat))))
-(assert (eq t   (valid-joy-exp '(cons))))
-(assert (eq nil (valid-joy-exp '(1 dip))))
-(assert (eq t   (valid-joy-exp '(() dip))))
-(assert (eq nil (valid-joy-exp '(() /))))
-(assert (eq t   (valid-joy-exp '(1 /))))
-(assert (eq t   (valid-joy-exp '(dup))))
-(assert (eq t   (valid-joy-exp '(equal))))
-(assert (eq t   (valid-joy-exp '(false))))
-(assert (eq nil (valid-joy-exp '(1 i))))
-(assert (eq t   (valid-joy-exp '(() i))))
-(assert (eq nil (valid-joy-exp '(1 () () ifte))))
-(assert (eq nil (valid-joy-exp '(() 1 () ifte))))
-(assert (eq nil (valid-joy-exp '(() () 1 ifte))))
-(assert (eq t   (valid-joy-exp '(() () () ifte))))
-(assert (eq nil (valid-joy-exp '(() *))))
-(assert (eq t   (valid-joy-exp '(1 *))))
-(assert (eq nil (valid-joy-exp '(() not))))
-(assert (eq t   (valid-joy-exp '(true not))))
-(assert (eq nil (valid-joy-exp '(() or))))
-(assert (eq t   (valid-joy-exp '(true or))))
-(assert (eq t   (valid-joy-exp '(pop))))
-(assert (eq nil (valid-joy-exp '(() pred))))
-(assert (eq t   (valid-joy-exp '(1 pred))))
-(assert (eq t   (valid-joy-exp '(quote))))
-(assert (eq nil (valid-joy-exp '(() rem))))
-(assert (eq t   (valid-joy-exp '(1 rem))))
-(assert (eq t   (valid-joy-exp '(<))))
-(assert (eq t   (valid-joy-exp '(stack))))
-(assert (eq nil (valid-joy-exp '(() -))))
-(assert (eq t   (valid-joy-exp '(1 -))))
-(assert (eq nil (valid-joy-exp '(() succ))))
-(assert (eq t   (valid-joy-exp '(1 succ))))
-(assert (eq t   (valid-joy-exp '(swap))))
-(assert (eq t   (valid-joy-exp '(true))))
-(assert (eq t   (valid-joy-exp '(uncons))))
-(assert (eq nil (valid-joy-exp '(1 () while))))
-(assert (eq nil (valid-joy-exp '(() 1 while))))
-(assert (eq t   (valid-joy-exp '(() () while))))
-;sub-expressions
-(assert (eq nil (valid-joy-exp '((() +)))))
-(assert (eq t   (valid-joy-exp '((1 +)))))
-;symbols
-(assert (eq t   (valid-joy-exp '(A))))
+;; Previously, there was a function here that tried to check if an expression is valid by looking at the values immediately before an instruction.
+;; This function cannot exclude expressions for instructions that expect list(s), since the instruction before could leave list(s) on the stack but are not lists themselves.
+;; In addition, the function worked recursively on sub-expressions. Therefore, the expression '(+) cannot be excluded since it is valid in '(1 2 (+) i).
 
 (defun absdiff (a b)
   (abs (- a b)))
@@ -572,9 +473,10 @@ For example, ((1) pred) is not valid, since pred cannot operate on a list."
 
 (defparameter *fitness-invalid* -1000000) ;score for invalid joy-expressions or invalid results
 
-(defun fitness-oneval-diff-score (r goal)
+(defun fitness-oneval-diff-score (r goal exp)
   "calculates the score of the joy-eval-result r against the goal.
 r should be a list of one value, otherwise *fitness-invalid* is returned."
+  (declare (ignorable exp))
   (if (or (not (listp r)) (not (numberp (car r))) (not (eq (cdr r) nil)))
       *fitness-invalid*
       (- (absdiff goal (car r)))))
@@ -612,7 +514,8 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 
 (defparameter *fitness-expt2* (fitness-generator *fitness-expt2-test*))
 
-(defun fitness-stacklength-score (r goal)
+(defun fitness-stacklength-score (r goal exp)
+  (declare (ignorable exp))
   (if (or (not (listp r)) (not (proper-list-p r)))
       *fitness-invalid*
       (- (absdiff (length r) goal))))
@@ -624,19 +527,28 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 
 (defparameter *fitness-stacklength* (fitness-generator *fitness-stacklength-test*))
 
+(defparameter *fitness-stackcount-test*
+  (make-test-cases :values '((7) (5 6 3 1 2) (4 9 1 0 2 3 5 6 5 1))
+		   :generate #'fitness-smallpref-generate
+		   :goal #'length
+		   :score #'fitness-oneval-diff-score))  
  
-(defun generate-fitness-systematicmapping-oks ()
+(defun generate-fitness-systematicmapping-oks (exp-nodes)
   (let ((goal-c 0)
 	(ok-c 0)
 	(error-c 0))
     (values 
      (make-test-cases :values '(0)
 		      :goal (lambda (x) (declare (ignore x)) (incf goal-c) 0)
-		      :score (lambda (r goal) (declare (ignore goal))
-			       (if (eq r 'error) 
-				   (progn (incf error-c) *fitness-invalid*)
-				   (progn (incf ok-c) 0))))
-     (lambda () (values goal-c ok-c error-c)))))
+		      :score (lambda (r goal exp) (declare (ignore goal))
+				     (if (= exp-nodes (count-tree-nodes exp))
+					 (if (eq r 'error) 
+					     (progn (incf error-c) *fitness-invalid*)
+					     (progn (incf ok-c) 0))
+					 (if (eq r 'error)
+					     *fitness-invalid*
+					     0))))
+     (lambda () (values goal-c error-c ok-c)))))
 
 (defparameter *mut-length* (+ 11 10 (length *joy-ops*)))
 
@@ -723,21 +635,23 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
     (maphash (lambda (key value) (setf (gethash key copy) value)) ht)
     copy))
 
-(defun extend-and-evaluate (l-1-stk l-1-heap ins goal-value fitness-fn max-ticks max-seconds)
+(defun extend-and-evaluate (l-exp l-1-stk l-1-heap ins goal-value fitness-fn max-ticks max-seconds)
   "appends ins to l-1-exp and calculates the fitness for each possibility.
 l-1-stk and l-1-heap must be the stack and heap returned when executing l-1-exp."
-  (declare (ignorable l-1-heap) (type (function (list number) number) fitness-fn))
+  (declare (ignorable l-1-heap) (type (function (list number list) number) fitness-fn))
   (let* ((lins (list ins))
 	 (heap (copy-hash-table l-1-heap)) ; this takes a lot of time
 	 ;;(heap l-1-heap)
 	 (res (joy-eval-handler l-1-stk lins :heap heap :c (make-counter max-ticks) :cd (make-countdown max-seconds)))
-	 (fit (funcall fitness-fn res goal-value)))
-;;    (format t "eae. l-1-stk:~A ins:~A res:~A fit:~A~%" l-1-stk ins res fit)
+	 (fit (funcall fitness-fn res goal-value l-exp)))
+    ;;(format t "eae. l-1-stk:~A ins:~A res:~A fit:~A~%" l-1-stk ins res fit)
+    ;;(format t "exp:~A ret:~A~%" l-exp res)
     (values res heap fit)))
 
 (defun evaluate-tests (ins l-exp l-1-stks l-1-heaps l-1-fits goal-values score-fn max-ticks max-seconds)
   "Run ins on the joy-machines specified by l-1-stks and l-1-heaps and calculate the new fitness, and whether an error was returned.
 l-1-fits must be a list of fitnesses which must be nil if the previous calls yielded no error."
+  (declare (ignorable l-exp))
   (let (l-stks l-heaps l-fits (fit-sum 0) 
 	       ;(valid-exp* (valid-joy-exp l-exp))
 	       (valid-exp t) pursue)
@@ -755,11 +669,11 @@ l-1-fits must be a list of fitnesses which must be nil if the previous calls yie
 	       ;;(setf fit-sum (+ fit-sum l-1-fit))) ;if the shorter expression failed, so will this longer one
 	       (setf fit-sum (+ fit-sum *fitness-invalid*)))
 	     (multiple-value-bind (res heap fit) ;no error in level above
-		 (extend-and-evaluate l-1-stk l-1-heap ins goal-value score-fn max-ticks max-seconds)
+		 (extend-and-evaluate l-exp l-1-stk l-1-heap ins goal-value score-fn max-ticks max-seconds)
 	       ;;(format t "goal-value:~A stk:~A fit:~A~%" goal-value res fit)
 	       (setf l-stks (cons res l-stks))
 	       (setf l-heaps (cons heap l-heaps))
-	       (if (listp res) ;no error
+	       (if (not (eq res 'error)) ;no error
 		   (progn
 		     (setf l-fits (cons nil l-fits))
 		     (setf pursue t))
@@ -843,8 +757,8 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
 	 (goal-values (mapcar (test-cases-goal fitness-test-case) test-values))
 	 (l0-heaps (loop for i below (length test-values) collect (make-hash-table :size 0)))
 	 (l0-stks (mapcar (lambda (s h) (joy-eval-handler nil (list s) :heap h)) test-values l0-heaps))
-	 (fitn (mapcar (test-cases-score fitness-test-case) l0-stks goal-values))
-	 (l0-fits (mapcar (lambda (s f) (if (listp s) nil f)) l0-stks fitn))
+	 (fitn (mapcar (test-cases-score fitness-test-case) l0-stks goal-values (loop for i below (length test-values) collect nil)))
+	 (l0-fits (mapcar (lambda (s f) (if (not (eq s 'error)) nil f)) l0-stks fitn))
 	 (best-fit (apply #'+ fitn))
 	 (best-exp (list nil)))
     (flet ((collectfit (exp fit)
@@ -879,7 +793,7 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
   (let ((errors 0) (oks 0))
     (flet ((try (exp)
 	     (let ((ret (joy-eval-handler stk exp :c (make-counter max-ticks) :cd (make-countdown max-seconds))))
-	       (format t "exp:~A ret:~A~%" exp ret)
+	       ;;(format t "exp:~A ret:~A~%" exp ret)
 	       (if (eq ret 'error)
 		   (incf errors)
 		   (incf oks)))))
@@ -891,6 +805,6 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
 ; oks:    19 400 9628  257189 7524718
 
 ;(multiple-value-bind (test-cases get-counts)
-;	     (generate-fitness-systematicmapping-oks)
+;	     (generate-fitness-systematicmapping-oks 1)
 ;	   (systematicmapping2 1 test-cases *joy-ops* 1000 .01)
 ;	   (funcall get-counts))
