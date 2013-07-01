@@ -103,7 +103,8 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 
 ;; '((1) 1 DEFINE 1)
 (defun joy-eval (stk exp &key (heap (make-hash-table)) (c (make-counter 0)) (cd (make-countdown 0.0)))
-  (declare (optimize (debug 0) (compilation-speed 0) (speed 3) (space 0)))
+  (declare (optimize (debug 0) (compilation-speed 0) (speed 3) (space 0))
+	   (type (function () fixnum) c cd))
   ;; note that this function does not fail for the same inputs as the joy implementation by Manfred von Thun, e.g. '(branch) returns nil, but would fail for the real implementation.
   ;; however, it should raise an error for cases when the stack becomes a non-list.
   (let ((c (funcall c)) (cd (funcall cd)))
@@ -277,6 +278,8 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 
 (defun joy-eval-handler (stk exp &key (heap (make-hash-table)) (c (make-counter)) (cd (make-countdown)))
   (handler-case (joy-eval stk exp :heap heap :c c :cd cd)
+    #+CMU (simple-error () 'error)
+    #+CMU (arithmetic-error () 'error)
     (simple-type-error () 'error)
     (type-error () 'error)
     (division-by-zero () 'error)
@@ -614,9 +617,9 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 
 (defstruct test-cases
   (values nil :type list :read-only t)
-  (generate (constantly nil) :type function :read-only t)
-  (goal nil :type function :read-only t)
-  (score nil :type function :read-only t))
+  (generate (lambda () (error "generate undefined")) :type function :read-only t)
+  (goal (lambda () (error "goal undefined")) :type function :read-only t)
+  (score (lambda () (error "score undefined")) :type function :read-only t))
 
 (defparameter *fitness-sqrt-test*
   (make-test-cases :values '(1.0 5.0 10.0 1000.0)
@@ -644,6 +647,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 		   :score #'fitness-oneval-diff-score))
 
 (defparameter *fitness-expt2* (fitness-generator *fitness-expt2-test*))
+(assert (eq 0 (funcall *fitness-expt2* '(pred 2 swap (2 *) times) 1000 .01)))
 
 (defun fitness-stacklength-score (r goal exp)
   (declare (ignorable exp))
@@ -657,6 +661,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 		   :score #'fitness-stacklength-score))
 
 (defparameter *fitness-stacklength* (fitness-generator *fitness-stacklength-test*))
+(assert (eq 0 (funcall *fitness-stacklength* '((1) times) 1000 .01)))
 
 (defparameter *fitness-stackcount-test*
   (make-test-cases :values '((7) (5 6 3 1 2) (4 9 1 0 2 3 5 6 5 1))
@@ -784,7 +789,7 @@ l-1-stk and l-1-heap must be the stack and heap returned when executing l-1-exp.
 l-1-fits must be a list of fitnesses which must be nil if the previous calls yielded no error."
   (declare (ignorable l-exp))
   (let (l-stks l-heaps l-fits (fit-sum 0) 
-	       (valid-exp (valid-joy-exp l-exp '(:any)))
+	       (valid-exp (valid-joy-exp l-exp '(:any))) ;this approximately halves search time
 	       ;(valid-exp t)
 	       pursue)
     (loop
@@ -900,7 +905,6 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
 		 (when (= fit best-fit)
 		   (setf best-exp (cons exp best-exp))))))
       (format t "nil fitn:~A best-fit:~A~%" fitn best-fit)
-      (warn "this function is erroneous, since it does not find '(dup /) for (systematicmapping2 3 *fitness-sqrt-test* *joy-ops* 1000 .01)")
       (extend-exp-and-test maxlevel fitness-test-case nil l0-stks l0-heaps l0-fits goal-values #'collectfit joy-ops max-ticks max-seconds)
       (values best-exp best-fit))))
 
