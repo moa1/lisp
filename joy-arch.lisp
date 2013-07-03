@@ -128,13 +128,12 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 	 (/       (cons (/ (cadr stk) (car stk)) (cddr stk))) ;divide
 	 (dup     (cons (car stk) stk))
 	 (equal   (cons (equal (cadr stk) (car stk)) (cddr stk)))
-	 (false   (cons nil stk))
 	 (i       (joy-eval (cdr stk) (car stk) :heap heap :c c :cd cd)) ;same as apply
 	 (ifte    (if (car (joy-eval (cdddr stk) (caddr stk) :heap heap :c c :cd cd)) ; similar to branch
 		      (joy-eval (cdddr stk) (cadr stk) :heap heap :c c :cd cd)
 		      (joy-eval (cdddr stk) (car stk) :heap heap :c c :cd cd)))
 	 (*       (cons (* (car stk) (cadr stk)) (cddr stk))) ;multiply
-	 (nill    (cons nil stk))
+	 (nill    (cons nil stk)) ;same as false
 	 (not     (cons (not (car stk)) (cdr stk))) ; can be emulated by branch
 	 (or      (cons (or (car stk) (cadr stk)) (cddr stk)))
 	 (pop     (cdr stk))
@@ -220,7 +219,7 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 (joy-test nil '(nil 5 and) '(nil))
 (joy-test nil '(3 5 and) '(3))
 (joy-test nil '(true (1) (2) branch) '(1))
-(joy-test nil '(false (1) (2) branch) '(2))
+(joy-test nil '(nill (1) (2) branch) '(2))
 (joy-test nil '(0 (1 2 3) (4 5 6) concat) '((1 2 3 4 5 6) 0))
 (joy-test nil '(4 (3) cons) '((4 3)))
 (joy-test nil '(1 2 5 (+) dip) '(5 3))
@@ -230,10 +229,9 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 (joy-test nil '(3 true equal) '(nil))
 (joy-test nil '((3) (3) equal) '(t))
 (joy-test nil '((3) (true) equal) '(nil))
-(joy-test nil '(false) '(nil))
 (joy-test nil '(2 (3 +) i) '(5))
 (joy-test nil '((true) (1) (2) ifte) '(1))
-(joy-test nil '((false) (1) (2) ifte) '(2))
+(joy-test nil '((nill) (1) (2) ifte) '(2))
 (joy-test nil '((0 true) (1) (2) ifte) '(1))
 (joy-test nil '(3 4 *) '(12))
 (joy-test nil '(nill) '(()))
@@ -287,7 +285,7 @@ represent the relative chance of picking that item. Sum of w must not be 0."
     (floating-point-overflow () 'error)))
 
 (defparameter *joy-ops* 
-  '(+ and branch concat cons dip / dup equal false i * nill not or pop pred quote rem < stack step - succ swap times true uncons unstack while define))
+  '(+ and branch concat cons dip / dup equal i * nill not or pop pred quote rem < stack step - succ swap times true uncons unstack while define))
 
 (defun mutate (exp debranch-p p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 
 	       q1 q2 q3 q4 q5 q6 q7 q8 q9 q10
@@ -484,7 +482,6 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
     (/       (number number) (number))
     (dup     (t) (t t))
     (equal   (t t) (boolean))
-    (false   () (boolean))
     (i       (list) (:any))
     (ifte    (list list list) (:any))
     (*       (number number) (number))
@@ -791,7 +788,7 @@ l-1-fits must be a list of fitnesses which must be nil if the previous calls yie
   (let (l-stks l-heaps l-fits (fit-sum 0) 
 	       (valid-exp (valid-joy-exp l-exp '(:any))) ;this approximately halves search time
 	       ;(valid-exp t)
-	       pursue)
+	       (pursue nil))
     (loop
        for l-1-stk in l-1-stks
        for l-1-heap in l-1-heaps
@@ -878,11 +875,12 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
 		      (let* ((ins (replace-symbols-in-tree ext-struct ins-set))
 			     (l-exp (append l-1-exp (list ins))))
 			(multiple-value-bind
-			      (l-stks l-heaps l-fits fit-sum)
+			      (l-stks l-heaps l-fits fit-sum pursue)
 			    (evaluate-tests ins l-exp l-1-stks l-1-heaps l-1-fits goal-values score-fn max-ticks max-seconds)
 			  ;;(format t "  l-exp:~A fit-sum:~A      #sym:~A #nodes:~A~%" l-exp fit-sum (count-symbols-in-tree l-exp) (count-tree-nodes l-exp))
 			  (funcall collectfit l-exp fit-sum)
-			  (extend-exp-and-test (- max-ext-nodes ext-nodes) fitness-test-case l-exp l-stks l-heaps l-fits goal-values collectfit joy-ops max-ticks max-seconds)))))
+			  (when pursue
+			    (extend-exp-and-test (- max-ext-nodes ext-nodes) fitness-test-case l-exp l-stks l-heaps l-fits goal-values collectfit joy-ops max-ticks max-seconds))))))
 	       (let* ((ins-sets (loop for i below ext-symbols collect joy-ops)))
 		 (enumerate-set-combinations ins-sets #'f1)))
 	     (when (> max-ext-nodes 3)
