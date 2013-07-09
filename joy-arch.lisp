@@ -70,11 +70,11 @@
 		(clrhash ht))
 	      (setf (gethash rest ht) val)))))))
 
-(defun choice (seq)
+(defun sample (seq)
   (let ((l (length seq)))
     (elt seq (random l))))
 
-(defun weighted-choice-index (w)
+(defun weighted-sample-index (w)
   "Returns the index of the picked weight from w. Elements of w are numbers and
 represent the relative chance of picking that item. Sum of w must not be 0."
   (let ((s (reduce #'+ w)))
@@ -85,8 +85,8 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 		     (rec x0 (cdr w) (1+ i))))))
       (rec (random s) w 0)))) ; will (correctly) give an error if s = 0
 
-(defun weighted-choice (w seq)
-  (elt seq (weighted-choice-index w)))
+(defun weighted-sample (w seq)
+  (elt seq (weighted-sample-index w)))
 
 (defun chance (p)
   (if (< (random 1.0) p)
@@ -293,9 +293,9 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 ;;  (print (list "exp" exp))
   (flet ((random-final (p)
 	   (if (< (random 1.0) p)
-	       (weighted-choice (list q1 q2 q3 q4 q5 q6 q7 q8 q9 q10)
+	       (weighted-sample (list q1 q2 q3 q4 q5 q6 q7 q8 q9 q10)
 				'(a b c d e 1 2 4 8 16))
-	       (weighted-choice ops-p *joy-ops*))))
+	       (weighted-sample ops-p *joy-ops*))))
     (cond
       ((null exp) (if (< (random 1.0) p1) ;extend
 		      (cons (random-final p2)
@@ -404,10 +404,10 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
 	(mapexps (lambda (x)
 		   (if (consp x)
 		       (if (chance p0)
-			   (values (choice se) nil)
+			   (values (sample se) nil)
 			   (values x t))
 		       (if (chance p1)
-			   (choice se)
+			   (sample se)
 		       x)))
 		 exp1)))
 
@@ -449,7 +449,7 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
 	0
 	(labels ((valid-reverse (len)
 		   (let* ((l (loop for i below len collect 
-				  (choice '(a b c d e f 1 2 3))))
+				  (sample '(a b c d e f 1 2 3))))
 			  (r (joy-eval-handler (list l) rev :c (make-counter 1000) :cd (make-countdown .01)))
 			  (lr (reverse l)))
 ;;		     (format t "rev:~A r:~A lr:~A~%" rev r lr)
@@ -664,7 +664,9 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
   (make-test-cases :values '((7) (5 6 3 1 2) (4 9 1 0 2 3 5 6 5 1))
 		   :generate #'fitness-smallpref-generate
 		   :goal #'length
-		   :score #'fitness-oneval-diff-score))  
+		   :score #'fitness-oneval-diff-score))
+
+(defparameter *fitness-stackcount* (fitness-generator *fitness-stackcount-test*))
 
 (defun generate-fitness-systematicmapping-oks (exp-nodes)
   (let ((goal-c 0)
@@ -705,8 +707,8 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 	 (logstream (open "/tmp/log.txt" :direction :output :if-exists :rename-and-delete :if-does-not-exist :create)))
     (dotimes (s size) (setf (aref fit s) (funcall fitness (aref pop s) max-ticks max-seconds)))
     (dotimes (c cycles)
-      (let* ((c1 (choice n))
-	     (c2 (choice n))
+      (let* ((c1 (sample n))
+	     (c2 (sample n))
 	     ;;(c2-fit (elt fit c2))
 	     (c2-fit (funcall fitness (elt pop c2) max-ticks max-seconds)) ;; fairer for randomized fitnesses
 	     (c1-mut (elt mut c1))
@@ -742,7 +744,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 	 (fit-mean (mean fits))
 	 (fit-stddev (stddev-corr fits))
 	 (ms (mut-stats res)))
-    (format logstream "~A ~A" fit-mean fit-stddev)
+    (format logstream "~A ~A" (float fit-mean) fit-stddev)
     (loop for i in ms do (format logstream " ~A ~A" (car i) (cadr i)))
     (format logstream "~%"))
   (finish-output logstream))
