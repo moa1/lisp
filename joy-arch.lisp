@@ -419,6 +419,17 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
 	 (new (apply #'mutate-rec cross prest)))
     new))
 
+(defun make-arbitrary-tree-sampler (nodes)
+  "Return a function that, upon calling, returns a randomly sampled tree with a node maximum count of NODES (and a minimum node count of 1, i.e. '(A))."
+  (let* ((structs-nested (loop for i from 1 upto nodes collect (enumerate-tree-structures i)))
+	 (structs (apply #'nconc structs-nested)))
+    (lambda (symbol-f)
+      "Return a randomly sampled tree and each symbol is the returned symbol of the nullary function SYMBOL-F."
+      (let* ((s (sample structs))
+	     (syms (count-symbols-in-tree s))
+	     (res (replace-symbols-in-tree s (loop for i below syms collect (funcall symbol-f)))))
+	res))))
+
 ;; (defun align (exp1 exp2 &optional r)
 ;;   (cond
 ;;     ((and (null exp1) (null exp2)) r)
@@ -594,13 +605,18 @@ As a second value, the remainder of stk is returned, or :error if the stack didn
 (defun absdiff (a b)
   (abs (- a b)))
 
-(defun fitness-smallpref-generate ()
-  "generate one test case."
-  (let* ((c '(0 1 5 10 20 40 80 100 200 250 1000 10000 100000))
-	 (r (random (1- (length c))))
-	 (a (elt c r))
-	 (b (elt c (1+ r))))
-    (+ a (random (- b a)))))
+(defun fitness-randomized-tests-generate (values)
+  "Generate (LENGTH VALUES) test cases."
+  (cons (let ((a (elt values 0))
+	      (b (elt values (1- (length values)))))
+	  (+ a (random (- b a))))
+	(loop for i below (1- (length values))
+	   collect (let* ((a (elt values i))
+			  (b (elt values (mod (1+ i) (length values)))))
+		     (+ a (random (- b a)))))))
+
+(defun identity-1 (values)
+  values)
 
 (defparameter *fitness-invalid* -1000000) ;score for invalid joy-expressions or invalid results
 
@@ -619,32 +635,17 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
   (score (lambda () (error "score undefined")) :type function :read-only t))
 
 (defparameter *fitness-sqrt-test*
-  (make-test-cases :values '(1.0 5.0 10.0 1000.0)
-		   :generate #'fitness-smallpref-generate
+  (make-test-cases :values '(1.0 25.0 100.0 225.0 400.0 625.0 1000.0)
+		   :generate #'fitness-randomized-tests-generate
 		   :goal #'sqrt
 		   :score #'fitness-oneval-diff-score))
 
-;; re-definition of fitness-sqrt using *fitness-sqrt-test*-functions
-(defun fitness-generator (fitness-test-case)
-  (lambda (exp max-ticks max-seconds &optional (print nil))
-    (loop for x in (test-cases-values fitness-test-case)
-       sum (let* ((value (funcall (test-cases-goal fitness-test-case) x))
-		  (r (joy-eval-handler (list x) exp :c (make-counter max-ticks) :cd (make-countdown max-seconds)))
-		  (fit (funcall (test-cases-score fitness-test-case) r value exp)))
-	     (when print
-	       (print (list "x" x "value" value "r" r "fit" fit)))
-	     fit))))
-
-(defparameter *fitness-sqrt* (fitness-generator *fitness-sqrt-test*))
-
 (defparameter *fitness-expt2-test*
   (make-test-cases :values '(1 5 10)
-		   :generate #'fitness-smallpref-generate
+		   :generate #'fitness-randomized-tests-generate
 		   :goal (lambda (x) (expt 2 x))
 		   :score #'fitness-oneval-diff-score))
-
-(defparameter *fitness-expt2* (fitness-generator *fitness-expt2-test*))
-(assert (eq 0 (funcall *fitness-expt2* '(pred 2 swap (2 *) times) 1000 .01)))
+;;'(pred 2 swap (2 *) times)
 
 (defun fitness-stacklength-score (r goal exp)
   (declare (ignorable exp))
@@ -654,19 +655,15 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 
 (defparameter *fitness-stacklength-test*
   (make-test-cases :values '(1 5 10)
+		   :generate #'identity-1
 		   :goal (lambda (x) x)
 		   :score #'fitness-stacklength-score))
 
-(defparameter *fitness-stacklength* (fitness-generator *fitness-stacklength-test*))
-(assert (eq 0 (funcall *fitness-stacklength* '((1) times) 1000 .01)))
-
 (defparameter *fitness-stackcount-test*
   (make-test-cases :values '((7) (5 6 3 1 2) (4 9 1 0 2 3 5 6 5 1))
-		   :generate #'fitness-smallpref-generate
+		   :generate #'identity-1
 		   :goal #'length
 		   :score #'fitness-oneval-diff-score))
-
-(defparameter *fitness-stackcount* (fitness-generator *fitness-stackcount-test*))
 
 (defun generate-fitness-systematicmapping-oks (exp-nodes)
   (let ((goal-c 0)
@@ -684,6 +681,35 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 					     *fitness-invalid*
 					     0))))
      (lambda () (values goal-c error-c ok-c)))))
+
+(defun fitness-generate-test-goal-values (fitness)
+  (let* ((v (test-cases-values fitness))
+	 (generate-fn (test-cases-generate fitness))
+	 (goal-fn (test-cases-goal fitness))
+	 (test-values (funcall generate-fn v)))
+    (loop for test in test-values collect
+	 (let* ((goal (funcall goal-fn test)))
+	   (list test goal)))))
+
+(defun fitness-score-test-values (fitness test-goal-values exp max-ticks max-seconds)
+  (let ((score-fn (test-cases-score fitness)))
+    (loop for x in test-goal-values
+       sum (destructuring-bind (test goal) x
+	     (let* ((r (joy-eval-handler (list test) exp :c (make-counter max-ticks) :cd (make-countdown max-seconds)))
+		    (fit (funcall score-fn r goal exp)))
+	       fit)))))
+
+(defun joy-program-show-fitness (o fitness)
+  (flet ((f (v)
+	   (let* ((res (joy-eval-handler (list v) o))
+		  (goal (funcall (test-cases-goal fitness) v))
+		  (score (funcall (test-cases-score fitness) res goal o)))
+	     (values v goal score res))))
+    (mapcar (lambda (v) (format t "~A~%" (multiple-value-list (f v))))
+	    (test-cases-values fitness))
+    (format t "sum:~A~%" (fitness-score-test-values fitness (mapcar (lambda (x) (list x (funcall (test-cases-goal fitness) x)))
+								    (test-cases-values fitness)) o 0 0.0))))
+;(joy-program-show-fitness '(DUP (DUP (16 +) DIP REM 16 + D AND) DIP REM SUCC) *fitness-sqrt-test*)
 
 (defparameter *mut-length* (+ 11 10 (length *joy-ops*)))
 
@@ -705,12 +731,14 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 	 (n (loop for i below size collect i))
 	 (fit (make-array size :initial-element 0))
 	 (logstream (open "/tmp/log.txt" :direction :output :if-exists :rename-and-delete :if-does-not-exist :create)))
-    (dotimes (s size) (setf (aref fit s) (funcall fitness (aref pop s) max-ticks max-seconds)))
+    (let ((test-goal-values (fitness-generate-test-goal-values fitness)))
+      (dotimes (s size) (setf (aref fit s) (fitness-score-test-values fitness test-goal-values (aref pop s) max-ticks max-seconds))))
     (dotimes (c cycles)
-      (let* ((c1 (sample n))
+      (let* ((test-goal-values (fitness-generate-test-goal-values fitness)) ;test with the same test-goal value pairs
+	     (c1 (sample n))
 	     (c2 (sample n))
 	     ;;(c2-fit (elt fit c2))
-	     (c2-fit (funcall fitness (elt pop c2) max-ticks max-seconds)) ;; fairer for randomized fitnesses
+	     (c2-fit (fitness-score-test-values fitness test-goal-values (elt pop c2) max-ticks max-seconds)) ;; fairer for randomized fitnesses
 	     (c1-mut (elt mut c1))
 	     (c2-mut (elt mut c2))
 	     (new-mut (mutate-mutate .1 (mutate-crossover c1-mut c2-mut)))
@@ -718,7 +746,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 	     (new (apply #'crossover-and-mutate (elt pop c1) (elt pop c2)
 			 new-mut)))
 	(when (and (listp new) (valid-joy-exp new '(:any)))
-	  (let ((new-fit (funcall fitness new max-ticks max-seconds)))
+	  (let ((new-fit (fitness-score-test-values fitness test-goal-values new max-ticks max-seconds)))
 	    ;;(print (list "c1" c1 "c2" c2 "c2-fit" c2-fit "new-fit" new-fit))
 	    (when (> new-fit c2-fit)
 	      (setf (elt pop c2) new)
@@ -943,6 +971,6 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
 ; oks:    19 400 9628  257189 7524718
 
 ;(multiple-value-bind (test-cases get-counts)
-;	     (generate-fitness-systematicmapping-oks 1)
+;	     (generate-fitness-systematicmapping-oks 2)
 ;	   (systematicmapping2 1 test-cases *joy-ops* 1000 .01)
 ;	   (funcall get-counts))
