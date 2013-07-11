@@ -108,7 +108,8 @@ Repeatedly calls f with each possible tree as parameter."
 
 (defun count-tree-nodes (tree)
   "Returns the number of nodes in tree.
-The root node counts as one node, i.e. (count-tree-nodes 'A) == 1 and (count-tree-nodes '(A)) == 2."
+The root node counts as one node, i.e. (count-tree-nodes 'A) == 1 and (count-tree-nodes '(A)) == 2.
+I.e. each open bracket and each symbol counts as 1 node."
   (labels ((rec (tree c)
 	     ;;(format t "rec tree:~A c:~A~%" tree c)
 	     (if (null tree)
@@ -121,3 +122,8 @@ The root node counts as one node, i.e. (count-tree-nodes 'A) == 1 and (count-tre
     (if (listp tree)
 	(rec tree 1)
 	(rec tree 0))))
+
+(assert (= 1 (count-tree-nodes '())))
+(assert (= 3 (count-tree-nodes '((A)))))
+(assert (= 3 (count-tree-nodes '(A ()))))
+(assert (= 4 (count-tree-nodes '(A (A)))))
