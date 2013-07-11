@@ -75,14 +75,15 @@
     (elt seq (random l))))
 
 (defun weighted-sample-index (w)
-  "Returns the index of the picked weight from w. Elements of w are numbers and
-represent the relative chance of picking that item. Sum of w must not be 0."
-  (let ((s (reduce #'+ w)))
-    (labels ((rec (x w i)
-	       (let ((x0 (- x (car w))))
+  "Returns the index of the picked weight from w.
+Elements of w are numbers and represent the relative chance of picking that item.
+The sum of w must not be 0."
+  (let* ((s (reduce #'+ w :from-end T))) ;:from-end T is necessary because otherwise (weighted-sample-index '(0.99 0.989622 0.9895308 0.9893857 0.9898456 0.98966277 0.9894621 0.99 0.9889513 0.9896954)) fails with a high probability in 10.000.000 cases. probably a corner case of float arithmetic. with :from-end we add in the same order in that we are subtracting in rec.
+    (labels ((rec (x v i)
+	       (let ((x0 (- x (car v))))
 		 (if (< x0 0)
 		     i
-		     (rec x0 (cdr w) (1+ i))))))
+		     (rec x0 (cdr v) (1+ i))))))
       (rec (random s) w 0)))) ; will (correctly) give an error if s = 0
 
 (defun weighted-sample (w seq)
@@ -317,28 +318,20 @@ represent the relative chance of picking that item. Sum of w must not be 0."
 	     exp)))))
    
 (defun mutate-rec (exp &rest probs)
-  (declare (optimize (debug 3)))
 ;;  (print (list "exp" exp "p0" p0))
   (let ((p0 (car probs))
 	(prest (cdr probs)))
+    (assert (< p0 .9))
     (if (< (random 1.0) p0)
 	(apply #'mutate-rec (apply #'mutate exp t prest) probs)
 	(apply #'mutate exp t prest))))
 
 (defun mutate-mutate (p0 probs)
-  (labels ((rnd (a)
-	     (let ((b (+ a (- (random .2) -.1))))
-	       (if (< b 0.0)
-		   0
-		   (if (>= b 0.99)
-		       0.99
-		       b))))
-	   (rec (probs mut-probs)
+  (labels ((rec (probs mut-probs)
 	     (if (null probs)
 		 (nreverse mut-probs)
 		 (if (<= (random 1.0) p0)
-		     (rec (cdr probs) (cons (rnd (car probs)) mut-probs))
-;;		     (rec (cdr probs) (cons (random .99) mut-probs))
+		     (rec (cdr probs) (cons (random .99) mut-probs)) ;previously, (random .99) was a random walk +- 0.1. I think mutation parameter smoothness should be provided by mutate-crossover.
 		     (rec (cdr probs) (cons (car probs) mut-probs))))))
     (rec (cdr probs) (cons (random .9) nil)))) ; recursion prob < 0.9
 
@@ -412,9 +405,9 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
 		 exp1)))
 
 (defun crossover-and-mutate (exp1 exp2 &rest probs)
-  (let* ((p1 (elt probs 0))
-	 (p2 (elt probs 1))
-	 (prest (cddr probs))
+  (let* ((p1 (elt probs 1))
+	 (p2 (elt probs 2))
+	 (prest (cons (car probs) (cdddr probs)))
 	 (cross (crossover exp1 exp2 p1 p2))
 	 (new (apply #'mutate-rec cross prest)))
     new))
@@ -655,9 +648,10 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 
 (defparameter *fitness-stacklength-test*
   (make-test-cases :values '(1 5 10)
-		   :generate #'identity-1
+		   :generate #'fitness-randomized-tests-generate
 		   :goal (lambda (x) x)
 		   :score #'fitness-stacklength-score))
+; '((0) times)
 
 (defparameter *fitness-stackcount-test*
   (make-test-cases :values '((7) (5 6 3 1 2) (4 9 1 0 2 3 5 6 5 1))
