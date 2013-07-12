@@ -600,6 +600,38 @@ As a second value, the remainder of stk is returned, or :error if the stack didn
 (assert (eq t (valid-joy-exp '((1) define (2)))))
 (assert (eq nil (valid-joy-exp '(1 define (2)))))
 
+(defun fitness-generate-test-goal-values (fitness)
+  (let* ((v (test-cases-values fitness))
+	 (generate-fn (test-cases-generate fitness))
+	 (goal-fn (test-cases-goal fitness))
+	 (test-values (funcall generate-fn v)))
+    (loop for test in test-values collect
+	 (let* ((goal (funcall goal-fn test)))
+	   (list test goal)))))
+
+(defun fitness-score-test-values (fitness test-goal-values exp max-ticks max-seconds)
+  (let ((score-fn (test-cases-score fitness)))
+    (loop for x in test-goal-values
+       sum (destructuring-bind (test goal) x
+	     (let* ((r (joy-eval-handler nil (append test exp) :c (make-counter max-ticks) :cd (make-countdown max-seconds)))
+		    (fit (funcall score-fn r goal exp)))
+	       fit)))))
+
+(defun joy-show-fitness (o fitness)
+  (flet ((eval-test (v)
+	   (let* ((res (joy-eval-handler nil (append v o)))
+		  (goal (funcall (test-cases-goal fitness) v))
+		  (score (funcall (test-cases-score fitness) res goal o)))
+	     (list v goal score res))))
+    (let* ((fitsum (fitness-score-test-values fitness 
+					      (mapcar (lambda (x) (list x (funcall (test-cases-goal fitness) x)))
+						      (test-cases-values fitness)) o 0 0.0)))
+      (mapcar (lambda (p) (destructuring-bind (v goal score res) p
+			    (format t "v(stk):~A goal:~A score:~A res:~A~%" v goal score res) score))
+	      (mapcar (lambda (v) (eval-test v)) (test-cases-values fitness)))
+      (format t "fitsum:~A~%" fitsum)
+      fitsum)))
+
 (defun absdiff (a b)
   (abs (- a b)))
 
@@ -641,7 +673,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 		   :generate #'fitness-randomized-tests-generate
 		   :goal (lambda (x) (expt 2 (car x)))
 		   :score #'fitness-oneval-diff-score))
-;;'(pred 2 swap (2 *) times)
+(assert (eq 0 (joy-show-fitness '(pred 2 swap (2 *) times) *fitness-expt2-test*)))
 
 (defun fitness-stacklength-score (r goal exp)
   (declare (ignorable exp))
@@ -654,7 +686,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 		   :generate #'fitness-randomized-tests-generate
 		   :goal #'car
 		   :score #'fitness-stacklength-score))
-; '((0) times)
+(assert (eq 0 (joy-show-fitness '((0) times) *fitness-stacklength-test*)))
 
 (defparameter *fitness-stackcount-test*
   (make-test-cases :values '(((7)) ((5 6 3 1 2)) ((4 9 1 0 2 3 5 6 5 1)))
@@ -678,7 +710,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 					   (nconc (list a b c) (loop for i below l collect (random 10)))))
 		   :goal (lambda (v) (destructuring-bind (a b c &rest r) (reverse v) (nconc (list c b a) r)))
 		   :score #'fitness-list-similarity-score))
-; '((swap) dip swap (swap) dip)
+(assert (eq 0 (joy-show-fitness '((swap) dip swap (swap) dip) *fitness-joy-rotate-test*)))
 
 (defun generate-fitness-systematicmapping-oks (exp-nodes)
   "Return a test-cases instance and a function to retrieve the number of successful joy programs."
@@ -697,39 +729,6 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 					     *fitness-invalid*
 					     0))))
      (lambda () (values goal-c error-c ok-c)))))
-
-(defun fitness-generate-test-goal-values (fitness)
-  (let* ((v (test-cases-values fitness))
-	 (generate-fn (test-cases-generate fitness))
-	 (goal-fn (test-cases-goal fitness))
-	 (test-values (funcall generate-fn v)))
-    (loop for test in test-values collect
-	 (let* ((goal (funcall goal-fn test)))
-	   (list test goal)))))
-
-(defun fitness-score-test-values (fitness test-goal-values exp max-ticks max-seconds)
-  (let ((score-fn (test-cases-score fitness)))
-    (loop for x in test-goal-values
-       sum (destructuring-bind (test goal) x
-	     (let* ((r (joy-eval-handler nil (append test exp) :c (make-counter max-ticks) :cd (make-countdown max-seconds)))
-		    (fit (funcall score-fn r goal exp)))
-	       fit)))))
-
-(defun joy-program-show-fitness (o fitness)
-  (flet ((eval-test (v)
-	   (let* ((res (joy-eval-handler nil (append v o)))
-		  (goal (funcall (test-cases-goal fitness) v))
-		  (score (funcall (test-cases-score fitness) res goal o)))
-	     (list v goal score res))))
-    (let* ((fitsum (fitness-score-test-values fitness 
-					      (mapcar (lambda (x) (list x (funcall (test-cases-goal fitness) x)))
-						      (test-cases-values fitness)) o 0 0.0)))
-      (mapcar (lambda (p) (destructuring-bind (v goal score res) p
-			    (format t "v(stk):~A goal:~A score:~A res:~A~%" v goal score res) score))
-	      (mapcar (lambda (v) (eval-test v)) (test-cases-values fitness)))
-      (format t "fitsum:~A~%" fitsum)
-      fitsum)))
-;(joy-program-show-fitness '(DUP (DUP (16 +) DIP REM 16 + D AND) DIP REM SUCC) *fitness-sqrt-test*)
 
 (defparameter *mut-length* (+ 11 10 (length *joy-ops*)))
 
