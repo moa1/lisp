@@ -24,6 +24,7 @@
   (apply #'map result-type #'list arrays))
 
 (defun proper-list-p (l)
+  ; TODO: this function should reject circular lists
   (if (null l)
       t
       (if (consp l)
@@ -102,12 +103,16 @@ The sum of w must not be 0."
     (maphash (lambda (k v) (declare (ignore v)) (setf u (cons k u))) ht)
     u))
 
+(defun identity-1 (values)
+  values)
+
 ;; '((1) 1 DEFINE 1)
 (defun joy-eval (stk exp &key (heap (make-hash-table)) (c (make-counter 0)) (cd (make-countdown 0.0)))
   (declare (optimize (debug 0) (compilation-speed 0) (speed 3) (space 0))
 	   (type (function () fixnum) c cd))
-  ;; note that this function does not fail for the same inputs as the joy implementation by Manfred von Thun, e.g. '(branch) returns nil, but would fail for the real implementation.
-  ;; however, it should raise an error for cases when the stack becomes a non-list.
+  "Note that this function does not fail for the same inputs as the joy implementation by Manfred von Thun, e.g. '(branch) returns nil, but would fail for the real implementation.
+However, it should raise an error for cases when the stack becomes a non-list.
+This function must not modify stk, only copy it (otherwise test values might be modified)."
   (let ((c (funcall c)) (cd (funcall cd)))
     ;;(print (list "stk" stk "exp" exp "c" c "cd" cd))
     (when (<= c 0)
@@ -124,7 +129,7 @@ The sum of w must not be 0."
 		      (joy-eval (cdddr stk) (cadr stk) :heap heap :c c :cd cd)
 		      (joy-eval (cdddr stk) (car stk) :heap heap :c c :cd cd)))
 	 (concat  (cons (append (cadr stk) (car stk)) (cddr stk)))
-	 (cons    (cons (cons (cadr stk) (let ((a (car stk))) (if (listp a) a (error (make-condition 'type-error :datum a :expected-type 'list))))) (cddr stk))) ; same as papply
+	 (cons    (cons (cons (cadr stk) (let ((a (car stk))) (if (proper-list-p a) a (error (make-condition 'type-error :datum a :expected-type 'list))))) (cddr stk))) ; same as papply
 	 (dip     (cons (cadr stk) (joy-eval (cddr stk) (car stk) :heap heap :c c :cd cd)))
 	 (/       (cons (/ (cadr stk) (car stk)) (cddr stk))) ;divide
 	 (dup     (cons (car stk) stk))
@@ -155,7 +160,7 @@ The sum of w must not be 0."
 		      (setf res (joy-eval res (car stk) :heap heap :c c :cd cd)))))
 	 (true    (cons t stk))
 	 (uncons  (cons (cdar stk) (cons (caar stk) nil)))
-	 (unstack (let ((a (car stk))) (if (listp a) (car stk) (error (make-condition 'type-error :datum a :expected-type 'list)))))
+	 (unstack (let ((a (car stk))) (if (proper-list-p a) (car stk) (error (make-condition 'type-error :datum a :expected-type 'list)))))
 	 (while   (let ((res (cddr stk)))
 		    (do () ((not (car (joy-eval res (cadr stk) :heap heap :c c :cd cd))))
 		      (setf res (joy-eval res (car stk) :heap heap :c c :cd cd)))
@@ -569,7 +574,7 @@ As a second value, the remainder of stk is returned, or :error if the stack didn
 			   (gethash op *joy-ops-types-expected*)
 			 (if op-p
 			     (multiple-value-bind (matches stk-nthcdr)
-				 (expect-stk-type ex stk)
+				 (expect-stk-type (reverse ex) stk)
 			       (and matches
 				    (let ((re (gethash op *joy-ops-types-remaining*)))
 				      (rec (cdr exp) (append re stk-nthcdr))))) ;this can also append (:any)
@@ -587,11 +592,11 @@ As a second value, the remainder of stk is returned, or :error if the stack didn
 (assert (eq t (valid-joy-exp '((1 2 +) i)))) ;test sub-expressions
 (assert (eq nil (valid-joy-exp '((1 true +) i))))
 (assert (eq nil (valid-joy-exp '(1 () +))))
-(assert (eq t (valid-joy-exp '(1 2 swap () ifte)))) ;test type conversion
+(assert (eq t (valid-joy-exp '(1 2 swap () ifte)))) ;test type conversion (by swap in this case)
+(assert (eq t (valid-joy-exp '(true (1) (2) branch)))) ;test single operation type order matching
 (assert (eq t (valid-joy-exp '(() uncons cons uncons)))) ;test multiple type order matching
 (assert (eq nil (valid-joy-exp '(() cons uncons))))
-(assert (eq t (valid-joy-exp '(1 2 swap nil ifte))))
-(assert (eq t (valid-joy-exp '((1) define a a (2) define a a 1))))
+(assert (eq t (valid-joy-exp '((1) define a a (2) define a a 1)))) ;test define
 (assert (eq t (valid-joy-exp '((1) define (2)))))
 (assert (eq nil (valid-joy-exp '(1 define (2)))))
 
@@ -600,16 +605,13 @@ As a second value, the remainder of stk is returned, or :error if the stack didn
 
 (defun fitness-randomized-tests-generate (values)
   "Generate (LENGTH VALUES) test cases."
-  (cons (let ((a (elt values 0))
-	      (b (elt values (1- (length values)))))
-	  (+ a (random (- b a))))
+  (cons (let ((a (car (elt values 0)))
+	      (b (car (elt values (1- (length values))))))
+	  (list (+ a (random (- b a)))))
 	(loop for i below (1- (length values))
-	   collect (let* ((a (elt values i))
-			  (b (elt values (mod (1+ i) (length values)))))
-		     (+ a (random (- b a)))))))
-
-(defun identity-1 (values)
-  values)
+	   collect (let* ((a (car (elt values i)))
+			  (b (car (elt values (mod (1+ i) (length values))))))
+		     (list (+ a (random (- b a))))))))
 
 (defparameter *fitness-invalid* -1000000) ;score for invalid joy-expressions or invalid results
 
@@ -628,15 +630,16 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
   (score (lambda () (error "score undefined")) :type function :read-only t))
 
 (defparameter *fitness-sqrt-test*
-  (make-test-cases :values '(1.0 25.0 100.0 225.0 400.0 625.0 1000.0)
+  (make-test-cases :values '((1.0) (25.0) (100.0) (225.0) (400.0) (625.0) (1000.0))
 		   :generate #'fitness-randomized-tests-generate
-		   :goal #'sqrt
+		   :goal (lambda (x) (sqrt (car x)))
 		   :score #'fitness-oneval-diff-score))
+;; TODO: write a joy program that computes the sqrt. Therefore, write fitnesses that provide solutions for required ops, like the joy operation 'rotate.
 
 (defparameter *fitness-expt2-test*
-  (make-test-cases :values '(1 5 10)
+  (make-test-cases :values '((1) (5) (10))
 		   :generate #'fitness-randomized-tests-generate
-		   :goal (lambda (x) (expt 2 x))
+		   :goal (lambda (x) (expt 2 (car x)))
 		   :score #'fitness-oneval-diff-score))
 ;;'(pred 2 swap (2 *) times)
 
@@ -647,25 +650,44 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
       (- (absdiff (length r) goal))))
 
 (defparameter *fitness-stacklength-test*
-  (make-test-cases :values '(1 5 10)
+  (make-test-cases :values '((1) (5) (10))
 		   :generate #'fitness-randomized-tests-generate
-		   :goal (lambda (x) x)
+		   :goal #'car
 		   :score #'fitness-stacklength-score))
 ; '((0) times)
 
 (defparameter *fitness-stackcount-test*
-  (make-test-cases :values '((7) (5 6 3 1 2) (4 9 1 0 2 3 5 6 5 1))
+  (make-test-cases :values '(((7)) ((5 6 3 1 2)) ((4 9 1 0 2 3 5 6 5 1)))
 		   :generate #'identity-1
-		   :goal #'length
+		   :goal (lambda (x) (length (car x)))
 		   :score #'fitness-oneval-diff-score))
 
+(defparameter *letter-symbols* '(a b c d e f g h i j k l m n o p q r s t u v w x y z))
+
+(defun fitness-list-similarity-score (r goal exp)
+  (declare (ignorable exp))
+  (if (or (not (listp r)) (not (proper-list-p r)))
+      *fitness-invalid*
+      (if (equal r goal)
+	  0
+	  (- (+ 10 (abs (- (length r) (length goal)))))))) ;replace this with the edit-distance between r and goal
+
+(defparameter *fitness-joy-rotate-test*
+  (make-test-cases :values '((a b c) (x y z d e f) ((1) (2 3) j k l))
+		   :generate (lambda (v) (declare (ignore v)) (let ((l (random 10)) (a (sample *letter-symbols*)) (b (sample *letter-symbols*)) (c (sample *letter-symbols*)))
+					   (nconc (list a b c) (loop for i below l collect (random 10)))))
+		   :goal (lambda (v) (destructuring-bind (a b c &rest r) (reverse v) (nconc (list c b a) r)))
+		   :score #'fitness-list-similarity-score))
+; '((swap) dip swap (swap) dip)
+
 (defun generate-fitness-systematicmapping-oks (exp-nodes)
+  "Return a test-cases instance and a function to retrieve the number of successful joy programs."
   (let ((goal-c 0)
 	(ok-c 0)
 	(error-c 0))
     (values 
-     (make-test-cases :values '(0)
-		      :goal (lambda (x) (declare (ignore x)) (incf goal-c) 0)
+     (make-test-cases :values '((0))
+		      :goal (lambda (x) (declare (ignore x)) (incf goal-c) '(0))
 		      :score (lambda (r goal exp) (declare (ignore goal))
 				     (if (= exp-nodes (count-tree-nodes exp))
 					 (if (eq r 'error) 
@@ -689,20 +711,24 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
   (let ((score-fn (test-cases-score fitness)))
     (loop for x in test-goal-values
        sum (destructuring-bind (test goal) x
-	     (let* ((r (joy-eval-handler (list test) exp :c (make-counter max-ticks) :cd (make-countdown max-seconds)))
+	     (let* ((r (joy-eval-handler nil (append test exp) :c (make-counter max-ticks) :cd (make-countdown max-seconds)))
 		    (fit (funcall score-fn r goal exp)))
 	       fit)))))
 
 (defun joy-program-show-fitness (o fitness)
-  (flet ((f (v)
-	   (let* ((res (joy-eval-handler (list v) o))
+  (flet ((eval-test (v)
+	   (let* ((res (joy-eval-handler nil (append v o)))
 		  (goal (funcall (test-cases-goal fitness) v))
 		  (score (funcall (test-cases-score fitness) res goal o)))
-	     (values v goal score res))))
-    (mapcar (lambda (v) (format t "~A~%" (multiple-value-list (f v))))
-	    (test-cases-values fitness))
-    (format t "sum:~A~%" (fitness-score-test-values fitness (mapcar (lambda (x) (list x (funcall (test-cases-goal fitness) x)))
-								    (test-cases-values fitness)) o 0 0.0))))
+	     (list v goal score res))))
+    (let* ((fitsum (fitness-score-test-values fitness 
+					      (mapcar (lambda (x) (list x (funcall (test-cases-goal fitness) x)))
+						      (test-cases-values fitness)) o 0 0.0)))
+      (mapcar (lambda (p) (destructuring-bind (v goal score res) p
+			    (format t "v(stk):~A goal:~A score:~A res:~A~%" v goal score res) score))
+	      (mapcar (lambda (v) (eval-test v)) (test-cases-values fitness)))
+      (format t "fitsum:~A~%" fitsum)
+      fitsum)))
 ;(joy-program-show-fitness '(DUP (DUP (16 +) DIP REM 16 + D AND) DIP REM SUCC) *fitness-sqrt-test*)
 
 (defparameter *mut-length* (+ 11 10 (length *joy-ops*)))
@@ -801,8 +827,11 @@ l-1-stk and l-1-heap must be the stack and heap returned when executing l-1-exp.
 	 ;;(heap l-1-heap)
 	 (res (joy-eval-handler l-1-stk lins :heap heap :c (make-counter max-ticks) :cd (make-countdown max-seconds)))
 	 (fit (funcall fitness-fn res goal-value l-exp)))
-    ;;(format t "eae. l-1-stk:~A ins:~A res:~A fit:~A~%" l-1-stk ins res fit)
-    ;;(format t "exp:~A ret:~A~%" l-exp res)
+    ;;(when (equal l-exp '((swap) dip swap (swap) dip))
+    ;;  (format t "eae. l-1-stk:~W ins:~W~%" l-1-stk ins)
+    ;;  (format t "res:~W fit:~W~%" res fit)
+    ;;  (format t "exp:~W~%" l-exp)
+    ;;  (format t "res:~W~%" res))
     (values res heap fit)))
 
 (defun evaluate-tests (ins l-exp l-1-stks l-1-heaps l-1-fits goal-values score-fn max-ticks max-seconds)
@@ -849,7 +878,7 @@ max-seconds is the maximum joy-eval timeout."
 	(score-fn (test-cases-score fitness-test-case)))
     (labels ((score (exp heap test-value goal-value)
 	       (funcall score-fn
-			(joy-eval-handler (list test-value) exp :heap heap)
+			(joy-eval-handler nil (append (list test-value) exp) :heap heap)
 			goal-value))
 	     (score-sum (exp heaps)
 	       (reduce #'+ (mapcar (lambda (test-value goal-value heap)
@@ -915,7 +944,7 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
   (let* ((test-values (test-cases-values fitness-test-case))
 	 (goal-values (mapcar (test-cases-goal fitness-test-case) test-values))
 	 (l0-heaps (loop for i below (length test-values) collect (make-hash-table :size 0)))
-	 (l0-exps (mapcar #'list test-values))
+	 (l0-exps test-values)
 	 (l0-stks (mapcar (lambda (e h) (joy-eval-handler nil e :heap h)) l0-exps l0-heaps))
 	 (fitn (mapcar (test-cases-score fitness-test-case) l0-stks goal-values l0-exps))
 	 (l0-fits (mapcar (lambda (s f) (if (not (eq s 'error)) nil f)) l0-stks fitn))
