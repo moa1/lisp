@@ -671,6 +671,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 		   :goal (lambda (x) (sqrt (car x)))
 		   :score #'fitness-oneval-diff-score))
 ;; TODO: write a joy program that computes the sqrt. Therefore, write fitnesses that provide solutions for required ops, like the joy operation 'rotate.
+;;(time (systematicmapping2 4 *fitness-sqrt-test* '(+ dip / dup < - while) 1000 .01))
 
 (defparameter *fitness-expt2-test*
   (make-test-cases :values '((1) (5) (10))
@@ -697,6 +698,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 		   :generate #'identity-1
 		   :goal (lambda (x) (length (car x)))
 		   :score #'fitness-oneval-diff-score))
+(assert (eq 0 (joy-show-fitness '(0 (swap) (succ (uncons swap pop) dip) while swap pop) *fitness-stackcount-test*)))
 
 (defparameter *letter-symbols* '(a b c d e f g h i j k l m n o p q r s t u v w x y z))
 
@@ -715,6 +717,22 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 		   :goal (lambda (v) (destructuring-bind (a b c &rest r) (reverse v) (nconc (list c b a) r)))
 		   :score #'fitness-list-similarity-score))
 (assert (eq 0 (joy-show-fitness '((swap) dip swap (swap) dip) *fitness-joy-rotate-test*)))
+
+(defun fitness-one-symbol-equal-score (r goal exp)
+  (declare (ignorable exp))
+  (if (or (not (listp r)) (not (numberp (car r))) (not (eq (cdr r) nil)))
+      *fitness-invalid*
+      (if (equal (car r) goal) 0 -10)))
+
+(defparameter *fitness-at-test*
+  (make-test-cases :values '(((a b c) 2) ((x y z d e f) 4) (((1) (2 3) j k l) 1))
+		   :generate (lambda (v)
+				     (loop for i below (length v) collect
+					  (let ((l (1+ (random 10))))
+					    (list (loop for i below l collect (sample *letter-symbols*))
+						  (random l)))))
+		   :goal (lambda (v) (elt (car v) (cadr v)))
+		   :score #'fitness-one-symbol-equal-score))
 
 (defun generate-fitness-systematicmapping-oks (exp-nodes)
   "Return a test-cases instance and a function to retrieve the number of successful joy programs."
