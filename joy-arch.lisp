@@ -639,7 +639,7 @@ As a second value, the remainder of stk is returned, or :error if the stack didn
 (defun absdiff (a b)
   (abs (- a b)))
 
-(defun fitness-randomized-tests-generate (values)
+(defun generate-randomized-tests (values)
   "Generate (LENGTH VALUES) test cases."
   (cons (let ((a (car (elt values 0)))
 	      (b (car (elt values (1- (length values))))))
@@ -651,7 +651,7 @@ As a second value, the remainder of stk is returned, or :error if the stack didn
 
 (defparameter *fitness-invalid* -1000000) ;score for invalid joy-expressions or invalid results
 
-(defun fitness-oneval-diff-score (r goal exp)
+(defun score-one-value (r goal exp)
   "calculates the score of the joy-eval-result r against the goal.
 r should be a list of one value, otherwise *fitness-invalid* is returned."
   (declare (ignorable exp))
@@ -665,44 +665,44 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
   (goal (lambda () (error "goal undefined")) :type function :read-only t)
   (score (lambda () (error "score undefined")) :type function :read-only t))
 
-(defparameter *fitness-sqrt-test*
+(defparameter *test-cases-sqrt*
   (make-test-cases :values '((1.0) (25.0) (100.0) (225.0) (400.0) (625.0) (1000.0))
-		   :generate #'fitness-randomized-tests-generate
+		   :generate #'generate-randomized-tests
 		   :goal (lambda (x) (sqrt (car x)))
-		   :score #'fitness-oneval-diff-score))
+		   :score #'score-one-value))
 ;; TODO: write a joy program that computes the sqrt. Therefore, write fitnesses that provide solutions for required ops, like the joy operation 'rotate.
-;;(time (systematicmapping2 4 *fitness-sqrt-test* '(+ dip / dup < - while) 1000 .01))
+;;(time (systematicmapping2 4 *test-cases-sqrt* '(+ dip / dup < - while) 1000 .01))
 
-(defparameter *fitness-expt2-test*
+(defparameter *test-cases-expt2*
   (make-test-cases :values '((1) (5) (10))
-		   :generate #'fitness-randomized-tests-generate
+		   :generate #'generate-randomized-tests
 		   :goal (lambda (x) (expt 2 (car x)))
-		   :score #'fitness-oneval-diff-score))
-(assert (eq 0 (joy-show-fitness '(pred 2 swap (2 *) times) *fitness-expt2-test*)))
+		   :score #'score-one-value))
+(assert (eq 0 (joy-show-fitness '(pred 2 swap (2 *) times) *test-cases-expt2*)))
 
-(defun fitness-stacklength-score (r goal exp)
+(defun score-stacklength (r goal exp)
   (declare (ignorable exp))
   (if (or (not (listp r)) (not (proper-list-p r)))
       *fitness-invalid*
       (- (absdiff (length r) goal))))
 
-(defparameter *fitness-stacklength-test*
+(defparameter *test-cases-stacklength*
   (make-test-cases :values '((1) (5) (10))
-		   :generate #'fitness-randomized-tests-generate
+		   :generate #'generate-randomized-tests
 		   :goal #'car
-		   :score #'fitness-stacklength-score))
-(assert (eq 0 (joy-show-fitness '((0) times) *fitness-stacklength-test*)))
+		   :score #'score-stacklength))
+(assert (eq 0 (joy-show-fitness '((0) times) *test-cases-stacklength*)))
 
-(defparameter *fitness-stackcount-test*
+(defparameter *test-cases-stackcount*
   (make-test-cases :values '(((7)) ((5 6 3 1 2)) ((4 9 1 0 2 3 5 6 5 1)))
 		   :generate #'identity-1
 		   :goal (lambda (x) (length (car x)))
-		   :score #'fitness-oneval-diff-score))
-(assert (eq 0 (joy-show-fitness '(0 (swap) (succ (uncons swap pop) dip) while swap pop) *fitness-stackcount-test*)))
+		   :score #'score-one-value))
+(assert (eq 0 (joy-show-fitness '(0 (swap) (succ (uncons swap pop) dip) while swap pop) *test-cases-stackcount*)))
 
 (defparameter *letter-symbols* '(a b c d e f g h i j k l m n o p q r s t u v w x y z))
 
-(defun fitness-list-similarity-score (r goal exp)
+(defun score-list-similarity (r goal exp)
   (declare (ignorable exp))
   (if (or (not (listp r)) (not (proper-list-p r)))
       *fitness-invalid*
@@ -710,21 +710,22 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 	  0
 	  (- (+ 10 (abs (- (length r) (length goal)))))))) ;replace this with the edit-distance between r and goal
 
-(defparameter *fitness-joy-rotate-test*
+(defparameter *test-cases-rotate*
   (make-test-cases :values '((a b c) (x y z d e f) ((1) (2 3) j k l))
 		   :generate (lambda (v) (declare (ignore v)) (let ((l (random 10)) (a (sample *letter-symbols*)) (b (sample *letter-symbols*)) (c (sample *letter-symbols*)))
 					   (list (nconc (list a b c) (loop for i below l collect (random 10))))))
 		   :goal (lambda (v) (destructuring-bind (a b c &rest r) (reverse v) (nconc (list c b a) r)))
-		   :score #'fitness-list-similarity-score))
-(assert (eq 0 (joy-show-fitness '((swap) dip swap (swap) dip) *fitness-joy-rotate-test*)))
+		   :score #'score-list-similarity))
+(assert (eq 0 (joy-show-fitness '((swap) dip swap (swap) dip) *test-cases-rotate*)))
+(assert (eq 0 (joy-show-fitness '(SWAP QUOTE CONS DIP) *test-cases-rotate*)))
 
-(defun fitness-one-symbol-equal-score (r goal exp)
+(defun score-one-symbol-equal (r goal exp)
   (declare (ignorable exp))
   (if (or (not (listp r)) (not (numberp (car r))) (not (eq (cdr r) nil)))
       *fitness-invalid*
       (if (equal (car r) goal) 0 -10)))
 
-(defparameter *fitness-at-test*
+(defparameter *test-cases-at*
   (make-test-cases :values '(((a b c) 2) ((x y z d e f) 4) (((1) (2 3) j k l) 1))
 		   :generate (lambda (v)
 				     (loop for i below (length v) collect
@@ -732,9 +733,9 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 					    (list (loop for i below l collect (sample *letter-symbols*))
 						  (random l)))))
 		   :goal (lambda (v) (elt (car v) (cadr v)))
-		   :score #'fitness-one-symbol-equal-score))
+		   :score #'score-one-symbol-equal))
 
-(defun generate-fitness-systematicmapping-oks (exp-nodes)
+(defun generate-test-cases-systematicmapping-oks (exp-nodes)
   "Return a test-cases instance and a function to retrieve the number of successful joy programs."
   (let ((goal-c 0)
 	(ok-c 0)
@@ -1015,6 +1016,6 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
 ; oks:    19 400 9628  257189 7524718
 
 ;(multiple-value-bind (test-cases get-counts)
-;	     (generate-fitness-systematicmapping-oks 2)
+;	     (generate-test-cases-systematicmapping-oks 2)
 ;	   (systematicmapping2 1 test-cases *joy-ops* 1000 .01)
 ;	   (funcall get-counts))
