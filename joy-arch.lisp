@@ -138,6 +138,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 	 (ifte    (if (car (joy-eval (cdddr stk) (caddr stk) :heap heap :c c :cd cd)) ; similar to branch
 		      (joy-eval (cdddr stk) (cadr stk) :heap heap :c c :cd cd)
 		      (joy-eval (cdddr stk) (car stk) :heap heap :c c :cd cd)))
+	 (list    (cons (listp (car stk)) (cdr stk)))
 	 (*       (cons (* (car stk) (cadr stk)) (cddr stk))) ;multiply
 	 (nill    (cons nil stk)) ;same as false
 	 (not     (cons (not (car stk)) (cdr stk))) ; can be emulated by branch
@@ -159,7 +160,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 		    (dotimes (i n res)
 		      (setf res (joy-eval res (car stk) :heap heap :c c :cd cd)))))
 	 (true    (cons t stk))
-	 (uncons  (cons (cdar stk) (cons (caar stk) nil)))
+	 (uncons  (cons (cdar stk) (cons (caar stk) (cdr stk))))
 	 (unstack (let ((a (car stk))) (if (proper-list-p a) (car stk) (error (make-condition 'type-error :datum a :expected-type 'list)))))
 	 (while   (let ((res (cddr stk)))
 		    (do () ((not (car (joy-eval res (cadr stk) :heap heap :c c :cd cd))))
@@ -239,6 +240,8 @@ This function must not modify stk, only copy it (otherwise test values might be 
 (joy-test nil '((true) (1) (2) ifte) '(1))
 (joy-test nil '((nill) (1) (2) ifte) '(2))
 (joy-test nil '((0 true) (1) (2) ifte) '(1))
+(joy-test nil '(0 1 list) '(nil 0))
+(joy-test nil '(0 (1) list) '(t 0))
 (joy-test nil '(3 4 *) '(12))
 (joy-test nil '(nill) '(()))
 (joy-test nil '(true not) '(nil))
@@ -258,7 +261,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 (joy-test nil '(5 (1) times) '(1 1 1 1 1))
 (joy-test nil '(2 5 (2 *) times) '(64))
 (joy-test nil '(true) '(t))
-(joy-test nil '(4 5 quote cons uncons) '((5) 4))
+(joy-test nil '(3 4 5 quote cons uncons) '((5) 4 3))
 (joy-test nil '(0 (1 2) unstack) '(1 2))
 (joy-test nil '(1 2 3 4 5 6 7 (pop pop stack (1) equal not) (pop) while) '(3 2 1))
 ;; 5 [0 < not] [[1] dip pred] while stack . ;; puts -1 and 6 ones on the stack
@@ -291,7 +294,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
     (floating-point-overflow () 'error)))
 
 (defparameter *joy-ops* 
-  '(+ and branch concat cons dip / dup equal i * nill not or pop pred quote rem < stack step - succ swap times true uncons unstack while define))
+  '(+ and branch concat cons dip / dup equal i ifte list * nill not or pop pred quote rem < stack step - succ swap times true uncons unstack while define))
 
 (defun mutate (exp debranch-p p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 
 	       q1 q2 q3 q4 q5 q6 q7 q8 q9 q10
@@ -493,6 +496,7 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
     (equal   (t t) (boolean))
     (i       (list) (:any))
     (ifte    (list list list) (:any))
+    (list    (t) (boolean))
     (*       (number number) (number))
     (nill    () (list))
     (not     (t) (boolean))
@@ -627,7 +631,7 @@ As a second value, the remainder of stk is returned, or :error if the stack didn
 					      (mapcar (lambda (x) (list x (funcall (test-cases-goal fitness) x)))
 						      (test-cases-values fitness)) o 0 0.0)))
       (mapcar (lambda (p) (destructuring-bind (v goal score res) p
-			    (format t "v(stk):~A goal:~A score:~A res:~A~%" v goal score res) score))
+			    (format t "v(exp):~A goal:~A score:~A res:~A~%" v goal score res) score))
 	      (mapcar (lambda (v) (eval-test v)) (test-cases-values fitness)))
       (format t "fitsum:~A~%" fitsum)
       fitsum)))
@@ -707,7 +711,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 (defparameter *fitness-joy-rotate-test*
   (make-test-cases :values '((a b c) (x y z d e f) ((1) (2 3) j k l))
 		   :generate (lambda (v) (declare (ignore v)) (let ((l (random 10)) (a (sample *letter-symbols*)) (b (sample *letter-symbols*)) (c (sample *letter-symbols*)))
-					   (nconc (list a b c) (loop for i below l collect (random 10)))))
+					   (list (nconc (list a b c) (loop for i below l collect (random 10))))))
 		   :goal (lambda (v) (destructuring-bind (a b c &rest r) (reverse v) (nconc (list c b a) r)))
 		   :score #'fitness-list-similarity-score))
 (assert (eq 0 (joy-show-fitness '((swap) dip swap (swap) dip) *fitness-joy-rotate-test*)))
