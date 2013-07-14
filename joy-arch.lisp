@@ -735,6 +735,17 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 		   :goal (lambda (v) (elt (car v) (cadr v)))
 		   :score #'score-one-symbol-equal))
 
+;;(defparameter *test-cases-abs* ;;trains to be able to compute (abs x) for every x
+
+(defparameter *test-cases-list-positive0*
+  (make-test-cases :values '((4 2 0 -1 -2) (6 4 3 1 0 -3) (1 -4 -7 -9))
+		   :generate (lambda (v) (loop for i below (length v) collect
+					      (do ((a (1+ (random 10)) (- a (random 3))) (b (- -5 (random 5))) (l nil)) ((< a b) (nreverse l))
+						(setf l (cons a l)))))
+		   :goal (lambda (v) (let ((r (reverse v))) (nthcdr (position-if (lambda (x) (>= x 0)) r) r)))
+		   :score #'score-list-similarity))
+(assert (eq 0 (joy-show-fitness '((0 <) (pop) while) *test-cases-list-positive0*)))
+
 (defun generate-test-cases-systematicmapping-oks (exp-nodes)
   "Return a test-cases instance and a function to retrieve the number of successful joy programs."
   (let ((goal-c 0)
