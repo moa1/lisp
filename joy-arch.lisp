@@ -36,6 +36,7 @@
   (if (<= counter 0)
       (lambda () 1)
       (let ((c counter))
+	(check-type c fixnum)
 	(lambda () (decf c)))))
 
 (defun make-countdown (&optional (seconds .01))
@@ -43,7 +44,8 @@
   (declare (type single-float seconds))
   (if (<= seconds 0)
       (lambda () 1)
-      (let ((c (+ (get-internal-run-time) (* seconds internal-time-units-per-second))))
+      (let ((c (+ (get-internal-run-time) (ceiling (* seconds internal-time-units-per-second)))))
+	(check-type c fixnum)
 	(lambda () (- c (get-internal-run-time))))))
 
 (defun mean (seq)
@@ -117,7 +119,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
     ;;(print (list "stk" stk "exp" exp "c" c "cd" cd))
     (when (<= c 0)
       (return-from joy-eval 'overrun))
-    (when (<= cd 0)
+    (when (<= cd 0) ;if this check doesn't do what it is supposed to, check the output type of (funcall cd) and whether it is identical to the cd type declaration of joy-eval!
       (return-from joy-eval 'timeout)))
   (if (null exp)
       stk
