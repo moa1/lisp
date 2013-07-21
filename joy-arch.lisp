@@ -133,7 +133,14 @@ This function must not modify stk, only copy it (otherwise test values might be 
 	 (concat  (cons (append (cadr stk) (car stk)) (cddr stk)))
 	 (cons    (cons (cons (cadr stk) (let ((a (car stk))) (if (proper-list-p a) a (error (make-condition 'type-error :datum a :expected-type 'list))))) (cddr stk))) ; same as papply
 	 (dip     (cons (cadr stk) (joy-eval (cddr stk) (car stk) :heap heap :c c :cd cd)))
-	 (/       (cons (/ (cadr stk) (car stk)) (cddr stk))) ;divide
+	 (/       
+	  #+sbcl
+	  (if (eql 0.0 (car stk)) ;work around SBCL bug (/ 1.0 0.0)
+	      (error (make-condition 'divison-by-zero :operands (list (cadr stk) (car stk))))
+	      (cons (/ (cadr stk) (car stk)) (cddr stk))) ;divide
+	  #-sbcl
+	  (cons (/ (cadr stk) (car stk)) (cddr stk)) ;divide
+	  )
 	 (dup     (cons (car stk) stk))
 	 (equal   (cons (equal (cadr stk) (car stk)) (cddr stk)))
 	 (i       (joy-eval (cdr stk) (car stk) :heap heap :c c :cd cd)) ;same as apply
@@ -148,7 +155,14 @@ This function must not modify stk, only copy it (otherwise test values might be 
 	 (pop     (cdr stk))
 	 (pred    (cons (1- (car stk)) (cdr stk)))
 	 (quote   (cons (list (car stk)) (cdr stk)))
-	 (rem     (cons (mod (cadr stk) (car stk)) (cddr stk)))
+	 (rem     
+	  #+sbcl
+	  (if (eql 0.0 (car stk)) ;work around SBCL bug (mod 1.0 0.0)
+	      (error (make-condition 'divison-by-zero :operands (list (cadr stk) (car stk))))
+	      (cons (mod (cadr stk) (car stk)) (cddr stk)))
+	  #-sbcl
+	  (cons (mod (cadr stk) (car stk)) (cddr stk))
+	  )
 	 (<       (cons (< (cadr stk) (car stk)) (cddr stk))) ;smaller
 	 (stack   (cons stk stk))
 	 (step    (let ((res (cddr stk)))
@@ -537,7 +551,8 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
 (defun typep-symbol (type-symbol type)
   "Return whether the type-symbol is of type type.
 For example 'float is of type 'number, but 'number is not of type 'float.
-This should hold: (typep val type) = (typep-symbol (type-of val) type), but doesn't always, because e.g. (type-of 5) returns (INTEGER 0 4611686018427387903)."
+This should hold: (typep val type) = (typep-symbol (type-of val) type), but doesn't always, because e.g. (type-of 5) returns (INTEGER 0 4611686018427387903).
+Maybe this function should be replaced with calls to the function subtypep."
   ;;(format t "type-symbol:~A type:~A~%" type-symbol type)
   (or (eq type t)
       (eq type-symbol type)
