@@ -763,6 +763,18 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 		   :score #'score-list-similarity))
 (assert (eq 0 (joy-show-fitness '((0 <) (pop) while) *test-cases-list-positive0*)))
 
+(defparameter *test-cases-identity4*
+  (make-test-cases :values '((1 1.0) (1 1.5) (1 2.0) (1 2.5) (1 3.0) (1 3.5)) ;the 1 is a bias neuron
+		   :generate (lambda (vs) (mapcar (lambda (x) (list 1 (car x))) (generate-randomized-tests (mapcar (lambda (x) (list (cadr x))) vs))))
+		   :goal #'cadr
+		   :score #'score-one-value))
+
+(defparameter *test-cases-identity1024*
+  (make-test-cases :values '((1 0.0) (1 204.6) (1 409.2) (1 613.8) (1 818.4) (1 1023.0)) ;the 1 is a bias neuron
+		   :generate (lambda (vs) (mapcar (lambda (x) (list 1 (car x))) (generate-randomized-tests (mapcar (lambda (x) (list (cadr x))) vs))))
+		   :goal #'cadr
+		   :score #'score-one-value))
+
 (defun generate-test-cases-systematicmapping-oks (exp-nodes)
   "Return a test-cases instance and a function to retrieve the number of successful joy programs."
   (let ((goal-c 0)
