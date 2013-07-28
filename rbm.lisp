@@ -2,10 +2,105 @@
 
 (load "numeric.lisp")
 
+(defun random-gaussian-2 ()
+  "Return two with mean 0 and standard deviation 1 normally distributed random variables."
+  (flet ((xinit ()
+	   (- (* 2.0 (random 1.0)) 1)))
+    (do* ((x1 (xinit) (xinit))
+	  (x2 (xinit) (xinit))
+	  (w (+ (* x1 x1) (* x2 x2)) (+ (* x1 x1) (* x2 x2))))
+ 	 ((< w 1.0)
+	  (let ((v (sqrt (/ (* -2.0 (log w)) w))))
+	    (values (* x1 v) (* x2 v)))))))
+
+(defun random-gaussians (n &key (mean 0) (sd 1))
+  "Return a list of N with mean MEAN and standard deviation SD normally distributed random variables."
+  (labels ((scale (x)
+	     (+ mean (* x sd)))
+	   (rec-scale (n l)
+	     (multiple-value-bind (r1 r2) (random-gaussian-2)
+	       (cond
+		 ((>= n 2) (rec-scale (- n 2) (cons (scale r1) (cons (scale r2) l))))
+		 ((= n 1) (cons (scale r1) l))
+		 (t l))))
+	   (rec-noscale (n l)
+	     (multiple-value-bind (r1 r2) (random-gaussian-2)
+	       (cond
+		 ((>= n 2) (rec-noscale (- n 2) (cons r1 (cons r2 l))))
+		 ((= n 1) (cons r1 l))
+		 (t l)))))
+    (if (and (= mean 0) (= sd 1))
+	(rec-noscale n nil) ;is not really faster: 2.776 vs 2.732 seconds
+	(rec-scale n nil))))
+
+(let ((next-random-gaussian nil))
+  (defun random-gaussian ()
+    "Return a with mean MEAN and standard deviation SD normally distributed random variable."
+    (if (null next-random-gaussian)
+	(multiple-value-bind (r1 r2) (random-gaussian-2)
+	  (setf next-random-gaussian r2)
+	  r1)
+	(let ((r1 next-random-gaussian))
+	  (setf next-random-gaussian nil)
+	  r1))))
+
 (defun sigmoid (x)
   (cond
-    ((< x -88) 0.0)
-    (t (/ 1 (1+ (exp (- x)))))))
+    ((>= x -88) (/ 1 (1+ (exp (- x)))))
+    (t 0.0)))
+
+(defun array-transpose (a r)
+  "Put the transpose of matrix A into matrix R."
+  (let ((arows (array-dimension a 0))
+	(acols (array-dimension a 1))
+	(rrows (array-dimension r 0))
+	(rcols (array-dimension r 1)))
+    (assert (and (= arows rcols) (= acols rrows)))
+    (loop for i below rrows do
+	 (loop for j below rcols do
+	      (setf (aref r i j) (aref a j i))))))
+
+(defun array-array-mul (a b r &key (a-t nil) (b-t nil))
+  "Multiply matrix A with matrix B and put the result in matrix R.
+Matrices A and/or B are transposed before multiplication if A-T and/or B-t is T, respectively."
+  (let ((arows (array-dimension a (if a-t 1 0)))
+	(acols (array-dimension a (if a-t 0 1)))
+	(brows (array-dimension b (if b-t 1 0)))
+	(bcols (array-dimension b (if b-t 0 1)))
+	(rrows (array-dimension r 0))
+	(rcols (array-dimension r 1)))
+    (assert (and (= arows rrows) (= bcols rcols) (= acols brows)))
+    (loop for i below rrows do
+	 (loop for j below rcols do
+	      (setf (aref r i j)
+		    (if a-t
+			(if b-t
+			    (loop for k below acols sum
+				 (* (aref a k i) (aref b j k)))
+			    (loop for k below acols sum
+				 (* (aref a k i) (aref b k j))))
+			(if b-t
+			    (loop for k below acols sum
+				 (* (aref a i k) (aref b j k)))
+			    (loop for k below acols sum
+				 (* (aref a i k) (aref b k j))))))))))
+;; test array-array-mul
+(let ((a #2A((1 2 3) (4 5 6)))
+      (b #2A((0 1) (2 3) (4 5)))
+      (r (make-array '(2 2)))
+      (ta (make-array '(3 2)))
+      (tb (make-array '(2 3))))
+  (array-transpose a ta)
+  (array-transpose b tb)
+  (print (list a ta b tb))
+  (array-array-mul a b r)
+  (assert (equalp r #2A((16 22) (34 49))))
+  (array-array-mul ta b r :a-t t)
+  (assert (equalp r #2A((16 22) (34 49))))
+  (array-array-mul a tb r :b-t t)
+  (assert (equalp r #2A((16 22) (34 49))))
+  (array-array-mul ta tb r :a-t t :b-t t)
+  (assert (equalp r #2A((16 22) (34 49)))))
 
 (defun h-from-v (v w)
 ;;  (format t "h-from-v~%")
@@ -68,69 +163,6 @@
 	   (format t "new w:~A~%h:~A~%" w (h-from-v v w))
 	   (format t "v-recall:~A~%" (recall v w))))))
   
-
-(defparameter v '(0.5 1 1))
-
-(let ((w '((-1.5 -.4) (-.3 .1) (-2.0 1.1))))
-  (loop for i below 1000 do
-       (format t "~%i:~A~%" i)
-       (setf w (num+ w (learn v w .05)))
-       (format t "new w:~A~%h:~A~%" w (h-from-v v w))
-       (format t "v-recall:~A~%" (recall v w))))
-
-;;(let ((w '((-1.5 -.4 .2) (-.3 .1 -2.2) (-2.0 1.1 .5))))
-(let ((w (loop for i below 3 collect (loop for j below 3 collect (1- (random 2.0))))))
-    ;;((w (loop for i below 3 collect (loop for j below 3 collect 0))))
-  (loop for i below 1000 do
-;;       (let* ((a (random .5))
-;;	      (v (list a (+ .5 a) 1)))
-       (let* ((a (random 2))
-	      (v (list a (abs (1- a)) 1)))
-	 (format t "~%i:~A v:~A~%" i v)
-	 (setf w (num+ w (learn v w .05)))
-	 (format t "new w:~A~%h:~A~%" w (h-from-v v w))
-	 (format t "v-recall:~A~%" (recall v w)))))
-
-(let ((w '((0.61336917 -0.87789977 0.10563295 0.108813316 -1.0656557
-        -0.14073084 -0.71745485 0.08811118 -0.898514 -0.75391614 0.6452821
-        -0.880524 0.98574054 0.026347551 0.32547185 0.91539073 -0.9214095
-        -0.28599972 -0.16070473 -0.8744107 -0.65713847 -0.83152556
-        0.9450839 0.4008578 0.45750025 -0.6717649 -1.062213 -0.2902688
-        0.30618614 0.6396431 -0.007923858 0.39384183 -0.3331783 0.1697953
-        0.62041825 0.18130209 -0.3652584 -0.61548156 0.4417567 0.13190964
-        -0.18594131 -0.82465225 0.91777277 0.8256128 0.30499038
-        -0.64885134 -0.8260492 0.5652199 -1.0221136 -0.5210891)
-       (0.123640746 -1.0991547 0.8257825 -0.6773345 -0.44339636
-        -0.59915906 -0.9420719 -0.17498662 -0.6426829 -0.3476663
-        0.16052774 0.44924057 0.4589913 -0.8162435 0.49449313 0.26592124
-        0.29615963 0.20463501 0.48759156 -0.13148634 1.0299048e-4
-        -0.17958458 0.5699613 -0.771378 0.62940395 -0.14486916 0.5233946
-        -0.081126615 0.84262145 -1.1710441 -1.1018877 0.6783397 -0.4131744
-        0.63944435 0.35797864 0.4017728 0.26525897 -0.19415595 -0.8150256
-        0.63009846 0.264528 -0.7353737 -0.40663537 -0.29356733
-        -0.107356735 0.51135135 -0.7070773 -1.0214218 0.57366973
-        0.5727504)
-       (0.65444666 0.81611556 -0.85355663 -0.17414212 0.65510595
-        0.28344753 -0.11460361 0.727842 1.0101643 -0.47758725 0.27214402
-        0.6342863 -0.16444565 -0.85028917 0.7287216 0.8259994 0.23069003
-        -0.20637375 0.6675672 0.29848567 -0.11644666 -0.73341966
-        0.42420742 0.9716775 0.3900459 -0.9327895 0.40578544 0.2137381
-        -0.5372908 0.925518 0.3201437 0.15297723 -0.23414783 0.57303727
-        0.6763206 -0.44792926 0.776379 -0.19283253 0.85654205 -0.2789275
-        -0.8926282 0.011856664 0.11657309 -0.72564214 -0.7304891 0.934093
-        0.39207947 0.86143875 0.5613059 0.45791808)))
-      (v '(.1 0 1.0)))
-  (loop for i below 10 do
-       (setf v (recall v w))
-       (format t "i:~A v-recall:~A~%" i v)))
-
-(let ((w '((-4.742946 -0.4842313 7.7389503) (3.0957246 1.8130138 -8.688931)
-	   (1.7329597 5.417793 0.75563663)))
-      (v '(1 0 1.0)))
-  (loop for i below 10 do
-       (setf v (recall v w))
-       (format t "i:~A v-recall:~A~%" i v)))
-
 (defun test2 (num-hidden)
   (let ((w (loop for i below 10 collect (loop for j below num-hidden collect (- (random 0.2) 0.1)))))
     (loop for i below 1000 do
@@ -145,8 +177,14 @@
 	   (format t "v-recall:~A~%" (recall v w))))
     w))
 
-(defun recall-test2 (w)
+(defun hidden-test2 (w)
   (loop for v in '((1 1 1 0 0 0 0 0 0 1)
 		   (0 0 0 1 1 1 0 0 0 1)
 		   (0 0 0 0 0 0 1 1 1 1)) collect
        (h-from-v v w)))
+
+(defun recall-test2 (w)
+  (loop for v in '((1 1 1 0 0 0 0 0 0 1)
+		   (0 0 0 1 1 1 0 0 0 1)
+		   (0 0 0 0 0 0 1 1 1 1)) collect
+       (recall v w)))
