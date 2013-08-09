@@ -11,7 +11,7 @@ RESULT-TYPE is the resulting sequence type."
   (labels ((rec (rest pairs)
 	     (if (null rest)
 		 (reverse pairs)
-		 (if (constantp (car rest))
+		 (if (keywordp (car rest))
 		     (let ((text (format nil "~A=" (car rest)))
 			   (value (cadr rest)))
 		       (rec (cddr rest) (cons `((princ ,text) (princ ,value)) pairs)))
@@ -132,9 +132,11 @@ PERM must contain all numbers between 0 and (1- (length perm)), and each number 
 
 (defun inverse-permutation (perm)
   "see wikipedia article permutation section 'Product and inverse'."
+  (declare (ignore perm))
   (error "not implemented yet"))
 (defun permutation-product (perm-a perm-b)
   "see wikipedia article permutation section 'Product and inverse'."
+  (declare (ignore perm-a perm-b))
   (error "not implemented yet"))
 
 (defun row-major-index-to-subscripts (dims index)
@@ -150,32 +152,38 @@ PERM must contain all numbers between 0 and (1- (length perm)), and each number 
 
 (defun subscripts-to-row-major-index (dims subscripts)
   "Return the row-major-index I so that (row-major-aref A I) == (apply #'aref A SUBSCRIPTS) for all arrays A."
-  (declare (type list dims subscripts)
-	   (optimize (speed 3)))
+  (declare (type list dims subscripts))
   (labels ((rec (d s i)
-	     (declare (type fixnum i))
+	     (declare (type (and fixnum unsigned-byte) i))
 	     (if (null d)
 		 (if (null s)
-		     i
+		     (the (and fixnum unsigned-byte) i)
 		     (error "DIMS and SUBSCRIPTS don't have the same length: ~A ~A." dims subscripts))
 		 (if (null s)
 		     (error "DIMS and SUBSCRIPTS don't have the same length: ~A ~A." dims subscripts)
 		     (let ((dim (car d))
 			   (sub (car s)))
-		       (declare (type fixnum sub dim))
+		       (declare (type (and fixnum unsigned-byte) sub dim))
 		       (if (or (< sub 0) (>= sub dim))
 			   (error "Subscript (~A) must be non-negative and smaller than dimension (~A)." sub dim)
-			   (rec (cdr d) (cdr s) (+ (the fixnum (* dim i)) sub)))))))) ;doesn't optimize in sbcl
+			   (rec (cdr d) (cdr s) (+ (the (and fixnum unsigned-byte) (* dim i)) sub)))))))) ;doesn't optimize in sbcl
     (rec dims subscripts 0)))
 
-(defun array-array-fun (a b f r &key (a-perm nil) (b-perm nil))
+(defun array-array-fun-noperm (a b f r)
+  (let* ((a-dims (array-dimensions a))
+	 (b-dims (array-dimensions b))
+	 (r-dims (array-dimensions r))
+	 (size (reduce #'* a-dims)))
+    (declare (type (and fixnum unsigned-byte) size))
+    (assert (and (equal r-dims a-dims) (equal r-dims b-dims)))
+      (loop for i below size do
+	   (setf (row-major-aref r i) (funcall f (row-major-aref a i) (row-major-aref b i)))))
+  nil)
+
+(defun array-array-fun-perm (a b f r &key a-perm b-perm)
+  (declare (type cons a-perm b-perm))
   "Return the result array R of applying each element in arrays A and B to the function F.
 A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices used to address elements of A and B are permuted with the function PERMUTE before calling function F."
-  ;;TODO: speed this function up by specializing on A-PERM and B-PERM.
-  (when (null a-perm)
-    (setf a-perm (loop for i below (length (array-dimensions a)) collect i)))
-  (when (null b-perm)
-    (setf b-perm (loop for i below (length (array-dimensions b)) collect i)))
   (let* ((a-dims (array-dimensions a))
 	 (b-dims (array-dimensions b))
 	 (r-dims (array-dimensions r))
@@ -190,6 +198,7 @@ A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices 
 	   (perm-a-inc (reduce #'* (nthcdr (1+ (position r-max-dim a-perm)) a-dims)))
 	   (perm-b-inc (reduce #'* (nthcdr (1+ (position r-max-dim b-perm)) b-dims)))
 	   (r-index 0))
+      (declare (type (and fixnum unsigned-byte) lowest-r-dim butlowest-r-size perm-a-inc perm-b-inc))
       ;;(prind r-dims a-dims b-dims a-perm b-perm perm-a-inc perm-b-inc)
       (loop for i below butlowest-r-size do
 	   (let* ((r-subscripts (row-major-index-to-subscripts r-dims r-index))
@@ -199,6 +208,7 @@ A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices 
 		  ;;(debug (progn (prind r-subscripts a-subscripts b-subscripts)))
 		  (a-index (subscripts-to-row-major-index a-dims a-subscripts))	
 		  (b-index (subscripts-to-row-major-index b-dims b-subscripts)))
+	     (declare (type (and fixnum unsigned-byte) a-index b-index))
 	     (loop for j below lowest-r-dim do
 		  ;;(prind r-index a-index b-index :r-s (row-major-index-to-subscripts r-dims r-index) :a-s (row-major-index-to-subscripts a-dims a-index) :b-s (row-major-index-to-subscripts b-dims b-index))
 		  (setf (row-major-aref r r-index)
@@ -209,6 +219,20 @@ A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices 
 		  (incf a-index perm-a-inc)
 		  (incf b-index perm-b-inc))))))
   nil)
+
+(defun array-array-fun (a b f r &key (a-perm nil) (b-perm nil))
+  "Return the result array R of applying each element in arrays A and B to the function F.
+A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices used to address elements of A and B are permuted with the function PERMUTE before calling function F."
+  ;; TODO: generalize this function to allow computing with arbitrarily many arrays (f then takes arbitrarily many parameters)
+  (let ((default-a-perm (loop for i below (length (array-dimensions a)) collect i))
+	(default-b-perm (loop for i below (length (array-dimensions b)) collect i)))
+    (when (null a-perm)
+      (setf a-perm default-a-perm))
+    (when (null b-perm)
+      (setf b-perm default-b-perm))
+    (if (and (equal a-perm default-a-perm) (equal b-perm default-b-perm))
+	(array-array-fun-noperm a b f r)
+	(array-array-fun-perm a b f r :a-perm a-perm :b-perm b-perm))))
 
 ;; test array-array-mul and array-array-fun
 (let ((a #2A((1 2 3) (4 5 6)))
@@ -242,7 +266,6 @@ A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices 
   (assert (equalp a #3A(((0 24) (2 26) (4 28) (6 30)) ((8 32) (10 34) (12 36) (14 38)) ((16 40) (18 42) (20 44) (22 46))))))
 
 (defun array-fun (a f r &key (a-t nil))
-  (declare (ignore a-t))
   "Fill the array R by calling function F on each element of A."
   ;;TODO: implement a-t
   (assert (eq a-t nil))
@@ -291,36 +314,53 @@ Return the new array."
 	(setf index-r (1+ index-r))))
     r))
 
+(defun array-select-dimension (a dim selector)
+  "Return a new array like array A but with index dimension DIM fixed at SELECTOR."
+  ;; TODO: Generalize to all dimensions, and selector a vector with possible nil values (meaning give all values of this dimension)
+  ;; TODO: rename this function to asref (for "array-slice-reference")
+  ;; TODO: write a setf-expander for this
+  (let* ((a-dimensions (array-dimensions a))
+	 (before-dimensions (subseq a-dimensions 0 dim))
+	 (after-dimensions (subseq a-dimensions (1+ dim)))
+	 (r-dimensions (append before-dimensions after-dimensions))
+	 (r (make-array r-dimensions :element-type (array-element-type a)))
+	 (x (apply #'* before-dimensions))
+	 (y (elt a-dimensions dim))
+	 (z (apply #'* after-dimensions)))
+    (dotimes (i x)
+      (dotimes (k z)
+	(let* ((a-index (+ (* i y z) (* selector z) k))
+	       (r-index (+ (* i z) k)))
+	  (setf (row-major-aref r r-index) (row-major-aref a a-index)))))
+    r))
+
+(defstruct rbm
+  (w nil :type (simple-array float (* *)))
+  (v-biases nil :type (simple-array float (*)))
+  (h-biases nil :type (simple-array float (*))))
+
 (defun new-rbm (n-visible n-hidden)
   "Return a new randomly initialized restricted boltzmann machine."
   (let ((w (make-array (list n-visible n-hidden) :element-type 'float))
 	(v-biases (make-array n-visible :element-type 'float))
 	(h-biases (make-array n-hidden :element-type 'float)))
+    (declare (type (simple-array float) w))
     (loop for i below n-visible do
 	 (loop for j below n-hidden do
 	      (setf (aref w i j) (* (random-gaussian) .01))))
     (loop for i below n-visible do (setf (aref v-biases i) 0))
     (loop for j below n-hidden do (setf (aref h-biases j) 0))
-    (list w v-biases h-biases)))
+    (make-rbm :w w :v-biases v-biases :h-biases h-biases)))
 
 (defun new-rbm-1 ()
-  (list #2A((0.40 0.50 0.60)
-	    (0.41 0.51 0.61)
-	    (0.42 0.52 0.62)
-	    (0.43 0.53 0.63)
-	    (0.44 0.54 0.64)
-	    (0.45 0.55 0.65))
-	#(0 0 0 0 0 0)
-	#(0 0 0)))
-
-(defun rbm-w (rbm)
-  (car rbm))
-
-(defun rbm-v-biases (rbm)
-  (cadr rbm))
-
-(defun rbm-h-biases (rbm)
-  (caddr rbm))
+  (make-rbm :w #2A((0.40 0.50 0.60)
+		   (0.41 0.51 0.61)
+		   (0.42 0.52 0.62)
+		   (0.43 0.53 0.63)
+		   (0.44 0.54 0.64)
+		   (0.45 0.55 0.65))
+	    :v-biases #(0 0 0 0 0 0)
+	    :h-biases #(0 0 0)))
 
 (defun rbm-n-v (rbm)
   (array-dimension (rbm-w rbm) 0))
@@ -388,17 +428,20 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 	  (err nil))
       (array-array-fun data neg-data (lambda (a b) (expt (- a b) 2)) err-array)
       (setf err (aref (array-project (array-project err-array #'+) #'+)))
-      (print (list "err" err)))
+      (print (list "err" err))
+      )
     (values w-inc v-biases-inc h-biases-inc)
     ))
 
 (defparameter *data-imbalanced* #2A((1 1 0 0 0 0) (0 0 1 1 0 0) (0 0 0 0 1 1) (0 0 0 0 1 1)))
 (defparameter *data* #2A((1 1 0 0 0 0) (0 0 1 1 0 0) (0 0 0 0 1 1)))
+(defparameter *data900* (make-array '(3 900) :initial-element 0.0 :element-type 'float :initial-contents (list (nconc (loop for i below 300 collect 1) (loop for i below 600 collect 0)) (nconc (loop for i below 300 collect 0) (loop for i below 300 collect 1) (loop for i below 300 collect 0)) (nconc (loop for i below 600 collect 0) (loop for i below 300 collect 1)))))
+(defparameter *data2* #2A((0 0) (0 1) (1 0) (1 1)))
 
 (defun rbm-update (rbm w-inc v-biases-inc h-biases-inc learn-rate)
   (let* ((w (rbm-w rbm))
-	 (v-biases (cadr rbm))
-	 (h-biases (caddr rbm))
+	 (v-biases (rbm-v-biases rbm))
+	 (h-biases (rbm-h-biases rbm))
 	 (w-new (make-array (array-dimensions w) :element-type (array-element-type w)))
 	 (v-biases-new (make-array (array-dimensions v-biases) :element-type (array-element-type v-biases)))
 	 (h-biases-new (make-array (array-dimensions h-biases) :element-type (array-element-type h-biases))))
@@ -407,9 +450,10 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
       (array-array-fun w w-inc #'update-learn w-new)
       (array-array-fun v-biases v-biases-inc #'update-learn v-biases-new)
       (array-array-fun h-biases h-biases-inc #'update-learn h-biases-new)
-      (list w-new v-biases-new h-biases-new))))
+      (make-rbm :w w-new :v-biases v-biases-new :h-biases h-biases-new))))
 
 (defun rbm-learn (data rbm learn-rate momentum weight-cost max-iterations)
+  (assert (> max-iterations 0))
   (labels ((rec (rbm w-inc v-biases-inc h-biases-inc iteration)
 	     (print (list "iteration" iteration))
 	     (multiple-value-bind (w-inc-1 v-biases-inc-1 h-biases-inc-1) (rbm-learn-cd1 data rbm)
@@ -424,12 +468,12 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
     (let ((w-inc (make-array (array-dimensions (rbm-w rbm)) :element-type 'float))
 	  (v-biases-inc (make-array (array-dimensions (rbm-v-biases rbm)) :element-type 'float))
 	  (h-biases-inc (make-array (array-dimensions (rbm-h-biases rbm)) :element-type 'float)))
-      (rec rbm w-inc v-biases-inc h-biases-inc 0))))
+      (rec rbm w-inc v-biases-inc h-biases-inc 1))))
 
 (defun rbm-h-from-v (data rbm)
   (let* ((w (rbm-w rbm))
-	 (v-biases (cadr rbm))
-	 (h-biases (caddr rbm))
+	 (v-biases (rbm-v-biases rbm))
+	 (h-biases (rbm-h-biases rbm))
 	 (n-v (length v-biases))
 	 (n-h (length h-biases))
 	 (n-cases (array-dimension data 0))
