@@ -23,6 +23,17 @@ RESULT-TYPE is the resulting sequence type."
       ;;(print progns-with-separator)
       `(progn ,@progns-with-separator (terpri)))))
 
+(defun map-into-list (result-list function &rest lists)
+  "Same as map-into, but for lists instead of sequences."
+  (labels ((rec (res lists)
+	     (if (null res) (return-from rec))
+	     (loop for l in lists do
+		  (if (null l) (return-from rec)))
+	     (setf (car res)
+		   (apply function (mapcar #'car lists)))
+	     (rec (cdr res) (mapcar #'cdr lists))))
+    (rec result-list lists)))
+
 (defun random-gaussian-2 ()
   "Return two with mean 0 and standard deviation 1 normally distributed random variables."
   (flet ((xinit ()
@@ -113,31 +124,45 @@ Arrays A and/or B are transposed before multiplication if A-T and/or B-t is T, r
   nil)
 
 (defun permute (l perm)
-  "Reverse-permute list L with permutation list PERM.
+  "Permute list L with permutation list PERM.
 PERM contains, for each element at position x, the dimension number that is mapped to dimension x.
 PERM must contain all numbers between 0 and (1- (length perm)), and each number only once."
   (loop for p in perm collect
        (elt l p)))
-(assert (equal (permute '(0 1 2) '(2 0 1)) '(2 0 1)))
 
 (defun reverse-permute (l perm)
-  "Permute list L with permutation list PERM.
-Permute means, that for each element e at position x in PERM, the dimension x of L is mapped to position e in the result.
+  "Reverse permute list L with permutation list PERM.
+Reverse permute means, that for each element e at position x in PERM, the dimension x of L is mapped to position e in the result.
 PERM must contain all numbers between 0 and (1- (length perm)), and each number only once."
   (let ((res (loop for i below (length perm) collect -1)))
     (loop for e in perm for x below (length perm) do
 	 (setf (elt res e) (elt l x)))
     res))
-(assert (equal (reverse-permute '(2 0 1) '(2 0 1)) '(0 1 2)))
 
 (defun inverse-permutation (perm)
-  "see wikipedia article permutation section 'Product and inverse'."
-  (declare (ignore perm))
-  (error "not implemented yet"))
+  "Return the permutation that must be applied after or before applying PERM to obtain the identity permutation."
+  (reverse-permute (loop for i below (length perm) collect i) perm))
+
 (defun permutation-product (perm-a perm-b)
-  "see wikipedia article permutation section 'Product and inverse'."
-  (declare (ignore perm-a perm-b))
-  (error "not implemented yet"))
+  "Return the permutation that results from first applying PERM-A, then PERM-B."
+  ;; (0 1 2 3 4 5) * (0 1 2 3 4 5) = (0 1 2 3 4 5)
+  ;; (0 3 2 1 5 4)   (0 5 2 1 3 4)   (0 1 2 5 4 3)
+  (permute perm-b perm-a))
+
+;; test permutations
+(let* (;;   0 1 2 3 4 5
+       (a '(2 1 3 0 5 4))
+       (a-1 (inverse-permutation a))
+       ;;   0 1 2 3 4 5
+       (b '(2 4 3 5 1 0))
+       (b-1 (inverse-permutation b))
+       (id (loop for i below 6 collect i)))
+  (assert (equal (permute id a) a))
+  (assert (equal (reverse-permute a a) id))
+  (assert (equal (permutation-product a a-1) id))
+  (assert (equal (permutation-product a-1 a) id))
+  (assert (equal (permutation-product a b) '(3 4 5 2 0 1)))
+  (assert (equal (permutation-product (permutation-product a b) b-1) a)))
 
 (defun row-major-index-to-subscripts (dims index)
   "Return the list of subscripts S so that (row-major-aref A index) == (apply #'aref A S) for all arrays A."
@@ -168,6 +193,91 @@ PERM must contain all numbers between 0 and (1- (length perm)), and each number 
 			   (error "Subscript (~A) must be non-negative and smaller than dimension (~A)." sub dim)
 			   (rec (cdr d) (cdr s) (+ (the (and fixnum unsigned-byte) (* dim i)) sub)))))))) ;doesn't optimize in sbcl
     (rec dims subscripts 0)))
+
+(defun array-permute (array perm)
+  "Return a new array that has the same contents as array ARRAY but with its dimensions permuted by permutation list PERM.
+This function is slow, you should use array-walk or arrays-walk instead."
+  (let* ((dim (array-dimensions array))
+	 (r-dim (permute dim perm))
+	 (r (make-array r-dim :element-type (array-element-type array)))
+	 (size (reduce #'* dim)))
+    (loop for index below size do
+	 (let* ((subscripts (row-major-index-to-subscripts dim index))
+		(r-subscripts (permute subscripts perm))
+		(r-index (subscripts-to-row-major-index r-dim r-subscripts)))
+	   (setf (row-major-aref r r-index) (row-major-aref array index))))
+    r))
+
+(defun array-walk (dim perm f)
+  "Call function F with row-major-indices of an array with dimensions DIMS.
+PERM is the array's dimensions permutation, which is applied before iterating through all the dimensions of the array."
+  (let* ((n-dims (length dim))
+	 (dim-inc (loop for i below n-dims collect
+		       (reduce #'* (nthcdr (1+ i) dim))))
+	 (dim-perm (permute dim perm))
+	 (dim-inc-perm (permute dim-inc perm)))
+    (labels ((rec (n-dim i-0 dim dim-inc)
+	       (if (< n-dim n-dims)
+		   (let ((d-max (car dim))
+			 (i-inc (car dim-inc)))
+		     (loop
+			for d from 0 below d-max
+			for i from i-0 by i-inc do
+			  (rec (1+ n-dim) i (cdr dim) (cdr dim-inc))))
+		   (funcall f i-0))))
+      (rec 0 0 dim-perm dim-inc-perm))))
+
+(defun arrays-walk (arrays-dim arrays-perm f)
+  "Call function F with row-major-indices of arrays.
+ARRAYS-DIM is the list of the arrays' array-dimensions.
+ARRAYS-PERM is the list of the arrays' dimension permutations, which is applied before iterating through all the dimensions of the arrays.
+The permuted array dimensions must all be equal."
+  (assert (= (length arrays-dim) (length arrays-perm)))
+  (mapcar (lambda (a b)
+	    (assert (= (length a) (length b) (length (car arrays-dim)))))
+	  arrays-dim arrays-perm)
+  (when (not (null arrays-dim))
+    (let* ((n-arrays (length arrays-dim))
+	   (n-dims (length (car arrays-dim)))
+	   (dims-inc (loop for dim in arrays-dim collect
+			  (loop for i below n-dims collect
+			       (reduce #'* (nthcdr (1+ i) dim)))))
+	   (array0-dim-perm (permute (car arrays-dim) (car arrays-perm)))
+	   (dims-inc-perm (mapcar (lambda (dim-inc perm) (permute dim-inc perm))
+				  dims-inc arrays-perm)))
+      (loop for dim in (cdr arrays-dim) for perm in (cdr arrays-perm) do
+	   (assert (equal array0-dim-perm (permute dim perm))))
+      (labels ((rec (n-dim dims i0s i0s-incs)
+		 ;; N-DIM is the number of dimensions.
+		 ;; DIMS is the list of dimension sizes, which is equal for all arrays
+		 ;; I0S is the list of start indices
+		 ;; I0S-INCS is the list of list of i0 (index) increments
+		 ;;(prind n-dim dims i0s i0s-incs)
+		 (if (< n-dim n-dims)
+		     (let ((d-max (car dims))
+			   (i0s (loop for i0 in i0s collect i0))
+			   (i-incs (mapcar #'car i0s-incs)))
+		       (loop for d from 0 below d-max do
+			    (rec (1+ n-dim) (cdr dims) i0s (mapcar #'cdr i0s-incs))
+			    (map-into-list i0s #'+ i0s i-incs)))
+		     (apply f i0s))))
+	(rec 0 array0-dim-perm (loop for i below n-arrays collect 0) dims-inc-perm)))))
+
+;; test arrays-walk
+(let* ((a #3A(((0 1 2 3) (4 5 6 7) (8 9 10 11)) ((12 13 14 15) (16 17 18 19) (20 21 22 23))))
+       (a-perm '(2 0 1))
+       (a-dim (array-dimensions a))
+       (b-dim (permute a-dim a-perm))
+       (b (make-array b-dim))
+       (b-perm '(0 1 2))
+       (r1 nil)
+       (r2 nil))
+  (array-walk a-dim a-perm (lambda (x) (push x r1)))
+  (arrays-walk (list a-dim) (list a-perm) (lambda (x) (push x r2)))
+  (assert (equal r1 r2)) ;array-walk and arrays-walk walk the same order
+  (arrays-walk (list a-dim b-dim) (list a-perm b-perm)
+	       (lambda (x y) (setf (row-major-aref b y) (row-major-aref a x))))
+  (assert (equalp b (array-permute a a-perm))))
 
 (defun array-array-fun-noperm (a b f r)
   (let* ((a-dims (array-dimensions a))
