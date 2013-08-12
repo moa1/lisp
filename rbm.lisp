@@ -26,6 +26,7 @@ RESULT-TYPE is the resulting sequence type."
 (defun map-into-list (result-list function &rest lists)
   "Same as map-into, but for lists instead of sequences.
 This function is faster than map-into, but slower than DO (which is possible when the number of LISTS is fixed)."
+  ;; TODO: write a macro-expansion for this function which uses DO, if the number of lists is fixed.
   (labels ((rec (res lists)
 	     (if (null res) (return-from rec))
 	     (loop for l in lists do
@@ -82,6 +83,90 @@ This function is faster than map-into, but slower than DO (which is possible whe
     ((>= x -88) (/ 1 (1+ (exp (- x)))))
     (t 0.0)))
 
+(defun array-slice-valid (slice array-dimensions)
+  "Check if the list SLICE is a valid array slice of array ARRAY.
+Example: (array-slice-valid '((0 2) nil (0 0 3 4)) '(2 3 4))"
+  (when (not (= (length slice) (length array-dimensions)))
+    (return-from array-slice-valid (values nil 'dimensions)))
+  (mapc (lambda (slice dim)
+	  (let* ((slice-len (length slice)))
+	    (when (oddp slice-len)
+	      (return-from array-slice-valid (values nil 'oddp)))
+	    (when (not (apply #'<= 0 (append slice (list dim))))
+	      (return-from array-slice-valid (values nil 'order)))))
+	slice array-dimensions)
+  (values t t))
+
+(defun default-array-slice (dim)
+  "Return the whole array slice for an array of dimensions DIM."
+  (loop for d in dim collect
+       (list 0 d)))
+
+(defun array-dim-slice-count (dim-slice)
+  "Count the number of elements addressed by the array dim-slice DIM-SLICE."
+  ;; a dim-slice is an element of a slice, e.g. '(0 2) and (0 4) are dim-slices of ((0 2) (0 4)).
+  (loop for int on dim-slice by #'cddr
+     for start = (car int) for end = (cadr int)
+     sum (- end start)))
+
+(defun array-slices-compatible (a-slice b-slice &key a-dim b-dim)
+  "Check whether the array-slices A-SLICE and B-SLICE refer to equal number of elements.
+A-DIM and B-DIM are the dimensions along which the check is performed.
+If they are nil, then all dimensions are checked."
+  (assert (= (length a-dim) (length b-dim)))
+  (when (/= (length a-slice) (length b-slice))
+    (return-from array-slices-compatible nil))
+  (labels ((test-dim (a-sl b-sl)
+	     (= (array-dim-slice-count a-sl) (array-dim-slice-count b-sl))))
+    (when (null a-dim)
+      (setf a-dim (loop for i below (length a-slice) collect i)))
+    (when (null b-dim)
+      (setf b-dim (loop for i below (length b-slice) collect i)))
+    (mapc (lambda (a-d b-d)
+	    (when (not (test-dim (elt a-slice a-d) (elt b-slice b-d)))
+	      (return-from array-slices-compatible nil)))
+	  a-dim b-dim)
+    t))
+
+(assert (array-slices-compatible '((0 1) nil (0 2 3 4)) '((1 2) nil (0 3))))
+(assert (not (array-slices-compatible '((0 1) nil (0 2 3 4)) '((1 2) nil (0 4)))))
+
+(defun array-dim-slice-iterate (dim-slice-list function)
+  "Iterate over all the dim-slices DIM-SLICE-LIST in parallel, calling FUNCTION for each iteration with the list of the slice value.
+The iteration ends when the first DIM-SLICE is fully iterated through.
+Returns NIL.
+Example: (array-dim-slice-iterate '((0 1 3 4) (6 8)) (lambda (i j) (print (list i j))))"
+  ;; This could also be implemented as a macro, but that would not give any speed or expressiveness advantage.
+  ;;Iterate over the dim-slice-list using the variables.
+  ;;Example: (array-dim-slice-iterate ((i '(0 1 3 4)) (j '(6 8))) (print (list i j)))
+  ;;VAR-AND-DIM-SLICE-LIST is a list of (VAR DIM-SLICE) lists."
+  (when (null dim-slice-list)
+    (return-from array-dim-slice-iterate nil))
+  (let ((poss (mapcar #'car dim-slice-list)) ;positions
+	(ends (mapcar #'cadr dim-slice-list)) ;next ends
+	(ints (mapcar #'cddr dim-slice-list)) ;next intervals
+	)
+    (tagbody
+       (mapc (lambda (e) (when (null e) (go end))) ends)
+     start
+       (let* ((lengths (mapcar #'- ends poss))
+	      (min-length (apply #'min lengths)))
+	 (dotimes (i min-length)
+	   (apply function poss)
+	   (map-into-list poss #'1+ poss))
+	 ;; assign new poss/ends
+	 (loop for p on poss for e on ends for i on ints
+	    ;; e.g. p=(2 1) e=(5 1) i=((3 4) nil)
+	    do (when (>= (car p) (car e))
+		 (when (null (car i))
+		   (go end))
+		 (setf (car p) (caar i))
+		 (setf (car e) (cadar i))
+		 (setf (car i) (cddr (car i))))))
+       (go start)
+     end)
+    nil))
+
 (defun array-transpose (a r)
   "Put the transpose of 2-dimensional array A into array R."
   (let ((arows (array-dimension a 0))
@@ -94,34 +179,54 @@ This function is faster than map-into, but slower than DO (which is possible whe
 	      (setf (aref r i j) (aref a j i)))))
   nil)
 
-(defun array-array-mul (a b r &key (a-t nil) (b-t nil))
+(defun array-array-mul (a b r &key (a-t nil) (b-t nil) a-slice b-slice)
   "Multiply two-dimensional arrays A and B and put the result in two-dimensional array R.
-Arrays A and/or B are transposed before multiplication if A-T and/or B-t is T, respectively."
+Arrays A and/or B are transposed before multiplication if A-T and/or B-t is T, respectively.
+The array slices A-SLICE and B-SLICE are applied after transposition but before multiplication.
+The array slice for R is computed from A-SLICE and B-SLICE."
   ;;TODO: speed this function up by specializing on A-T and B-T.
   ;;TODO: generalize for dimensions>2 (i.e. perform multiplication on dimensions 0 and 1, and repeat array multiplication for other dimensions (like matlab *))
-  (let ((arows (array-dimension a (if a-t 1 0)))
-	(acols (array-dimension a (if a-t 0 1)))
-	(brows (array-dimension b (if b-t 1 0)))
-	(bcols (array-dimension b (if b-t 0 1)))
-	(rrows (array-dimension r 0))
-	(rcols (array-dimension r 1)))
-    (assert (= arows rrows))
-    (assert (= bcols rcols))
-    (assert (= acols brows))
-    (loop for i below rrows do
-	 (loop for j below rcols do
+  (assert (= 2 (array-rank a) (array-rank b) (array-rank r)))
+  (when (null a-slice)
+    (setf a-slice (default-array-slice (permute (array-dimensions a) (if a-t '(1 0) '(0 1))))))
+  (when (null b-slice)
+    (setf b-slice (default-array-slice (permute (array-dimensions b) (if b-t '(1 0) '(0 1))))))
+  (let ((ai-slice (elt a-slice 0)) ;slicing is after transposition, so the dimensions don't depend on a-t.
+	(aj-slice (elt a-slice 1))
+	(bi-slice (elt b-slice 0))
+	(bj-slice (elt b-slice 1)))
+    ;;(prind ai-slice aj-slice bi-slice bj-slice)
+    (assert (= (array-dim-slice-count aj-slice) (array-dim-slice-count bi-slice)))
+    (assert (array-slice-valid a-slice (permute (array-dimensions a) (if a-t '(1 0) '(0 1)))))
+    (assert (array-slice-valid b-slice (permute (array-dimensions b) (if b-t '(1 0) '(0 1)))))
+    (let ((r-slice (list (first a-slice) (second b-slice))))
+      (assert (array-slice-valid r-slice (array-dimensions r))))
+    (macrolet ((do-dim-slice (variable dim-slice &body body)
+		 (let ((int (gensym)) (start (gensym)) (end (gensym)))
+		   `(loop for ,int on ,dim-slice by #'cddr
+		       for ,start = (car ,int) for ,end = (cadr ,int)
+		       do (loop for ,variable from ,start below ,end
+			     do ,@body)))))
+      (do-dim-slice
+	  i ai-slice
+	  (do-dim-slice
+	      j bj-slice
 	      (setf (aref r i j)
-		    (if a-t
-			(if b-t
-			    (loop for k below acols sum
-				 (* (aref a k i) (aref b j k)))
-			    (loop for k below acols sum
-				 (* (aref a k i) (aref b k j))))
-			(if b-t
-			    (loop for k below acols sum
-				 (* (aref a i k) (aref b j k)))
-			    (loop for k below acols sum
-				 (* (aref a i k) (aref b k j)))))))))
+		    (let ((sum 0))
+		      (array-dim-slice-iterate
+		       (list aj-slice bi-slice)
+		       (if a-t
+			   (if b-t
+			       (lambda (aj bi)
+				 (incf sum (* (aref a aj i) (aref b j bi))))
+			       (lambda (aj bi)
+				 (incf sum (* (aref a aj i) (aref b bi j)))))
+			   (if b-t
+			       (lambda (aj bi)
+				 (incf sum (* (aref a i aj) (aref b j bi))))
+			       (lambda (aj bi)
+				 (incf sum (* (aref a i aj) (aref b bi j)))))))
+		      sum))))))
   nil)
 
 (defun permute (l perm)
@@ -209,20 +314,6 @@ This function is slow, you should use array-walk or arrays-walk instead."
 	   (setf (row-major-aref r r-index) (row-major-aref array index))))
     r))
 
-(defun valid-array-slice (slice array-dimensions)
-  "Check if the list SLICE is a valid array slice of array ARRAY.
-Example: (valid-array-slice '((0 2) nil (0 0 3 4)) '(2 3 4))"
-  (when (not (= (length slice) (length array-dimensions)))
-    (return-from valid-array-slice (values nil 'dimensions)))
-  (mapc (lambda (slice dim)
-	  (let* ((slice-len (length slice)))
-	    (when (oddp slice-len)
-	      (return-from valid-array-slice (values nil 'oddp)))
-	    (when (not (apply #'<= 0 (append slice (list dim))))
-	      (return-from valid-array-slice (values nil 'order)))))
-	slice array-dimensions)
-  (values t t))
-
 (defun array-walk (dim perm slice function)
   "Call function FUNCTION with row-major-indices of an array with dimensions DIMS.
 PERM is the array's dimensions permutation, which is applied before iterating through all the dimensions of the array.
@@ -232,9 +323,11 @@ SLICE is the array slice which is applied before iterating but after permuting."
 		       (reduce #'* (nthcdr (1+ i) dim))))
 	 (dim-perm (permute dim perm))
 	 (dim-inc-perm (permute dim-inc perm)))
+    (when (null slice)
+      (setf slice (default-array-slice dim-perm)))
     (setf slice (mapcar (lambda (int dim-max) (if (consp int) int (list 0 dim-max)))
-			  slice dim-perm))
-    (assert (valid-array-slice slice dim-perm))
+			slice dim-perm))
+    (assert (array-slice-valid slice dim-perm))
     (labels ((rec (n-dim i-0 dim dim-inc slice)
 	       (if (< n-dim n-dims)
 		   (let ((i-inc (car dim-inc))
@@ -256,9 +349,10 @@ ARRAYS-DIM is the list of the arrays' array-dimensions.
 ARRAYS-PERM is the list of the arrays' dimension permutations, which is applied before iterating through all the dimensions of the arrays.
 The permuted array dimensions must all be equal.
 ARRAYS-SLICE is the array slice which is applied before iterating but after permuting (hence there's only one array slice not one for every array)."
+  ;; TODO: let slice be different (but compatible, i.e. same number of cols/rows/etc.) slices for all the arrays
   (assert (= (length arrays-dim) (length arrays-perm))) ;equal number of arrays
   (mapcar (lambda (dim perm)
-	    (assert (= (length dim) (length perm) (length (car arrays-dim)) (length slice))))
+	    (assert (= (length dim) (length perm) (length (car arrays-dim)) (length slice)) (dim perm (car arrays-dim) slice)))
 	  arrays-dim arrays-perm) ;equal number of dimensions
   (when (not (null arrays-dim))
     (let* ((n-arrays (length arrays-dim))
@@ -269,9 +363,12 @@ ARRAYS-SLICE is the array slice which is applied before iterating but after perm
 	   (array0-dim-perm (permute (car arrays-dim) (car arrays-perm)))
 	   (dims-inc-perm (mapcar (lambda (dim-inc perm) (permute dim-inc perm))
 				  dims-inc arrays-perm)))
+      (when (null slice)
+	(setf slice (default-array-slice (car arrays-dim))))
       (setf slice (mapcar (lambda (int dim-max) (if (consp int) int (list 0 dim-max)))
 			  slice array0-dim-perm))
-      (assert (valid-array-slice slice array0-dim-perm))
+      ;;(prind slice (car  arrays-dim))
+      (assert (array-slice-valid slice array0-dim-perm))
       (loop for dim in (cdr arrays-dim) for perm in (cdr arrays-perm) do
 	   (assert (equal array0-dim-perm (permute dim perm))))
       (labels ((inc-i0s (i0s-copy i-incs)
@@ -349,7 +446,7 @@ ARRAYS-SLICE is the array slice which is applied before iterating but after perm
     (when (null b-perm)
       (setf b-perm default-b-perm))
     (when (null slice)
-      (setf slice (loop for i below n-dim collect nil)))
+      (setf slice (default-array-slice a)))
     (arrays-walk (list (array-dimensions a) (array-dimensions b) (array-dimensions r))
 		 (list a-perm b-perm (loop for i below (length (array-dimensions r)) collect i))
 		 slice
@@ -461,6 +558,8 @@ A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices 
   (assert (equalp r #2A((16 22) (34 49))))
   (array-array-mul ta tb r :a-t t :b-t t)
   (assert (equalp r #2A((16 22) (34 49))))
+  (array-array-mul a b r :a-slice '((0 2) (0 1 2 3)) :b-slice '((0 1 2 3) (0 2)))
+  (assert (equalp r #2A((12 16) (24 34))))
   (array-array-fun a a #'* ra)
   (assert (equalp ra #2A((1 4 9) (16 25 36))))
   (array-array-fun ta a #'* ra :a-perm '(1 0))
@@ -526,6 +625,7 @@ Return the new array."
 (defun array-select-dimension (a dim selector)
   "Return a new array like array A but with index dimension DIM fixed at SELECTOR."
   ;; TODO: Generalize to all dimensions, and selector a vector with possible nil values (meaning give all values of this dimension)
+  ;; TODO: use an array-slice as input instead of DIM and SELECTOR
   ;; TODO: rename this function to asref (for "array-slice-reference")
   ;; TODO: write a setf-expander for this
   (let* ((a-dimensions (array-dimensions a))
