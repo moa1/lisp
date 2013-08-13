@@ -23,18 +23,52 @@ RESULT-TYPE is the resulting sequence type."
       ;;(print progns-with-separator)
       `(progn ,@progns-with-separator (terpri)))))
 
+;;(declaim (inline map-into-list)) this causes warnings: funcall with wrong parmeter number
 (defun map-into-list (result-list function &rest lists)
   "Same as map-into, but for lists instead of sequences.
-This function is faster than map-into, but slower than DO (which is possible when the number of LISTS is fixed)."
+This function is faster than map-into, but slower than DO (which is possible when the number of LISTS is fixed and FUNCTION is known)."
+  (declare (optimize (speed 3) (debug 0) (safety 0) (space 0) (compilation-speed 0))
+	   (type list result-list lists))
   ;; TODO: write a macro-expansion for this function which uses DO, if the number of lists is fixed.
-  (labels ((rec (res lists)
-	     (if (null res) (return-from rec))
-	     (loop for l in lists do
-		  (if (null l) (return-from rec)))
-	     (setf (car res)
-		   (apply function (mapcar #'car lists)))
-	     (rec (cdr res) (mapcar #'cdr lists))))
-    (rec result-list lists)))
+  (macrolet ((labels-rec-n (name n &body body)
+	       (let ((list-vars (loop for i below n collect (gensym))))
+		 `(labels ((,name (res ,@list-vars)
+			     (if (null res) (return-from ,name))
+			     ,@(mapcar (lambda (x) `(if (null ,x) (return-from ,name))) list-vars)
+			     (setf (car res)
+				   (funcall function ,@(mapcar (lambda (x) `(car ,x)) list-vars)))
+			     (,name (cdr res) ,@(mapcar (lambda (x) `(cdr ,x)) list-vars))))
+		    ,@body))))
+    (labels ((rec (res lists)
+	       (if (null res) (return-from rec))
+	       (loop for l in lists do
+		    (if (null l) (return-from rec)))
+	       (setf (car res)
+		     (apply function (mapcar #'car lists)))
+	       (do ((l lists (cdr l))) ((null l)) ;same as (mapcar #'cdr lists) but faster b/c in-place
+		 (setf (car l) (cdar l)))
+	       (rec (cdr res) lists)))
+      (labels-rec-n
+       rec1 1
+       (labels-rec-n
+	rec2 2
+	(labels-rec-n
+	 rec3 3
+	 (labels-rec-n
+	  rec4 4
+	  (case (length lists)
+	    (1 (rec1 result-list (first lists)))
+	    (2 (rec2 result-list (first lists) (second lists)))
+	    (3 (rec3 result-list (first lists) (second lists) (third lists)))
+	    (4 (rec4 result-list (first lists) (second lists) (third lists) (fourth lists)))
+	    (t (rec result-list (copy-list lists)))))))))))
+
+(defun test ()
+	   (declare (optimize (speed 3)))
+	   (let ((r '(1 2 3 4)))
+	     (map-into-list r (lambda (a b) (declare (type fixnum a b)) (the fixnum (+ a b)))
+			    r '(3 4 5 6))
+	     r))
 
 (defun random-gaussian-2 ()
   "Return two with mean 0 and standard deviation 1 normally distributed random variables."
@@ -85,7 +119,7 @@ This function is faster than map-into, but slower than DO (which is possible whe
 
 (defun array-slice-valid (slice array-dimensions)
   "Check if the list SLICE is a valid array slice of array ARRAY.
-Example: (array-slice-valid '((0 2) nil (0 0 3 4)) '(2 3 4))"
+Example: (array-slice-valid '((0 2) nil (0 0 3 4)) '(2 3 4)) is invalid because of the nil."
   (when (not (= (length slice) (length array-dimensions)))
     (return-from array-slice-valid (values nil 'dimensions)))
   (mapc (lambda (slice dim)
@@ -166,14 +200,18 @@ Example: (array-dim-slice-iterate '((0 1 3 4) (6 8)) '(10 1) (lambda (i j) (prin
 	 (dotimes (i min-length)
 	   (declare (type (and fixnum unsigned-byte) i min-length))
 	   (apply function poss-mul)
-	   (map-into-list poss-mul (lambda (p i)
-				     (declare (type (and fixnum unsigned-byte) p i))
-				     (the (and fixnum unsigned-byte) (+ p i)))
-			  poss-mul inc-list))
-	 (map-into poss (lambda (p)
-			  (declare (type (and fixnum unsigned-byte) p))
-			  (the (and fixnum unsigned-byte) (+ p min-length)))
-		   poss)
+;	   (map-into-list poss-mul (lambda (p i)
+;				     (declare (type (and fixnum unsigned-byte) p i))
+;				     (the (and fixnum unsigned-byte) (+ p i)))
+;			  poss-mul inc-list))
+	   (do ((p poss-mul (cdr p)) (i inc-list (cdr i))) ((null p))
+	     (let ((cp (car p)) (ci (car i)))
+	       (declare (type (and fixnum unsigned-byte) cp ci))
+	       (setf (car p) (the (and fixnum unsigned-byte) (+ cp ci))))))
+	 (map-into-list poss (lambda (p)
+			       (declare (type (and fixnum unsigned-byte) p))
+			       (the (and fixnum unsigned-byte) (+ p min-length)))
+			poss)
 	 ;; assign new poss/ends
 	 (loop for p on poss for e on ends for i on ints for p-m on poss-mul for inc of-type (and fixnum unsigned-byte) in inc-list
 	    ;; e.g. p=(2 1) e=(5 1) i=((3 4) nil)
