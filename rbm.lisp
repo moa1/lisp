@@ -570,19 +570,29 @@ A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices 
     (time (loop for i below 10 do
 	       (array-array-fun-slice a a #'+ r :a-perm '(0 1) :b-perm '(0 1) :a-slice '((0 500) (0 10)) :b-slice '((0 500) (0 10)))))))
 
-(defun array-array-fun (a b f r &key (a-perm nil) (b-perm nil))
+(defun array-array-fun (a b f r &key (a-perm nil) (b-perm nil) a-slice b-slice)
   "Return the result array R of applying each element in arrays A and B to the function F.
 A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices used to address elements of A and B are permuted with the function PERMUTE before calling function F."
   ;; TODO: generalize this function to allow computing with arbitrarily many arrays (f then takes arbitrarily many parameters)
   (let ((default-a-perm (loop for i below (length (array-dimensions a)) collect i))
-	(default-b-perm (loop for i below (length (array-dimensions b)) collect i)))
+	(default-b-perm (loop for i below (length (array-dimensions b)) collect i))
+	(default-a-slice (default-array-slice a))
+	(default-b-slice (default-array-slice b)))
     (when (null a-perm)
       (setf a-perm default-a-perm))
     (when (null b-perm)
       (setf b-perm default-b-perm))
+    (when (null a-slice)
+      (setf a-slice default-a-slice))
+    (when (null b-slice)
+      (setf b-slice default-b-slice))
     (if (and (equal a-perm default-a-perm) (equal b-perm default-b-perm))
-	(array-array-fun-noperm a b f r)
-	(array-array-fun-perm a b f r :a-perm a-perm :b-perm b-perm))))
+	(if (and (equal a-slice default-a-slice) (equal b-slice default-b-slice))
+	    (array-array-fun-noperm a b f r)
+	    (array-array-fun-slice a b f r :a-perm a-perm :b-perm b-perm :a-slice a-slice :b-slice b-slice))
+	(if (and (equal a-slice default-a-slice) (equal b-slice default-b-slice))
+	    (array-array-fun-perm a b f r :a-perm a-perm :b-perm b-perm)
+	    (array-array-fun-slice a b f r :a-perm a-perm :b-perm b-perm :a-slice a-slice :b-slice b-slice)))))
 
 ;; test array-array-mul and array-array-fun
 (let ((a #2A((1 2 3) (4 5 6)))
