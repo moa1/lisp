@@ -169,12 +169,12 @@ If they are nil, then all dimensions are checked."
 
 (deftype index () `(integer 0 ,array-dimension-limit))
 
-(defun array-dim-slice-iterate (dim-slice-list inc-list function)
+(defun array-dim-slice-iterate (dim-slice-list inc-list off-list function)
   "Iterate over all the dim-slices DIM-SLICE-LIST in parallel.
-Calls FUNCTION for each iteration with the list of the slice value multiplied by the respective factor in list INC-LIST.
+Calls FUNCTION for each iteration with the list of the slice value multiplied by the respective factor in list INC-LIST, and an offset added from the respective value in OFF-LIST.
 The iteration ends when the first DIM-SLICE is fully iterated through.
 Returns NIL.
-Example: (array-dim-slice-iterate '((0 1 3 4) (6 8)) '(10 1) (lambda (i j) (print (list i j)))) prints (0 6) (30 7)"
+Example: (array-dim-slice-iterate '((0 1 3 4) (6 8)) '(10 1) '(5 10) (lambda (i j) (print (list i j)))) prints (5 16) (35 17)"
   ;; This could also be implemented as a macro, but that would not give any speed or expressiveness advantage.
   ;;Iterate over the dim-slice-list using the variables.
   ;;Example: (array-dim-slice-iterate ((i '(0 1 3 4)) (j '(6 8))) (print (list i j)))
@@ -186,10 +186,10 @@ Example: (array-dim-slice-iterate '((0 1 3 4) (6 8)) '(10 1) (lambda (i j) (prin
   (let* ((poss (mapcar #'car dim-slice-list)) ;positions
 	 (ends (mapcar #'cadr dim-slice-list)) ;next ends
 	 (ints (mapcar #'cddr dim-slice-list)) ;next intervals
-	 (poss-mul (mapcar (lambda (x inc)
-			     (declare (type index x inc))
-			     (the index (* x inc)))
-			   poss inc-list))
+	 (poss-mul (mapcar (lambda (x inc off)
+			     (declare (type index x inc off))
+			     (the index (+ off (* x inc))))
+			   poss inc-list off-list))
 	 )
     (tagbody
      start
@@ -209,7 +209,7 @@ Example: (array-dim-slice-iterate '((0 1 3 4) (6 8)) '(10 1) (lambda (i j) (prin
 			       (the index (+ p min-length)))
 			poss)
 	 ;; assign new poss/ends
-	 (loop for p on poss for e on ends for i on ints for p-m on poss-mul for inc of-type index in inc-list
+	 (loop for p on poss for e on ends for i on ints for p-m on poss-mul for inc of-type index in inc-list for off of-type index in off-list
 	    ;; e.g. p=(2 1) e=(5 1) i=((3 4) nil)
 	    do (let ((pos (car p)) (end (car e)))
 		 (declare (type index pos end))
@@ -221,15 +221,15 @@ Example: (array-dim-slice-iterate '((0 1 3 4) (6 8)) '(10 1) (lambda (i j) (prin
 		   (setf pos (car p))
 		   (setf (car e) (cadar i))
 		   (setf (car i) (cddr (car i)))
-		   (setf (car p-m) (the index (* pos inc)))))))
+		   (setf (car p-m) (the index (+ off (* pos inc))))))))
        (go start)
      end))
   nil)
 
 (let (a)
-  (array-dim-slice-iterate '((0 1 3 4) (6 8)) '(1 2) (lambda (x y) (push (list x y) a)))
+  (array-dim-slice-iterate '((0 1 3 4) (6 8)) '(1 2) '(5 10) (lambda (x y) (push (list x y) a)))
   ;;(print a)
-  (assert (equal a '((3 14) (0 12)))))
+  (assert (equal a '((8 24) (5 22)))))
 
 (defun array-transpose (a r)
   "Put the transpose of 2-dimensional array A into array R."
@@ -278,7 +278,7 @@ The array slice for R is computed from A-SLICE and B-SLICE."
 	      (setf (aref r i j)
 		    (let ((sum 0))
 		      (array-dim-slice-iterate
-		       (list aj-slice bi-slice) '(1 1)
+		       (list aj-slice bi-slice) '(1 1) '(0 0)
 		       (if a-t
 			   (if b-t
 			       (lambda (aj bi)
@@ -361,7 +361,7 @@ PERM must contain all numbers between 0 and (1- (length perm)), and each number 
 		       (declare (type index sub dim))
 		       (if (or (< sub 0) (>= sub dim))
 			   (error "Subscript (~A) must be non-negative and smaller than dimension (~A)." sub dim)
-			   (rec (cdr d) (cdr s) (+ (the index (* dim i)) sub))))))))
+			   (rec (cdr d) (cdr s) (+ (the index (* dim i)) sub)))))))) ;doesn't optimize in sbcl
     (rec dims subscripts 0)))
 
 (defun array-permute (array perm)
@@ -445,16 +445,13 @@ ARRAYS-SLICE is the array slice which is applied before iterating but after perm
 		       (dim-slices (mapcar #'car slices)))
 		   (if (/= 1 n-dim)
 		       (array-dim-slice-iterate
-			dim-slices i-incs
+			dim-slices i-incs i0s
 			(lambda (&rest d-indices)
-			  (let ((i0s-copy (mapcar (lambda (a b) (declare (type index a b)) (the index (+ a b))) i0s d-indices)))
-			    (rec (1- n-dim) (cdr dims) i0s-copy (mapcar #'cdr i0s-incs) (mapcar #'cdr slices)))))
+			  (rec (1- n-dim) (cdr dims) d-indices (mapcar #'cdr i0s-incs) (mapcar #'cdr slices))))
 		       (array-dim-slice-iterate
-			dim-slices i-incs
-			(lambda (&rest d-indices)
-			  (let ((i0s-copy (mapcar (lambda (a b) (declare (type index a b)) (the index (+ a b))) i0s d-indices))) ;for some reason, this mapcar is faster than map-into-list
-			    (apply (the function function) i0s-copy))
-			  ))))))
+			dim-slices i-incs i0s
+			function
+			)))))
 	(rec n-dims array0-dim-perm (loop for i below n-arrays collect 0) dims-inc-perm arrays-slice)))))
 
 ;; test arrays-walk
