@@ -188,7 +188,7 @@ Example: (array-dim-slice-iterate '((0 1 3 4) (6 8)) '(10 1) '(5 10) (lambda (i 
 	 (ints (mapcar #'cddr dim-slice-list)) ;next intervals
 	 (poss-mul (mapcar (lambda (x inc off)
 			     (declare (type index x inc off))
-			     (the index (+ off (* x inc))))
+			     (the index (+ off (the index (* x inc)))))
 			   poss inc-list off-list))
 	 )
     (tagbody
@@ -221,7 +221,7 @@ Example: (array-dim-slice-iterate '((0 1 3 4) (6 8)) '(10 1) '(5 10) (lambda (i 
 		   (setf pos (car p))
 		   (setf (car e) (cadar i))
 		   (setf (car i) (cddr (car i)))
-		   (setf (car p-m) (the index (+ off (* pos inc))))))))
+		   (setf (car p-m) (the index (+ off (the index (* pos inc)))))))))
        (go start)
      end))
   nil)
@@ -333,6 +333,9 @@ PERM must contain all numbers between 0 and (1- (length perm)), and each number 
   (assert (equal (permutation-product a-1 a) id))
   (assert (equal (permutation-product a b) '(3 4 5 2 0 1)))
   (assert (equal (permutation-product (permutation-product a b) b-1) a)))
+
+(defun default-array-permutation (a)
+  (loop for i below (array-rank a) collect i))
 
 (defun row-major-index-to-subscripts (dims index)
   "Return the list of subscripts S so that (row-major-aref A index) == (apply #'aref A S) for all arrays A."
@@ -480,19 +483,18 @@ ARRAYS-SLICE is the array slice which is applied before iterating but after perm
 
 (defun array-array-fun-slice (a b f r &key a-perm b-perm a-slice b-slice)
   (declare (type (simple-array float *) a b r)) ;important float declaration
-  (let* ((n-dim (length (array-dimensions a)))
-	 (default-a-perm (loop for i below n-dim collect i))
-	 (default-b-perm (loop for i below n-dim collect i)))
+  (let* ((default-a-perm (default-array-permutation a))
+	 (default-b-perm (default-array-permutation b)))
     (when (null a-perm)
       (setf a-perm default-a-perm))
     (when (null b-perm)
       (setf b-perm default-b-perm))
     (when (null a-slice)
-      (setf a-slice (default-array-slice a)))
+      (setf a-slice (default-array-slice (array-dimensions a))))
     (when (null b-slice)
-      (setf b-slice (default-array-slice b)))
+      (setf b-slice (default-array-slice (array-dimensions b))))
     (arrays-walk (list (array-dimensions a) (array-dimensions b) (array-dimensions r))
-		 (list a-perm b-perm (loop for i below (length (array-dimensions r)) collect i))
+		 (list a-perm b-perm (default-array-permutation r))
 		 (list a-slice b-slice (default-array-slice (array-dimensions r)))
 		 (lambda (a-i b-i r-i)
 		   (declare (type index a-i b-i r-i)
@@ -574,10 +576,10 @@ A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices 
   "Return the result array R of applying each element in arrays A and B to the function F.
 A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices used to address elements of A and B are permuted with the function PERMUTE before calling function F."
   ;; TODO: generalize this function to allow computing with arbitrarily many arrays (f then takes arbitrarily many parameters)
-  (let ((default-a-perm (loop for i below (length (array-dimensions a)) collect i))
-	(default-b-perm (loop for i below (length (array-dimensions b)) collect i))
-	(default-a-slice (default-array-slice a))
-	(default-b-slice (default-array-slice b)))
+  (let ((default-a-perm (default-array-permutation a))
+	(default-b-perm (default-array-permutation b))
+	(default-a-slice (default-array-slice (array-dimensions a)))
+	(default-b-slice (default-array-slice (array-dimensions b))))
     (when (null a-perm)
       (setf a-perm default-a-perm))
     (when (null b-perm)
@@ -627,14 +629,44 @@ A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices 
   ;;(prind a)
   (assert (equalp a #3A(((0 24) (2 26) (4 28) (6 30)) ((8 32) (10 34) (12 36) (14 38)) ((16 40) (18 42) (20 44) (22 46))))))
 
-(defun array-fun (a f r &key (a-t nil))
+(defun array-fun-noperm (a f r)
   "Fill the array R by calling function F on each element of A."
-  ;;TODO: implement a-t
-  (assert (eq a-t nil))
   (let ((x (reduce #'* (array-dimensions a))))
     (loop for i below x do
 	 (setf (row-major-aref r i) (funcall f (row-major-aref a i)))))
   nil)
+
+(defun array-fun-perm-slice (a f r &key a-perm a-slice)
+  (declare (type (simple-array float *) a r)) ;important float declaration
+  (when (null a-perm)
+    (setf a-perm (default-array-permutation a)))
+  (when (null a-slice)
+    (setf a-slice (default-array-slice (array-dimensions a))))
+  (arrays-walk (list (array-dimensions a) (array-dimensions r))
+	       (list a-perm (default-array-permutation r))
+	       (list a-slice (default-array-slice (array-dimensions r)))
+	       (lambda (a-i r-i)
+		 (declare (type index a-i r-i)
+			  (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0)))
+		 (setf (row-major-aref r r-i)
+		       (funcall (the function f)
+				(row-major-aref a a-i)))))
+  nil)
+
+(defun array-fun (a f r &key a-perm a-slice)
+  (let ((default-a-perm (default-array-permutation a))
+	(default-a-slice (default-array-slice (array-dimensions a))))
+    (when (null a-perm)
+      (setf a-perm default-a-perm))
+    (when (null a-slice)
+      (setf a-slice default-a-slice))
+    (if (equal a-perm default-a-perm)
+	(if (equal a-slice default-a-slice)
+	    (array-fun-noperm a f r)
+	    (array-fun-perm-slice a f r :a-perm a-perm :a-slice a-slice))
+	(if (equal a-slice default-a-slice)
+	    (array-fun-perm-slice a f r :a-perm a-perm :a-slice a-slice)
+	    (array-fun-perm-slice a f r :a-perm a-perm :a-slice a-slice)))))
 
 (defun array-repeat (a new-before-dimensions new-after-dimensions)
   (let* ((a-dimensions (array-dimensions a))
