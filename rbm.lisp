@@ -167,6 +167,29 @@ If they are nil, then all dimensions are checked."
 (assert (array-slices-compatible '((0 1) nil (0 2 3 4)) '((1 2) nil (0 3))))
 (assert (not (array-slices-compatible '((0 1) nil (0 2 3 4)) '((1 2) nil (0 4)))))
 
+(defun array-dim-slices-merge (&rest dim-slices)
+  "Merge the dim-slices DIM-SLICES to one dim-slice."
+  (let* ((merged (apply #'append dim-slices))
+	 (grouped (do ((m merged (cddr m)) (res nil)) ((null m) res)
+		    (setf res (cons (list (car m) (cadr m)) res))))
+	 (sorted (sort grouped (lambda (a b) (let ((s1 (car a)) (s2 (car b)) (e1 (cadr a)) (e2 (cadr b)))
+					       (if (= s1 s2) (< e1 e2) (< s1 s2)))))))
+    ;;(prind sorted)
+    (do* ((l sorted) (start (caar l) (caar l)) (end (cadar l) (cadar l)) (res nil))
+	 ((null l) (nreverse res))
+      ;;(prind l start end)
+      (let ((l2 (do* ((l2 l (cdr l2)) (start2 (caar l2) (caar l2)) (end2 (cadar l2) (cadar l2)))
+		     ((> start2 end) l2)
+		  ;;(prind l2 start2 end2)
+		  (setf end (max end end2))
+		  (when (null (cdr l2)) (return nil)))))
+	(setf res (nconc (list end start) res))
+	;;(prind start end l l2)
+	(setf l l2)))))
+
+(assert (equal (array-dim-slices-merge '(0 5) '(3 4 3 10 18 25) '(3 7 10 15) '(30 30 30 31))
+	       '(0 15 18 25 30 31)))
+
 (deftype index () `(integer 0 ,array-dimension-limit))
 
 (defun array-dim-slice-iterate (dim-slice-list inc-list off-list function)
@@ -735,9 +758,10 @@ Return the new array."
   (h-biases nil :type (simple-array float (*)))
   ;; the neuron descriptors are dim-slices for the hidden or visible layer
   (h-binary nil :type list)
-  (h-gaussian nil :type list))
+  (h-gaussian nil :type list)
+  (h-linear nil :type list))
 
-(defun new-rbm (n-visible n-hidden &key h-binary h-gaussian)
+(defun new-rbm (n-visible n-hidden &key (h-binary 0) (h-gaussian 0) (h-linear 0))
   "Return a new randomly initialized restricted boltzmann machine.
 H-BINARY and H-GAUSSIAN must be non-negative integers adding up to N-HIDDEN."
   (let ((w (make-array (list n-visible n-hidden) :element-type 'float))
@@ -745,9 +769,10 @@ H-BINARY and H-GAUSSIAN must be non-negative integers adding up to N-HIDDEN."
 	(h-biases (make-array n-hidden :element-type 'float)))
     (declare (type (simple-array float) w v-biases h-biases))
     ;; check that the hidden neuron type ranges fit seamlessly
-    (assert (= n-hidden (apply #'+ (list h-binary h-gaussian))))
+    (assert (= n-hidden (apply #'+ (list h-binary h-gaussian h-linear))))
     (setf h-binary (list 0 h-binary))
     (setf h-gaussian (list (second h-binary) (+ (second h-binary) h-gaussian)))
+    (setf h-linear (list (second h-gaussian) (+ (second h-gaussian) h-linear)))
     ;; init weights and biases
     (loop for i below n-visible do
 	 (loop for j below n-hidden do
@@ -755,7 +780,7 @@ H-BINARY and H-GAUSSIAN must be non-negative integers adding up to N-HIDDEN."
     (loop for i below n-visible do (setf (aref v-biases i) 0.0))
     (loop for j below n-hidden do (setf (aref h-biases j) 0.0))
     (make-rbm :w w :v-biases v-biases :h-biases h-biases
-	      :h-binary h-binary :h-gaussian h-gaussian)))
+	      :h-binary h-binary :h-gaussian h-gaussian :h-linear h-linear)))
 
 (defun new-rbm-1 ()
   (make-rbm :w #2A((0.40 0.50 0.60)
@@ -799,7 +824,8 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 	 (h-biases-inc (make-array (list n-h) :initial-element 0.0 :element-type 'float))
 	 (cases-dim-slice (list 0 n-cases))
 	 (h-binary (rbm-h-binary rbm))
-	 (h-gaussian (rbm-h-gaussian rbm)))
+	 (h-gaussian (rbm-h-gaussian rbm))
+	 (h-linear (rbm-h-linear rbm)))
     ;; positive phase
     (array-array-mul data w pos-h-probs)
     (array-array-fun pos-h-probs (array-repeat h-biases (list n-cases) nil) #'+ pos-h-probs)
@@ -811,7 +837,8 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
     (setf pos-v-act (array-project data #'+ 0))
 ;;    (print (list "pos-prods" pos-prods "pos-h-act" pos-h-act "pos-v-act" pos-v-act))
     (array-fun pos-h-probs (lambda (x) (if (> x (random 1.0)) 1 0)) pos-h-states :a-slice (list cases-dim-slice h-binary))
-    (array-fun pos-h-probs (lambda (x) (+ x (random-gaussian))) pos-h-states :a-slice (list cases-dim-slice h-gaussian))
+    (array-fun pos-h-probs (lambda (x) (+ x (random-gaussian))) pos-h-states :a-slice (list cases-dim-slice (array-dim-slices-merge h-gaussian h-linear)))
+    (array-fun pos-h-states (lambda (x) (max 0 x)) pos-h-states :a-slice (list cases-dim-slice h-linear))
 ;;    (print (list "pos-h-states" pos-h-states))
     ;; negative phase
     (array-array-mul pos-h-states w neg-data :b-t t)
@@ -858,7 +885,7 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
       (array-array-fun w w-inc #'update-learn w-new)
       (array-array-fun v-biases v-biases-inc #'update-learn v-biases-new)
       (array-array-fun h-biases h-biases-inc #'update-learn h-biases-new)
-      (make-rbm :w w-new :v-biases v-biases-new :h-biases h-biases-new :h-binary (rbm-h-binary rbm) :h-gaussian (rbm-h-gaussian rbm)))))
+      (make-rbm :w w-new :v-biases v-biases-new :h-biases h-biases-new :h-binary (rbm-h-binary rbm) :h-gaussian (rbm-h-gaussian rbm) :h-linear (rbm-h-linear rbm)))))
 
 (defun rbm-learn (data rbm learn-rate momentum weight-cost max-iterations)
   (assert (> max-iterations 0))
@@ -880,26 +907,20 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 
 (defun rbm-h-from-v (data rbm)
   (let* ((w (rbm-w rbm))
-	 (v-biases (rbm-v-biases rbm))
 	 (h-biases (rbm-h-biases rbm))
-	 (n-v (length v-biases))
-	 (n-h (length h-biases))
+	 (n-h (rbm-n-h rbm))
 	 (n-cases (array-dimension data 0))
 	 (pos-h-probs (make-array (list n-cases n-h) :element-type 'float))
-	 (pos-prods (make-array (list n-v n-h) :element-type 'float))
-	 (pos-h-act nil)
-	 (pos-v-act nil)
-	 (pos-h-states (make-array (list n-cases n-h) :element-type 'float)))
+	 (cases-dim-slice (list 0 n-cases))
+	 (h-binary (rbm-h-binary rbm))
+	 (h-gaussian (rbm-h-gaussian rbm))
+	 (h-linear (rbm-h-linear rbm)))
+    (declare (ignore h-gaussian h-linear))
     ;; positive phase
     (array-array-mul data w pos-h-probs)
     (array-array-fun pos-h-probs (array-repeat h-biases (list n-cases) nil) #'+ pos-h-probs)
-    (array-fun pos-h-probs (lambda (x) (sigmoid x)) pos-h-probs)
-    (array-array-mul data pos-h-probs pos-prods :a-t t)
-    (setf pos-h-act (array-project pos-h-probs #'+ 0))
-    (setf pos-v-act (array-project data #'+ 0))
-;;    (array-fun pos-h-probs (lambda (x) (if (> x (random 1.0)) 1 0)) pos-h-states)
-    (array-fun pos-h-probs #'identity pos-h-states)
-    pos-h-states))
+    (array-fun pos-h-probs (lambda (x) (sigmoid x)) pos-h-probs :a-slice (list cases-dim-slice h-binary))
+    pos-h-probs))
 
 (defun rbm-v-from-h (pos-h-states rbm)
   (let* ((w (rbm-w rbm))
