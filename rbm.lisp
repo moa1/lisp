@@ -759,9 +759,10 @@ Return the new array."
   ;; the neuron descriptors are dim-slices for the hidden or visible layer
   (h-binary nil :type list)
   (h-gaussian nil :type list)
-  (h-linear nil :type list))
+  (h-linear nil :type list)
+  (h-errorfree nil :type list))
 
-(defun new-rbm (n-visible n-hidden &key (h-binary 0) (h-gaussian 0) (h-linear 0))
+(defun new-rbm (n-visible n-hidden &key (h-binary 0) (h-gaussian 0) (h-linear 0) (h-errorfree 0))
   "Return a new randomly initialized restricted boltzmann machine.
 H-BINARY and H-GAUSSIAN must be non-negative integers adding up to N-HIDDEN."
   (let ((w (make-array (list n-visible n-hidden) :element-type 'float))
@@ -769,10 +770,11 @@ H-BINARY and H-GAUSSIAN must be non-negative integers adding up to N-HIDDEN."
 	(h-biases (make-array n-hidden :element-type 'float)))
     (declare (type (simple-array float) w v-biases h-biases))
     ;; check that the hidden neuron type ranges fit seamlessly
-    (assert (= n-hidden (apply #'+ (list h-binary h-gaussian h-linear))))
+    (assert (= n-hidden (apply #'+ (list h-binary h-gaussian h-linear h-errorfree))))
     (setf h-binary (list 0 h-binary))
     (setf h-gaussian (list (second h-binary) (+ (second h-binary) h-gaussian)))
     (setf h-linear (list (second h-gaussian) (+ (second h-gaussian) h-linear)))
+    (setf h-errorfree (list (second h-linear) (+ (second h-linear) h-errorfree)))
     ;; init weights and biases
     (loop for i below n-visible do
 	 (loop for j below n-hidden do
@@ -780,7 +782,7 @@ H-BINARY and H-GAUSSIAN must be non-negative integers adding up to N-HIDDEN."
     (loop for i below n-visible do (setf (aref v-biases i) 0.0))
     (loop for j below n-hidden do (setf (aref h-biases j) 0.0))
     (make-rbm :w w :v-biases v-biases :h-biases h-biases
-	      :h-binary h-binary :h-gaussian h-gaussian :h-linear h-linear)))
+	      :h-binary h-binary :h-gaussian h-gaussian :h-linear h-linear :h-errorfree h-errorfree)))
 
 (defun new-rbm-1 ()
   (make-rbm :w #2A((0.40 0.50 0.60)
@@ -825,7 +827,8 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 	 (cases-dim-slice (list 0 n-cases))
 	 (h-binary (rbm-h-binary rbm))
 	 (h-gaussian (rbm-h-gaussian rbm))
-	 (h-linear (rbm-h-linear rbm)))
+	 (h-linear (rbm-h-linear rbm))
+	 (h-errorfree (rbm-h-errorfree rbm)))
     ;; positive phase
     (array-array-mul data w pos-h-probs)
     (array-array-fun pos-h-probs (array-repeat h-biases (list n-cases) nil) #'+ pos-h-probs)
@@ -839,6 +842,7 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
     (array-fun pos-h-probs (lambda (x) (if (> x (random 1.0)) 1 0)) pos-h-states :a-slice (list cases-dim-slice h-binary))
     (array-fun pos-h-probs (lambda (x) (+ x (random-gaussian))) pos-h-states :a-slice (list cases-dim-slice (array-dim-slices-merge h-gaussian h-linear)))
     (array-fun pos-h-states (lambda (x) (max 0 x)) pos-h-states :a-slice (list cases-dim-slice h-linear))
+    (array-fun pos-h-probs #'identity pos-h-states :a-slice (list cases-dim-slice h-errorfree))
 ;;    (print (list "pos-h-states" pos-h-states))
     ;; negative phase
     (array-array-mul pos-h-states w neg-data :b-t t)
@@ -863,15 +867,14 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 	  (err nil))
       (array-array-fun data neg-data (lambda (a b) (expt (- a b) 2)) err-array)
       (setf err (aref (array-project (array-project err-array #'+) #'+)))
-      (print (list "err" err))
-      )
-    (values w-inc v-biases-inc h-biases-inc)
-    ))
+      (print (list "err" err)))
+    (values w-inc v-biases-inc h-biases-inc)))
 
 (defparameter *data-imbalanced* #2A((1 1 0 0 0 0) (0 0 1 1 0 0) (0 0 0 0 1 1) (0 0 0 0 1 1)))
 (defparameter *data* #2A((1 1 0 0 0 0) (0 0 1 1 0 0) (0 0 0 0 1 1)))
 (defparameter *data900* (make-array '(3 900) :initial-element 0.0 :element-type 'float :initial-contents (list (nconc (loop for i below 300 collect 1) (loop for i below 600 collect 0)) (nconc (loop for i below 300 collect 0) (loop for i below 300 collect 1) (loop for i below 300 collect 0)) (nconc (loop for i below 600 collect 0) (loop for i below 300 collect 1)))))
 (defparameter *data2* #2A((0 0) (0 1) (1 0) (1 1)))
+(defparameter *data3* #2A((0 0 0) (0 0 1) (0 1 0) (0 1 1) (1 0 0) (1 0 1) (1 1 0) (1 1 1)))
 
 (defun rbm-update (rbm w-inc v-biases-inc h-biases-inc learn-rate)
   (let* ((w (rbm-w rbm))
@@ -885,7 +888,7 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
       (array-array-fun w w-inc #'update-learn w-new)
       (array-array-fun v-biases v-biases-inc #'update-learn v-biases-new)
       (array-array-fun h-biases h-biases-inc #'update-learn h-biases-new)
-      (make-rbm :w w-new :v-biases v-biases-new :h-biases h-biases-new :h-binary (rbm-h-binary rbm) :h-gaussian (rbm-h-gaussian rbm) :h-linear (rbm-h-linear rbm)))))
+      (make-rbm :w w-new :v-biases v-biases-new :h-biases h-biases-new :h-binary (rbm-h-binary rbm) :h-gaussian (rbm-h-gaussian rbm) :h-linear (rbm-h-linear rbm) :h-errorfree (rbm-h-errorfree rbm)))))
 
 (defun rbm-learn (data rbm learn-rate momentum weight-cost max-iterations)
   (assert (> max-iterations 0))
