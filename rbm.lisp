@@ -757,12 +757,15 @@ Return the new array."
   (v-biases nil :type (simple-array float (*)))
   (h-biases nil :type (simple-array float (*)))
   ;; the neuron descriptors are dim-slices for the hidden or visible layer
+  (v-binary nil :type list)
+  (v-gaussian nil :type list)
+  (v-linear nil :type list)
   (h-binary nil :type list)
   (h-gaussian nil :type list)
   (h-linear nil :type list)
   (h-noisefree nil :type list))
 
-(defun new-rbm (n-visible n-hidden &key (h-binary 0) (h-gaussian 0) (h-linear 0) (h-noisefree 0))
+(defun new-rbm (n-visible n-hidden &key (v-binary 0) (v-gaussian 0) (v-linear 0) (h-binary 0) (h-gaussian 0) (h-linear 0) (h-noisefree 0))
   "Return a new randomly initialized restricted boltzmann machine.
 H-BINARY and H-GAUSSIAN must be non-negative integers adding up to N-HIDDEN."
   (let ((w (make-array (list n-visible n-hidden) :element-type 'float))
@@ -770,6 +773,10 @@ H-BINARY and H-GAUSSIAN must be non-negative integers adding up to N-HIDDEN."
 	(h-biases (make-array n-hidden :element-type 'float)))
     (declare (type (simple-array float) w v-biases h-biases))
     ;; check that the hidden neuron type ranges fit seamlessly
+    (assert (= n-visible (apply #'+ (list v-binary v-gaussian v-linear))))
+    (setf v-binary (list 0 v-binary))
+    (setf v-gaussian (list (second v-binary) (+ (second v-binary) v-gaussian)))
+    (setf v-linear (list (second v-gaussian) (+ (second v-gaussian) v-linear)))
     (assert (= n-hidden (apply #'+ (list h-binary h-gaussian h-linear h-noisefree))))
     (setf h-binary (list 0 h-binary))
     (setf h-gaussian (list (second h-binary) (+ (second h-binary) h-gaussian)))
@@ -782,6 +789,7 @@ H-BINARY and H-GAUSSIAN must be non-negative integers adding up to N-HIDDEN."
     (loop for i below n-visible do (setf (aref v-biases i) 0.0))
     (loop for j below n-hidden do (setf (aref h-biases j) 0.0))
     (make-rbm :w w :v-biases v-biases :h-biases h-biases
+	      :v-binary v-binary :v-gaussian v-gaussian :v-linear v-linear
 	      :h-binary h-binary :h-gaussian h-gaussian :h-linear h-linear :h-noisefree h-noisefree)))
 
 (defun new-rbm-1 ()
@@ -825,6 +833,9 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 	 (v-biases-inc (make-array (list n-v) :initial-element 0.0 :element-type 'float))
 	 (h-biases-inc (make-array (list n-h) :initial-element 0.0 :element-type 'float))
 	 (cases-dim-slice (list 0 n-cases))
+	 (v-binary (rbm-v-binary rbm))
+	 ;;(v-gaussian (rbm-v-gaussian rbm))
+	 (v-linear (rbm-v-linear rbm))
 	 (h-binary (rbm-h-binary rbm))
 	 (h-gaussian (rbm-h-gaussian rbm))
 	 (h-linear (rbm-h-linear rbm))
@@ -847,7 +858,8 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
     ;; negative phase
     (array-array-mul pos-h-states w neg-data :b-t t)
     (array-array-fun neg-data (array-repeat v-biases (list n-cases) nil) #'+ neg-data)
-    (array-fun neg-data (lambda (x) (sigmoid x)) neg-data)
+    (array-fun neg-data (lambda (x) (sigmoid x)) neg-data :a-slice (list cases-dim-slice v-binary))
+    (array-fun neg-data (lambda (x) (max x 0)) neg-data :a-slice (list cases-dim-slice v-linear))
 ;;    (print (list "neg-data" neg-data))
     (array-array-mul neg-data w neg-h-probs)
     (array-array-fun neg-h-probs (array-repeat h-biases (list n-cases) nil) #'+ neg-h-probs)
@@ -875,6 +887,7 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 (defparameter *data900* (make-array '(3 900) :initial-element 0.0 :element-type 'float :initial-contents (list (nconc (loop for i below 300 collect 1) (loop for i below 600 collect 0)) (nconc (loop for i below 300 collect 0) (loop for i below 300 collect 1) (loop for i below 300 collect 0)) (nconc (loop for i below 600 collect 0) (loop for i below 300 collect 1)))))
 (defparameter *data2* #2A((0 0) (0 1) (1 0) (1 1)))
 (defparameter *data3* #2A((0 0 0) (0 0 1) (0 1 0) (0 1 1) (1 0 0) (1 0 1) (1 1 0) (1 1 1)))
+(defparameter *data-l* #2A((2 2 0 0) (3 3 0 0) (4 4 0 0) (0 0 2 2) (0 0 3 3) (0 0 4 4)))
 
 (defun rbm-update (rbm w-inc v-biases-inc h-biases-inc learn-rate)
   (let* ((w (rbm-w rbm))
@@ -888,7 +901,9 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
       (array-array-fun w w-inc #'update-learn w-new)
       (array-array-fun v-biases v-biases-inc #'update-learn v-biases-new)
       (array-array-fun h-biases h-biases-inc #'update-learn h-biases-new)
-      (make-rbm :w w-new :v-biases v-biases-new :h-biases h-biases-new :h-binary (rbm-h-binary rbm) :h-gaussian (rbm-h-gaussian rbm) :h-linear (rbm-h-linear rbm) :h-noisefree (rbm-h-noisefree rbm)))))
+      (make-rbm :w w-new :v-biases v-biases-new :h-biases h-biases-new
+		:v-binary (rbm-v-binary rbm) :v-gaussian (rbm-v-gaussian rbm) :v-linear (rbm-v-linear rbm)
+		:h-binary (rbm-h-binary rbm) :h-gaussian (rbm-h-gaussian rbm) :h-linear (rbm-h-linear rbm) :h-noisefree (rbm-h-noisefree rbm)))))
 
 (defun rbm-learn (data rbm learn-rate momentum weight-cost max-iterations)
   (assert (> max-iterations 0))
@@ -930,11 +945,15 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 	 (n-v (rbm-n-v rbm))
 	 (v-biases (rbm-v-biases rbm))
 	 (n-cases (array-dimension pos-h-states 0))
-	 (neg-data (make-array (list n-cases n-v) :element-type 'float)))
+	 (neg-data (make-array (list n-cases n-v) :element-type 'float))
+	 (cases-dim-slice (list 0 n-cases))
+	 (v-binary (rbm-v-binary rbm))
+	 (v-linear (rbm-v-linear rbm)))
     ;; negative phase
     (array-array-mul pos-h-states w neg-data :b-t t)
     (array-array-fun neg-data (array-repeat v-biases (list n-cases) nil) #'+ neg-data)
-    (array-fun neg-data (lambda (x) (sigmoid x)) neg-data)
+    (array-fun neg-data (lambda (x) (sigmoid x)) neg-data :a-slice (list cases-dim-slice v-binary))
+    (array-fun neg-data (lambda (x) (max x 0)) neg-data :a-slice (list cases-dim-slice v-linear))
     neg-data))
 
 (defun h-from-v (v w)
