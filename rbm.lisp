@@ -14,10 +14,10 @@ RESULT-TYPE is the resulting sequence type."
 		 (if (keywordp (car rest))
 		     (let ((text (format nil "~A=" (car rest)))
 			   (value (cadr rest)))
-		       (rec (cddr rest) (cons `((princ ,text) (princ ,value)) pairs)))
+		       (rec (cddr rest) (cons `((princ ,text) (prin1 ,value)) pairs)))
 		     (let ((text (format nil "~A=" (car rest)))
 			   (value (car rest)))
-		       (rec (cdr rest) (cons `((princ ,text) (princ ,value)) pairs)))))))
+		       (rec (cdr rest) (cons `((princ ,text) (prin1 ,value)) pairs)))))))
     (let* ((progns (rec rest nil))
 	   (progns-with-separator (join 'list progns '((princ " ")))))
       ;;(print progns-with-separator)
@@ -752,6 +752,35 @@ Return the new array."
 	  (setf (row-major-aref r r-index) (row-major-aref a a-index)))))
     r))
 
+(defun compile-map-into-array (arrays-dim arrays-perm arrays-slice arrays-type)
+  "Returns a compiled function MAP-INTO-ARRAY, which is to be called with simple-arrays RES, a function F, and simple-arrays A, ..., Z.
+MAP-INTO-ARRAY walks in parallel over the elements of RES, A, ..., Z specified by ARRAYS-DIM, ARRAYS-PERM and ARRAYS-SLICE, and calls F with the elements.
+The value returned by F is stored in the element of RES.
+ARRAYS-DIM is a list containing the array-dimensions of RES, A, ..., Z.
+ARRAYS-PERM is a list of permutation lists of RES, A, ..., Z.
+ARRAYS-SLICE is a list of array slices of RES, A, ..., Z.
+ARRAYS-TYPE is the element-type of RES, A, ..., Z."
+  (let* ((arrays-sym (loop for i in arrays-dim collect (gensym)))
+	 (res-sym (car arrays-sym))
+	 (rest-arrays-sym (cdr arrays-sym))
+	 (f-sym (gensym))
+	 (body nil))
+    (arrays-walk arrays-dim arrays-perm arrays-slice
+		 (lambda (&rest indices)
+		   (let ((res-index (car indices))
+			 (rest-indices (cdr indices)))
+		     (setf body (cons `(setf (row-major-aref ,res-sym ,res-index)
+					     (funcall (the function ,f-sym) ,@(loop for a in rest-arrays-sym for i in rest-indices collect `(row-major-aref ,a ,i))))
+				      body)))))
+    (let ((map-into-array `(lambda (,res-sym ,f-sym ,@rest-arrays-sym)
+			     (declare (type (simple-array ,(car arrays-type) ,(car arrays-dim)) ,res-sym)
+				      ,@(loop for dim in (cdr arrays-dim) for sym in rest-arrays-sym for type in (cdr arrays-type) collect
+					     `(type (simple-array ,type ,dim) ,sym))
+				      (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0)))
+			     ,@body)))
+      ;;(print body)
+      (compile nil map-into-array))))
+
 (defstruct rbm
   (w nil :type (simple-array float (* *)))
   (v-biases nil :type (simple-array float (*)))
@@ -870,8 +899,7 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
     (setf neg-v-act (array-project neg-data #'+ 0))
 ;;    (print (list "neg-prods" neg-prods "neg-h-act" neg-h-act "neg-v-act" neg-v-act))
     ;; learning
-    (array-array-fun pos-prods neg-prods #'- w-inc)
-    (array-fun w-inc (lambda (x) (/ x n-cases))  w-inc)
+    (array-array-fun pos-prods neg-prods (lambda (a b) (/ (- a b) n-cases)) w-inc)
     (array-array-fun pos-v-act neg-v-act (lambda (a b) (/ (- a b) n-cases)) v-biases-inc)
     (array-array-fun pos-h-act neg-h-act (lambda (a b) (/ (- a b) n-cases)) h-biases-inc)
 ;;    (print (list "w-inc" w-inc "v-biases-inc" v-biases-inc "h-biases-inc" h-biases-inc))
@@ -976,6 +1004,11 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 		       (progn 
 ;;				   (format t "i:~A j:~A wij:~A~%" i j (elt wi j))
 			 (* hj (elt wi j))))))))
+
+;;(require :sb-sprof)
+;;(defun do-sprof-rbm-learn (max-iterations)
+;;  (sb-sprof:with-profiling (:max-samples 1000 :report :flat :loop nil :reset t)
+;;    (rbm-learn *data* (new-rbm 6 3 :h-binary 3) 1 .9 .0002 max-iterations))
 
 (defun activate (n)
   (loop for p in n collect
