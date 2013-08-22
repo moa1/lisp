@@ -1,0 +1,11 @@
+; provokes an sbcl bug in 1.0.57, but not in 1.0.40.0.debian
+(/ 1.0 0.0)
+
+; maybe this provokes an sbcl bug in version 1.0.40.0.debian if put in a function with declare like the one below.
+; this is the same as the git id c7a04e19198f4f295865ca4fbf9b7b0598dd8b91 bug.
+(let ((a '(0 (0 6))))
+  (declare (optimize (speed 3) (debug 0) (safety 0) (space 0) (compilation-speed 0)))
+  (mapcar #'car a))
+
+git id c7a04e19198f4f295865ca4fbf9b7b0598dd8b91 provokes sbcl bug when calling rbm-learn:
+(defparameter *rbm* (rbm-learn *data* (new-rbm 6 2 :v-binary 6 :h-binary 2) .1 0 .0002 1000))

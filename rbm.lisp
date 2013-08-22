@@ -14,10 +14,10 @@ RESULT-TYPE is the resulting sequence type."
 		 (if (keywordp (car rest))
 		     (let ((text (format nil "~A=" (car rest)))
 			   (value (cadr rest)))
-		       (rec (cddr rest) (cons `((princ ,text) (princ ,value)) pairs)))
+		       (rec (cddr rest) (cons `((princ ,text) (prin1 ,value)) pairs)))
 		     (let ((text (format nil "~A=" (car rest)))
 			   (value (car rest)))
-		       (rec (cdr rest) (cons `((princ ,text) (princ ,value)) pairs)))))))
+		       (rec (cdr rest) (cons `((princ ,text) (prin1 ,value)) pairs)))))))
     (let* ((progns (rec rest nil))
 	   (progns-with-separator (join 'list progns '((princ " ")))))
       ;;(print progns-with-separator)
@@ -169,6 +169,7 @@ If they are nil, then all dimensions are checked."
 
 (defun array-dim-slices-merge (&rest dim-slices)
   "Merge the dim-slices DIM-SLICES to one dim-slice."
+  ;; TODO: use merge instead of sort
   (let* ((merged (apply #'append dim-slices))
 	 (grouped (do ((m merged (cddr m)) (res nil)) ((null m) res)
 		    (setf res (cons (list (car m) (cadr m)) res))))
@@ -272,7 +273,7 @@ Arrays A and/or B are transposed before multiplication if A-T and/or B-t is T, r
 The array slices A-SLICE and B-SLICE are applied after transposition but before multiplication.
 The array slice for R is computed from A-SLICE and B-SLICE."
   ;;TODO: speed this function up by specializing on A-T and B-T.
-  ;;TODO: generalize for dimensions>2 (i.e. perform multiplication on dimensions 0 and 1, and repeat array multiplication for other dimensions (like matlab *))
+  ;;TODO: generalize for dimensions>2 (is there something like matrix multiplication for tensors?)
   (assert (= 2 (array-rank a) (array-rank b) (array-rank r)))
   (when (null a-slice)
     (setf a-slice (default-array-slice (permute (array-dimensions a) (if a-t '(1 0) '(0 1))))))
@@ -316,20 +317,22 @@ The array slice for R is computed from A-SLICE and B-SLICE."
 		      sum))))))
   nil)
 
-(defun permute (l perm)
-  "Permute list L with permutation list PERM.
-PERM contains, for each element at position x, the dimension number that is mapped to dimension x.
-PERM must contain all numbers between 0 and (1- (length perm)), and each number only once."
-  (loop for p in perm collect
-       (elt l p)))
+(defun permute (sequence permutation)
+  "Permute sequence SEQUENCE with permutation list PERMUTATION and return the resulting list.
+PERMUTATION contains, for each element at position x, the dimension number that is mapped to dimension x.
+PERMUTATION must contain all numbers between 0 and (1- (length perm)), and each number only once."
+  ;; TODO: make it possible to specify the resulting type (vector or list).
+  (loop for p in permutation collect
+       (elt sequence p)))
 
-(defun reverse-permute (l perm)
-  "Reverse permute list L with permutation list PERM.
-Reverse permute means, that for each element e at position x in PERM, the dimension x of L is mapped to position e in the result.
-PERM must contain all numbers between 0 and (1- (length perm)), and each number only once."
-  (let ((res (loop for i below (length perm) collect -1)))
-    (loop for e in perm for x below (length perm) do
-	 (setf (elt res e) (elt l x)))
+(defun reverse-permute (sequence permutation)
+  "Reverse-permute sequence SEQUENCE with permutation list PERMUTATION and return the resulting list.
+Reverse-permute means, that for each element e at position x in PERMUTATION, the dimension x of SEQUENCE is mapped to position e in the result.
+PERMUTATION must contain all numbers between 0 and (1- (length PERMUTATION)), and each number only once."
+  ;; TODO: make it possible to specify the resulting type (vector or list.)
+  (let ((res (loop for i below (length permutation) collect -1)))
+    (loop for e in permutation for x below (length permutation) do
+	 (setf (elt res e) (elt sequence x)))
     res))
 
 (defun inverse-permutation (perm)
@@ -404,23 +407,24 @@ This function is slow, you should use array-walk or arrays-walk instead."
 	   (setf (row-major-aref r r-index) (row-major-aref array index))))
     r))
 
+(defun array-row-major-multipliers (dimensions)
+  "Return, for each dimension, the multiplier in row-major indices necessary to increase this dimension by one subscript."
+  (loop for i below (length dimensions) collect
+       (reduce #'* (nthcdr (1+ i) dimensions))))
+
 (defun array-walk (dim perm slice function)
-  "Call function FUNCTION with row-major-indices of an array with dimensions DIMS.
+  "Call function FUNCTION with a row-major-index for all elements of an array specified by DIM, PERM, and SLICE.
+DIM are the array-dimensions of the array.
 PERM is the array's dimensions permutation, which is applied before iterating through all the dimensions of the array.
 SLICE is the array slice which is applied before iterating but after permuting."
   (let* ((n-dims (length dim))
-	 (dim-inc (loop for i below n-dims collect
-		       (reduce #'* (nthcdr (1+ i) dim))))
+	 (dim-mul (array-row-major-multipliers dim))
 	 (dim-perm (permute dim perm))
-	 (dim-inc-perm (permute dim-inc perm)))
-    (when (null slice)
-      (setf slice (default-array-slice dim-perm)))
-    (setf slice (mapcar (lambda (int dim-max) (if (consp int) int (list 0 dim-max)))
-			slice dim-perm))
+	 (dim-mul-perm (permute dim-mul perm)))
     (assert (array-slice-valid slice dim-perm))
-    (labels ((rec (n-dim i-0 dim dim-inc slice)
+    (labels ((rec (n-dim i-0 dim dim-mul slice)
 	       (if (< n-dim n-dims)
-		   (let ((i-inc (car dim-inc))
+		   (let ((i-mul (car dim-mul))
 			 (d-slice (car slice)))
 		     (do* ((interval d-slice (cddr interval))
 			   (start (car interval) (car interval))
@@ -428,57 +432,53 @@ SLICE is the array slice which is applied before iterating but after permuting."
 			  ((null interval))
 		       (loop
 			  for d from start below end
-			  for i from (+ i-0 (* start i-inc)) by i-inc do
-			    (rec (1+ n-dim) i (cdr dim) (cdr dim-inc) (cdr slice)))))
+			  for i from (+ i-0 (* start i-mul)) by i-mul do
+			    (rec (1+ n-dim) i (cdr dim) (cdr dim-mul) (cdr slice)))))
 		   (funcall function i-0))))
-      (rec 0 0 dim-perm dim-inc-perm slice))))
+      (rec 0 0 dim-perm dim-mul-perm slice))))
+
+(defun array-slices-iterate (n-dim i0s i0s-muls slices function)
+  "Iterate over all the slices in parallel.
+Returns NIL.
+N-DIM is the current dimension number (counting down), and 1 is the last.
+I0S is the list of start indices.
+I0S-MULS is the list of list of i0 (index) multipliers.
+SLICES is the list of array slices."
+  (declare (optimize (speed 3) (debug 0) (safety 0) (space 0) (compilation-speed 0))
+	   (type index n-dim)
+	   (type cons i0s i0s-muls slices))
+  ;;(prind n-dim i0s i0s-muls slices)
+  (let ((i-muls (mapcar #'car i0s-muls))
+	(dim-slices (mapcar #'car slices)))
+    (if (> n-dim 0)
+	(array-dim-slice-iterate
+	 dim-slices i-muls i0s
+	 (lambda (&rest d-indices)
+	   (array-slices-iterate (1- n-dim) d-indices (mapcar #'cdr i0s-muls) (mapcar #'cdr slices) function)))
+	(array-dim-slice-iterate dim-slices i-muls i0s function))))
 
 (defun arrays-walk (arrays-dim arrays-perm arrays-slice function)
   "Call function FUNCTION with row-major-indices of arrays.
 ARRAYS-DIM is the list of the arrays' array-dimensions.
 ARRAYS-PERM is the list of the arrays' dimension permutations, which is applied before iterating through all the dimensions of the arrays.
 The permuted array dimensions must all be equal.
-ARRAYS-SLICE is the array slice which is applied before iterating but after permuting (one different slice for every array is possible, but they must be compatible)."
-  ;; TODO: let slice be different (but compatible, i.e. same number of cols/rows/etc.) slices for all the arrays
-  (assert (= (length arrays-dim) (length arrays-perm) (length arrays-slice))) ;equal number of arrays
-  (mapcar (lambda (dim perm slice)
-	    (assert (= (length dim) (length perm) (length slice) (length (car arrays-dim)) (length slice)) (dim perm (car arrays-dim))))
-	  arrays-dim arrays-perm arrays-slice) ;equal number of dimensions
+ARRAYS-SLICE is the list of array slices which is applied before iterating but after permuting (one different slice for every array is possible, but they must be compatible)."
   (when (not (null arrays-dim))
-    (let* ((n-arrays (length arrays-dim))
-	   (n-dims (length (car arrays-dim)))
-	   (dims-inc (loop for dim in arrays-dim collect
-			  (loop for i below n-dims collect
-			       (reduce #'* (nthcdr (1+ i) dim)))))
-	   (array0-dim-perm (permute (car arrays-dim) (car arrays-perm)))
-	   (dims-inc-perm (mapcar (lambda (dim-inc perm) (permute dim-inc perm))
-				  dims-inc arrays-perm)))
-      ;;(prind slice (car  arrays-dim))
-      (loop for dim in (cdr arrays-dim) for perm in (cdr arrays-perm) for slice in arrays-slice do
-	   (assert (equal array0-dim-perm (permute dim perm)))
-	   (assert (array-slice-valid slice array0-dim-perm)))
-      (labels ((rec (n-dim dims i0s i0s-incs slices)
-		 ;; N-DIM is the current dimension number
-		 ;; DIMS is the list of permuted dimension sizes, which is equal for all arrays
-		 ;; I0S is the list of start indices
-		 ;; I0S-INCS is the list of list of i0 (index) increments
-		 ;; SLICES is the list of array slices
-		 (declare (optimize (speed 3) (debug 0) (safety 0) (space 0) (compilation-speed 0))
-			  (type index n-dim)
-			  (type cons dims i0s i0s-incs slices))
-		 ;;(prind n-dim dims i0s i0s-incs slices)
-		 (let ((i-incs (mapcar #'car i0s-incs))
-		       (dim-slices (mapcar #'car slices)))
-		   (if (/= 1 n-dim)
-		       (array-dim-slice-iterate
-			dim-slices i-incs i0s
-			(lambda (&rest d-indices)
-			  (rec (1- n-dim) (cdr dims) d-indices (mapcar #'cdr i0s-incs) (mapcar #'cdr slices))))
-		       (array-dim-slice-iterate
-			dim-slices i-incs i0s
-			function
-			)))))
-	(rec n-dims array0-dim-perm (loop for i below n-arrays collect 0) dims-inc-perm arrays-slice)))))
+    (let ((n-arrays (length arrays-dim))
+	  (rank (length (car arrays-dim))))
+      (assert (= n-arrays (length arrays-perm) (length arrays-slice))) ;equal number of arrays
+      (mapc (lambda (dim perm slice)
+	      (assert (= rank (length dim) (length perm) (length slice) (length slice)) (dim perm (car arrays-dim))))
+	    arrays-dim arrays-perm arrays-slice) ;equal number of dimensions
+      (let* ((dims-mul (mapcar (lambda (dim) (array-row-major-multipliers dim)) arrays-dim))
+	     (array0-dim-perm (permute (car arrays-dim) (car arrays-perm)))
+	     (dims-mul-perm (mapcar (lambda (dim-mul perm) (permute dim-mul perm))
+				    dims-mul arrays-perm)))
+	;;(prind slice (car  arrays-dim))
+	(loop for dim in (cdr arrays-dim) for perm in (cdr arrays-perm) for slice in arrays-slice do
+	     ;; Note that the number of dimensions doesn't have to be equal, only the sliced ranges must be compatible.
+	     (assert (array-slice-valid slice array0-dim-perm)))
+	(array-slices-iterate (1- rank) (loop for i below n-arrays collect 0) dims-mul-perm arrays-slice function)))))
 
 ;; test arrays-walk
 (let* ((a #3A(((0 1 2 3) (4 5 6 7) (8 9 10 11)) ((12 13 14 15) (16 17 18 19) (20 21 22 23))))
@@ -494,7 +494,7 @@ ARRAYS-SLICE is the array slice which is applied before iterating but after perm
        (r2 nil))
   (array-walk a-dim a-perm a-slice (lambda (x) (push x r1)))
   (arrays-walk (list a-dim) (list a-perm) (list a-slice) (lambda (x) (push x r2)))
-  (assert (equal r1 r2) nil "~A ~A" r1 r2) ;array-walk and arrays-walk walk the same order
+  (assert (equal r1 r2) nil "~A ~A" r1 r2) ;array-walk and arrays-walk walk in the same order
   (arrays-walk (list a-dim b-dim) (list a-perm b-perm) (list a-slice a-slice)
 	       (lambda (x y) (setf (row-major-aref b y) (row-major-aref a x))))
   (assert (equalp b (array-permute a a-perm))) ;permutation works the same way as array-permute does
@@ -504,28 +504,18 @@ ARRAYS-SLICE is the array slice which is applied before iterating but after perm
   (assert (equal r1 r2) nil "~A ~A" r1 r2) ;array-walk and arrays-walk walk the same order with slice
   )
 
-(defun array-array-fun-slice (a b f r &key a-perm b-perm a-slice b-slice)
+(defun array-array-fun-perm-slice (a b f r a-perm b-perm r-perm a-slice b-slice r-slice)
   (declare (type (simple-array float *) a b r)) ;important float declaration
-  (let* ((default-a-perm (default-array-permutation a))
-	 (default-b-perm (default-array-permutation b)))
-    (when (null a-perm)
-      (setf a-perm default-a-perm))
-    (when (null b-perm)
-      (setf b-perm default-b-perm))
-    (when (null a-slice)
-      (setf a-slice (default-array-slice (array-dimensions a))))
-    (when (null b-slice)
-      (setf b-slice (default-array-slice (array-dimensions b))))
-    (arrays-walk (list (array-dimensions a) (array-dimensions b) (array-dimensions r))
-		 (list a-perm b-perm (default-array-permutation r))
-		 (list a-slice b-slice (default-array-slice (array-dimensions r)))
-		 (lambda (a-i b-i r-i)
-		   (declare (type index a-i b-i r-i)
-			    (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0)))
-		   (setf (row-major-aref r r-i)
-			 (funcall (the function f)
-				  (row-major-aref a a-i)
-				  (row-major-aref b b-i))))))
+  (arrays-walk (list (array-dimensions a) (array-dimensions b) (array-dimensions r))
+	       (list a-perm b-perm r-perm)
+	       (list a-slice b-slice r-slice)
+	       (lambda (a-i b-i r-i)
+		 (declare (type index a-i b-i r-i)
+			  (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0)))
+		 (setf (row-major-aref r r-i)
+		       (funcall (the function f)
+				(row-major-aref a a-i)
+				(row-major-aref b b-i)))))
   nil)
 
 (defun array-array-fun-noperm (a b f r)
@@ -543,7 +533,7 @@ ARRAYS-SLICE is the array slice which is applied before iterating but after perm
 					       (row-major-aref b i)))))
   nil)
 
-(defun array-array-fun-perm (a b f r &key a-perm b-perm)
+(defun array-array-fun-perm (a b f r a-perm b-perm)
   "Return the result array R of applying each element in arrays A and B to the function F.
 A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices used to address elements of A and B are permuted with the function PERMUTE before calling function F."
   (declare (type cons a-perm b-perm)
@@ -591,33 +581,39 @@ A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices 
     (time (loop for i below 10 do
 	       (array-array-fun-noperm a a #'+ r)))
     (time (loop for i below 10 do
-	       (array-array-fun-perm a a #'+ r :a-perm '(0 1) :b-perm '(0 1))))
+	       (array-array-fun-perm a a #'+ r '(0 1) '(0 1))))
     (time (loop for i below 10 do
-	       (array-array-fun-slice a a #'+ r :a-perm '(0 1) :b-perm '(0 1) :a-slice '((0 500) (0 10)) :b-slice '((0 500) (0 10)))))))
+	       (array-array-fun-perm-slice a a #'+ r '(0 1) '(0 1) '(0 1) '((0 500) (0 10)) '((0 500) (0 10)) '((0 500) (0 10)))))))
 
-(defun array-array-fun (a b f r &key (a-perm nil) (b-perm nil) a-slice b-slice)
+(defun array-array-fun (a b f r &key a-perm b-perm r-perm a-slice b-slice r-slice)
   "Return the result array R of applying each element in arrays A and B to the function F.
 A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices used to address elements of A and B are permuted with the function PERMUTE before calling function F."
   ;; TODO: generalize this function to allow computing with arbitrarily many arrays (f then takes arbitrarily many parameters)
-  (let ((default-a-perm (default-array-permutation a))
-	(default-b-perm (default-array-permutation b))
-	(default-a-slice (default-array-slice (array-dimensions a)))
-	(default-b-slice (default-array-slice (array-dimensions b))))
+  (let* ((default-a-perm (default-array-permutation a))
+	 (default-b-perm (default-array-permutation b))
+	 (default-r-perm (default-array-permutation r))
+	 (default-a-slice (permute (default-array-slice (array-dimensions a)) a-perm))
+	 (default-b-slice (permute (default-array-slice (array-dimensions b)) b-perm))
+	 (default-r-slice (permute (default-array-slice (array-dimensions r)) r-perm)))
     (when (null a-perm)
       (setf a-perm default-a-perm))
     (when (null b-perm)
       (setf b-perm default-b-perm))
+    (when (null r-perm)
+      (setf r-perm default-r-perm))
     (when (null a-slice)
       (setf a-slice default-a-slice))
     (when (null b-slice)
       (setf b-slice default-b-slice))
+    (when (null r-slice)
+      (setf r-slice default-r-slice))
     (if (and (equal a-perm default-a-perm) (equal b-perm default-b-perm))
 	(if (and (equal a-slice default-a-slice) (equal b-slice default-b-slice))
 	    (array-array-fun-noperm a b f r)
-	    (array-array-fun-slice a b f r :a-perm a-perm :b-perm b-perm :a-slice a-slice :b-slice b-slice))
+	    (array-array-fun-perm-slice a b f r a-perm b-perm r-perm a-slice b-slice r-slice))
 	(if (and (equal a-slice default-a-slice) (equal b-slice default-b-slice))
-	    (array-array-fun-perm a b f r :a-perm a-perm :b-perm b-perm)
-	    (array-array-fun-slice a b f r :a-perm a-perm :b-perm b-perm :a-slice a-slice :b-slice b-slice)))))
+	    (array-array-fun-perm a b f r a-perm b-perm)
+	    (array-array-fun-perm-slice a b f r a-perm b-perm r-perm a-slice b-slice r-slice)))))
 
 ;; test array-array-mul and array-array-fun
 (let ((a #2A((1 2 3) (4 5 6)))
@@ -646,11 +642,15 @@ A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices 
   (array-array-fun a ta #'* ra :b-perm '(1 0))
   (assert (equalp ra #2A((1 4 9) (16 25 36))))
   (array-array-fun ta ta #'* ra :a-perm '(1 0) :b-perm '(1 0))
-  (assert (equalp ra #2A((1 4 9) (16 25 36)))))
+  (assert (equalp ra #2A((1 4 9) (16 25 36))))
+  ;; some tests for :a-slice, :b-slice and :r-slice are missing here
+  )
 (let ((a (make-array '(3 4 2))))
-  (array-array-fun #1=#3A(((0 1 2 3) (4 5 6 7) (8 9 10 11)) ((12 13 14 15) (16 17 18 19) (20 21 22 23))) #1# #'+ a :a-perm '(2 0 1) :b-perm '(2 0 1))
-  ;;(prind a)
-  (assert (equalp a #3A(((0 24) (2 26) (4 28) (6 30)) ((8 32) (10 34) (12 36) (14 38)) ((16 40) (18 42) (20 44) (22 46))))))
+  (array-array-fun #1=#3A(((0 1 2 3) (4 5 6 7) (8 9 10 11)) ((12 13 14 15) (16 17 18 19) (20 21 22 23))) #1# #'+ a :a-perm '(2 0 1) :b-perm '(2 0 1) :r-perm '(2 0 1))
+  (assert (equalp a #3A(((0 24) (2 26) (4 28) (6 30)) ((8 32) (10 34) (12 36) (14 38)) ((16 40) (18 42) (20 44) (22 46)))))
+  (setf a #3A(((0 0 0 0) (0 0 0 0) (0 0 0 0)) ((0 0 0 0) (0 0 0 0) (0 0 0 0))))
+  (array-array-fun #2=#3A(((0 1 2 3) (4 5 6 7) (8 9 10 11)) ((12 13 14 15) (16 17 18 19) (20 21 22 23))) #2# #'+ a :a-perm '(2 0 1) :b-perm '(2 0 1) :r-perm '(2 0 1) :a-slice #3='((0 4) (0 2) (1 2)) :b-slice #3# :r-slice #3#)
+  (assert (equalp a #3A(((0 0 0 0) (8 10 12 14) (0 0 0 0)) ((0 0 0 0) (32 34 36 38) (0 0 0 0))))))
 
 (defun array-fun-noperm (a f r)
   "Fill the array R by calling function F on each element of A."
@@ -659,15 +659,11 @@ A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices 
 	 (setf (row-major-aref r i) (funcall f (row-major-aref a i)))))
   nil)
 
-(defun array-fun-perm-slice (a f r &key a-perm a-slice)
+(defun array-fun-perm-slice (a f r a-perm r-perm a-slice r-slice)
   (declare (type (simple-array float *) a r)) ;important float declaration
-  (when (null a-perm)
-    (setf a-perm (default-array-permutation a)))
-  (when (null a-slice)
-    (setf a-slice (default-array-slice (array-dimensions a))))
   (arrays-walk (list (array-dimensions a) (array-dimensions r))
-	       (list a-perm (default-array-permutation r))
-	       (list a-slice (default-array-slice (array-dimensions r)))
+	       (list a-perm r-perm)
+	       (list a-slice r-slice)
 	       (lambda (a-i r-i)
 		 (declare (type index a-i r-i)
 			  (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0)))
@@ -676,20 +672,18 @@ A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices 
 				(row-major-aref a a-i)))))
   nil)
 
-(defun array-fun (a f r &key a-perm a-slice)
+(defun array-fun (a f r &key (a-perm (default-array-permutation a)) (r-perm (default-array-permutation r)) (a-slice (permute (default-array-slice (array-dimensions a)) a-perm)) (r-slice (permute (default-array-slice (array-dimensions r)) r-perm)))
   (let ((default-a-perm (default-array-permutation a))
-	(default-a-slice (default-array-slice (array-dimensions a))))
-    (when (null a-perm)
-      (setf a-perm default-a-perm))
-    (when (null a-slice)
-      (setf a-slice default-a-slice))
-    (if (equal a-perm default-a-perm)
-	(if (equal a-slice default-a-slice)
+	(default-r-perm (default-array-permutation r))
+	(default-a-slice (permute (default-array-slice (array-dimensions a)) a-perm))
+	(default-r-slice (permute (default-array-slice (array-dimensions r)) r-perm)))
+    (if (and (equal a-perm default-a-perm) (equal r-perm default-r-perm))
+	(if (and (equal a-slice default-a-slice) (equal r-slice default-r-slice))
 	    (array-fun-noperm a f r)
-	    (array-fun-perm-slice a f r :a-perm a-perm :a-slice a-slice))
-	(if (equal a-slice default-a-slice)
-	    (array-fun-perm-slice a f r :a-perm a-perm :a-slice a-slice)
-	    (array-fun-perm-slice a f r :a-perm a-perm :a-slice a-slice)))))
+	    (array-fun-perm-slice a f r a-perm r-perm a-slice r-slice))
+	(if (and (equal a-slice default-a-slice) (equal r-slice default-r-slice))
+	    (array-fun-perm-slice a f r a-perm r-perm a-slice r-slice)
+	    (array-fun-perm-slice a f r a-perm r-perm a-slice r-slice)))))
 
 (defun array-repeat (a new-before-dimensions new-after-dimensions)
   (let* ((a-dimensions (array-dimensions a))
@@ -706,11 +700,13 @@ A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices 
 	  (setf index (1+ index)))))
     r))
 
-(defun array-project (a f &optional (dim 0))
+(defun array-project-noperm (a f &key (dim 0))
   "Project the array A along axis DIM.
 This produces a new array, where DIM is omitted.
 For all elements of the new array, call function F with pairwise items (like reduce) along the DIM axis and store the result in the element.
 Return the new array."
+  (declare (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0))
+	   (type (simple-array float) a))
   (let* ((a-dimensions (array-dimensions a))
 	 (before-dimensions (subseq a-dimensions 0 dim))
 	 (after-dimensions (subseq a-dimensions (1+ dim)))
@@ -720,20 +716,96 @@ Return the new array."
 	 (y (elt a-dimensions dim))
 	 (z (apply #'* after-dimensions))
 	 (index-r 0))
+    (declare (type index x y z index-r))
     (dotimes (i x)
+      (declare (type index i))
       (dotimes (k z)
-	(let* ((index (+ (* i y z) k))
+	(declare (type index k))
+	(let* ((index (+ (the index (* (the index (* i y)) z)) k))
 	       (res (row-major-aref a index)))
+	  (declare (type index index))
 	  (loop for j from 1 below y do
 	       (setf index (+ index z))
-	       (setf res (funcall f res (row-major-aref a index))))
+	       (setf res (funcall (the function f) res (row-major-aref a index))))
 	  (setf (row-major-aref r index-r) res))
 	(setf index-r (1+ index-r))))
     r))
 
+(defun array-project-perm-slice (a f &key (a-perm (default-array-permutation a)) (a-slice (permute (default-array-slice (array-dimensions a)) a-perm)) (dim 0))
+  "Project the array A along a dimension.
+This produces a new array with one dimension less than A has.
+Before producing the new array, the array dimension permutation A-PERM is applied to A and, after that, the array slice A-SLICE.
+The new array is like A except that after the modifications by A-PERM dimension DIM is omitted.
+For all elements of the new array, call function F with pairwise items (like reduce) along the DIM axis and store the result in the element.
+Return the new array."
+  ;; The idea of this function is to permute the dimensions of A so that the dimension DIM to be omitted is coming last, and when walking the permuted array to use the consecutive elements of the last dimension in calling F.
+  (declare (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0))
+	   (type (simple-array float) a))
+  (flet ((perm-last (perm dim)
+	   "Modify PERM so that dimension DIM is mapped last."
+	   (declare (type list perm))
+	   ;; example: original perm=(2 0 1) and dim=1, i.e. dimension 0 is to be put last, so the result is (2 1 0).
+	   (append (subseq perm 0 dim) (subseq perm (1+ dim)) (list (elt perm dim))))
+	 (inc-dim-slice-by-1 (slice)
+	   (let* ((start1 (car slice))
+		  (end1 (cadr slice))
+		  (rest (cddr slice))
+		  (new-start1 (1+ start1)))
+	     (declare (type index start1 end1 new-start1))
+	     (if (>= new-start1 end1)
+		 rest
+		 (cons new-start1 (cons end1 rest))))))
+    (let* ((a-rank (array-rank a))
+	   (a-dim (array-dimensions a))
+	   (new-perm (perm-last a-perm dim))
+	   (a-dim-perm (permute a-dim new-perm))
+	   (r-dim (butlast a-dim-perm))
+	   (r (make-array r-dim :element-type (array-element-type a)))
+	   (r-dim-mul (array-row-major-multipliers r-dim))
+	   (slice-perm (permute (reverse-permute a-slice a-perm) new-perm))
+	   (slice-perm-butlast (butlast slice-perm))
+	   (r-slice slice-perm-butlast)
+	   (last-dim-slice (car (last slice-perm)))
+	   (last-dim-slice-inc-by-1 (inc-dim-slice-by-1 last-dim-slice))
+	   (last-dim-slice-orig-start (car last-dim-slice))
+	   (a-dim-mul (array-row-major-multipliers a-dim))
+	   (a-dim-mul-perm (permute a-dim-mul new-perm))
+	   (a-last-dim-mul (car (last a-dim-mul-perm))))
+      (declare (type index a-last-dim-mul last-dim-slice-orig-start))
+      ;;(prind r-dim r a-rank)
+      ;;(prind r-dim-mul a-dim-mul-perm slice-perm)
+      (when (= a-rank 1)
+	(setf r-dim-mul (list 0))
+	(setf slice-perm-butlast slice-perm)
+	(setf r-slice '((0 1))))
+      (array-slices-iterate
+       (- a-rank 2) (list 0 0) (list r-dim-mul a-dim-mul-perm) (list r-slice slice-perm-butlast)
+       (lambda (r-index a-index)
+	 (declare (type index r-index a-index))
+	 (let* ((a-last-dim-start-index (the index (+ a-index (the index (* a-last-dim-mul last-dim-slice-orig-start)))))
+		(res (row-major-aref a a-last-dim-start-index)))
+	   (array-dim-slice-iterate (list last-dim-slice-inc-by-1) (list a-last-dim-mul) (list a-index)
+				    (lambda (a-index)
+				      (setf res (funcall (the function f) res (row-major-aref a a-index)))))
+	   (setf (row-major-aref r r-index) res))))
+      r)))
+
+(let* ((a #3A(((0 1 2 3) (4 5 6 7) (8 9 10 11)) ((12 13 14 15) (16 17 18 19) (20 21 22 23))))
+       (b #(0 1 2 3 4 5)))
+  (assert (equalp (array-project-perm-slice b #'+) #0A15))
+  (assert (equalp (array-project-perm-slice a #'+) (array-project-noperm a #'+)))
+  (assert (equalp (array-project-perm-slice a #'+ :dim 1) (array-project-noperm a #'+ :dim 1)))
+  (assert (equalp (array-project-perm-slice a #'+ :a-perm '(2 0 1)) (array-project-noperm (array-permute a '(2 0 1)) #'+)))
+  (assert (equalp (array-project-perm-slice a #'+ :a-perm '(2 0 1) :a-slice '((2 4) (0 2) (0 3)) :dim 0) #2A((5 13 21) (29 37 45)))) ;slice doesn't affect output zeroes because they are projected away
+  (assert (equalp (array-project-perm-slice a #'+ :a-perm '(2 0 1) :a-slice '((2 4) (0 2) (1 2)) :dim 1) #2A((0 0 0) (0 0 0) (0 24 0) (0 26 0)))))
+
+(defun array-project (a f &key (a-perm (default-array-permutation a)) (a-slice (permute (default-array-slice (array-dimensions a)) a-perm)) (dim 0))
+  ;; array-project-perm-slice is always faster than array-project-noperm
+  (array-project-perm-slice a f :a-perm a-perm :a-slice a-slice :dim dim))
+
 (defun array-select-dimension (a dim selector)
   "Return a new array like array A but with index dimension DIM fixed at SELECTOR."
-  ;; TODO: Generalize to all dimensions, and selector a vector with possible nil values (meaning give all values of this dimension)
+  ;; TODO: Generalize to all dimensions, and selector a vector with possible nil values (meaning to give all values of this dimension)
   ;; TODO: use an array-slice as input instead of DIM and SELECTOR
   ;; TODO: rename this function to asref (for "array-slice-reference")
   ;; TODO: write a setf-expander for this
@@ -752,37 +824,93 @@ Return the new array."
 	  (setf (row-major-aref r r-index) (row-major-aref a a-index)))))
     r))
 
+(defun compile-map-into-array (arrays-dim arrays-perm arrays-slice arrays-type)
+  "Returns a compiled function MAP-INTO-ARRAY, which is to be called with simple-arrays RES, a function F, and simple-arrays A, ..., Z.
+MAP-INTO-ARRAY walks in parallel over the elements of RES, A, ..., Z specified by ARRAYS-DIM, ARRAYS-PERM and ARRAYS-SLICE, and calls F with the elements.
+The value returned by F is stored in the element of RES.
+ARRAYS-DIM is a list containing the array-dimensions of RES, A, ..., Z.
+ARRAYS-PERM is a list of permutation lists of RES, A, ..., Z.
+ARRAYS-SLICE is a list of array slices of RES, A, ..., Z.
+ARRAYS-TYPE is the element-type of RES, A, ..., Z."
+  (let* ((arrays-sym (loop for i in arrays-dim collect (gensym)))
+	 (res-sym (car arrays-sym))
+	 (rest-arrays-sym (cdr arrays-sym))
+	 (f-sym (gensym))
+	 (body nil))
+    (arrays-walk arrays-dim arrays-perm arrays-slice
+		 (lambda (&rest indices)
+		   (let ((res-index (car indices))
+			 (rest-indices (cdr indices)))
+		     (setf body (cons `(setf (row-major-aref ,res-sym ,res-index)
+					     (funcall (the function ,f-sym) ,@(loop for a in rest-arrays-sym for i in rest-indices collect `(row-major-aref ,a ,i))))
+				      body)))))
+    (let ((map-into-array `(lambda (,res-sym ,f-sym ,@rest-arrays-sym)
+			     (declare (type (simple-array ,(car arrays-type) ,(car arrays-dim)) ,res-sym)
+				      ,@(loop for dim in (cdr arrays-dim) for sym in rest-arrays-sym for type in (cdr arrays-type) collect
+					     `(type (simple-array ,type ,dim) ,sym))
+				      (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0)))
+			     ,@body)))
+      ;;(print body)
+      (compile nil map-into-array))))
+
 (defstruct rbm
   (w nil :type (simple-array float (* *)))
   (v-biases nil :type (simple-array float (*)))
   (h-biases nil :type (simple-array float (*)))
   ;; the neuron descriptors are dim-slices for the hidden or visible layer
+  (v-binary nil :type list)
+  (v-gaussian nil :type list)
+  (v-linear nil :type list)
   (h-binary nil :type list)
+  (h-softmax nil :type list) ;dim-slice (4 6 6 9) means two softmax units with 2 and 3 alternative states
+  (h-softmax-merged nil :type list) ;the h-softmax dim-slices merged
   (h-gaussian nil :type list)
   (h-linear nil :type list)
-  (h-errorfree nil :type list))
+  (h-noisefree nil :type list))
 
-(defun new-rbm (n-visible n-hidden &key (h-binary 0) (h-gaussian 0) (h-linear 0) (h-errorfree 0))
+(defun new-rbm (n-visible n-hidden &key (v-binary 0) (v-gaussian 0) (v-linear 0) (h-binary 0) (h-softmax nil) (h-gaussian 0) (h-linear 0) (h-noisefree 0))
   "Return a new randomly initialized restricted boltzmann machine.
-H-BINARY and H-GAUSSIAN must be non-negative integers adding up to N-HIDDEN."
+V-BINARY, V-GAUSSIAN, V-LINEAR must be non-negative integers adding up to N-VISIBLE.
+H-BINARY, H-GAUSSIAN, H-LINEAR, H-NOISEFREE must be non-negative integers.
+H-SOFTMAX must be a list of integers bigger than 2 each specifying the number of alternative states that each softmax unit can have.
+The sum of the numbers of the H-parameters plus the sum of the list of numbers of H-SOFTMAX must add up to N-HIDDEN."
   (let ((w (make-array (list n-visible n-hidden) :element-type 'float))
 	(v-biases (make-array n-visible :element-type 'float))
 	(h-biases (make-array n-hidden :element-type 'float)))
     (declare (type (simple-array float) w v-biases h-biases))
-    ;; check that the hidden neuron type ranges fit seamlessly
-    (assert (= n-hidden (apply #'+ (list h-binary h-gaussian h-linear h-errorfree))))
-    (setf h-binary (list 0 h-binary))
-    (setf h-gaussian (list (second h-binary) (+ (second h-binary) h-gaussian)))
-    (setf h-linear (list (second h-gaussian) (+ (second h-gaussian) h-linear)))
-    (setf h-errorfree (list (second h-linear) (+ (second h-linear) h-errorfree)))
-    ;; init weights and biases
-    (loop for i below n-visible do
-	 (loop for j below n-hidden do
-	      (setf (aref w i j) (* (random-gaussian) .01))))
-    (loop for i below n-visible do (setf (aref v-biases i) 0.0))
-    (loop for j below n-hidden do (setf (aref h-biases j) 0.0))
-    (make-rbm :w w :v-biases v-biases :h-biases h-biases
-	      :h-binary h-binary :h-gaussian h-gaussian :h-linear h-linear :h-errorfree h-errorfree)))
+    (let (h-softmax-merged)
+      (flet ((dim-slice-for-softmax (start softmax-list)
+	       (if (null softmax-list)
+		   (list start start)
+		   ;; n-states=1 means the unit is always on, n-states=2 is equivalent to a binary unit
+		   (apply #'append (loop for n-states in softmax-list collect
+					(let* ((end (+ start n-states))
+					       (range (list start end)))
+					  (setf start end)
+					  range))))))
+	;; check that the visible and hidden neuron type ranges fit seamlessly
+	(assert (= n-visible (apply #'+ (list v-binary v-gaussian v-linear))))
+	(setf v-binary (list 0 v-binary))
+	(setf v-gaussian (list (second v-binary) (+ (second v-binary) v-gaussian)))
+	(setf v-linear (list (second v-gaussian) (+ (second v-gaussian) v-linear)))
+	(assert (= n-hidden (+ (apply #'+ (list h-binary h-gaussian h-linear h-noisefree))
+			       (apply #'+ h-softmax))))
+	(setf h-binary (list 0 h-binary))
+	(setf h-softmax (dim-slice-for-softmax (second h-binary) h-softmax))
+	(setf h-softmax-merged (array-dim-slices-merge h-softmax))
+	(assert (= 2 (length h-softmax-merged)))
+	(setf h-gaussian (list (second h-softmax-merged) (+ (second h-softmax-merged) h-gaussian)))
+	(setf h-linear (list (second h-gaussian) (+ (second h-gaussian) h-linear)))
+	(setf h-noisefree (list (second h-linear) (+ (second h-linear) h-noisefree)))
+	;; init weights and biases
+	(loop for i below n-visible do
+	     (loop for j below n-hidden do
+		  (setf (aref w i j) (* (random-gaussian) .01))))
+	(loop for i below n-visible do (setf (aref v-biases i) 0.0))
+	(loop for j below n-hidden do (setf (aref h-biases j) 0.0))
+	(make-rbm :w w :v-biases v-biases :h-biases h-biases
+		  :v-binary v-binary :v-gaussian v-gaussian :v-linear v-linear
+		  :h-binary h-binary :h-softmax h-softmax :h-softmax-merged h-softmax-merged :h-gaussian h-gaussian :h-linear h-linear :h-noisefree h-noisefree)))))
 
 (defun new-rbm-1 ()
   (make-rbm :w #2A((0.40 0.50 0.60)
@@ -825,56 +953,96 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 	 (v-biases-inc (make-array (list n-v) :initial-element 0.0 :element-type 'float))
 	 (h-biases-inc (make-array (list n-h) :initial-element 0.0 :element-type 'float))
 	 (cases-dim-slice (list 0 n-cases))
+	 (v-binary (rbm-v-binary rbm))
+	 ;;(v-gaussian (rbm-v-gaussian rbm))
+	 (v-linear (rbm-v-linear rbm))
 	 (h-binary (rbm-h-binary rbm))
+	 (h-softmax (rbm-h-softmax rbm))
+	 (h-softmax-merged (rbm-h-softmax-merged rbm))
 	 (h-gaussian (rbm-h-gaussian rbm))
 	 (h-linear (rbm-h-linear rbm))
-	 (h-errorfree (rbm-h-errorfree rbm)))
-    ;; positive phase
-    (array-array-mul data w pos-h-probs)
-    (array-array-fun pos-h-probs (array-repeat h-biases (list n-cases) nil) #'+ pos-h-probs)
-;;    (print (list "prod" pos-h-probs "a-slice" (list cases-dim-slice h-binary)))
-    (array-fun pos-h-probs (lambda (x) (sigmoid x)) pos-h-probs :a-slice (list cases-dim-slice h-binary))
-;;    (print (list "pos-h-probs" pos-h-probs))
-    (array-array-mul data pos-h-probs pos-prods :a-t t)
-    (setf pos-h-act (array-project pos-h-probs #'+ 0))
-    (setf pos-v-act (array-project data #'+ 0))
-;;    (print (list "pos-prods" pos-prods "pos-h-act" pos-h-act "pos-v-act" pos-v-act))
-    (array-fun pos-h-probs (lambda (x) (if (> x (random 1.0)) 1 0)) pos-h-states :a-slice (list cases-dim-slice h-binary))
-    (array-fun pos-h-probs (lambda (x) (+ x (random-gaussian))) pos-h-states :a-slice (list cases-dim-slice (array-dim-slices-merge h-gaussian h-linear)))
-    (array-fun pos-h-states (lambda (x) (max 0 x)) pos-h-states :a-slice (list cases-dim-slice h-linear))
-    (array-fun pos-h-probs #'identity pos-h-states :a-slice (list cases-dim-slice h-errorfree))
-;;    (print (list "pos-h-states" pos-h-states))
-    ;; negative phase
-    (array-array-mul pos-h-states w neg-data :b-t t)
-    (array-array-fun neg-data (array-repeat v-biases (list n-cases) nil) #'+ neg-data)
-    (array-fun neg-data (lambda (x) (sigmoid x)) neg-data)
-;;    (print (list "neg-data" neg-data))
-    (array-array-mul neg-data w neg-h-probs)
-    (array-array-fun neg-h-probs (array-repeat h-biases (list n-cases) nil) #'+ neg-h-probs)
-    (array-fun neg-h-probs (lambda (x) (sigmoid x)) neg-h-probs :a-slice (list cases-dim-slice h-binary))
-;;    (print (list "neg-h-probs" neg-h-probs))
-    (array-array-mul neg-data neg-h-probs neg-prods :a-t t)
-    (setf neg-h-act (array-project neg-h-probs #'+ 0))
-    (setf neg-v-act (array-project neg-data #'+ 0))
-;;    (print (list "neg-prods" neg-prods "neg-h-act" neg-h-act "neg-v-act" neg-v-act))
-    ;; learning
-    (array-array-fun pos-prods neg-prods #'- w-inc)
-    (array-fun w-inc (lambda (x) (/ x n-cases))  w-inc)
-    (array-array-fun pos-v-act neg-v-act (lambda (a b) (/ (- a b) n-cases)) v-biases-inc)
-    (array-array-fun pos-h-act neg-h-act (lambda (a b) (/ (- a b) n-cases)) h-biases-inc)
-;;    (print (list "w-inc" w-inc "v-biases-inc" v-biases-inc "h-biases-inc" h-biases-inc))
-    (let ((err-array (make-array (list n-cases n-v) :element-type 'float))
-	  (err nil))
-      (array-array-fun data neg-data (lambda (a b) (expt (- a b) 2)) err-array)
-      (setf err (aref (array-project (array-project err-array #'+) #'+)))
-      (print (list "err" err)))
-    (values w-inc v-biases-inc h-biases-inc)))
+	 (h-gaussian-linear-merged (array-dim-slices-merge h-gaussian h-linear))
+	 (h-noisefree (rbm-h-noisefree rbm)))
+    (flet ((calc-h-softmax-probs (h-probs)
+	     (array-fun h-probs #'exp h-probs :a-slice (list cases-dim-slice h-softmax-merged) :r-slice (list cases-dim-slice h-softmax-merged))
+	     (loop for l on h-softmax by #'cddr
+		for start = (car l)
+		for end = (cadr l) do
+		;;(prind l start end)
+		  (let* ((h-probs-softmax-dim-slice (list cases-dim-slice (list start end)))
+			 (sum (array-project h-probs #'+ :a-slice h-probs-softmax-dim-slice :dim 1))
+			 (n-softmax (- end start))
+			 (sum-repeated (array-repeat sum nil (list n-softmax)))
+			 (sum-repeated-softmax-dim-slice (list cases-dim-slice (list 0 n-softmax))))
+		    ;;(prind h-probs-softmax-dim-slice sum-repeated-softmax-dim-slice)
+		    ;;(prind h-probs sum-repeated)
+		    (array-array-fun h-probs sum-repeated (lambda (x sum) (/ x sum)) h-probs :a-slice h-probs-softmax-dim-slice :b-slice sum-repeated-softmax-dim-slice :r-slice h-probs-softmax-dim-slice))))
+	   (calc-h-softmax-states (h-probs h-states)
+	     (loop for case below n-cases for case-dim-slice = (list case (1+ case)) do
+		  (loop for l on h-softmax by #'cddr
+		     for start = (car l)
+		     for end = (cadr l) do
+		       (let ((r (random 1.0))
+			     (sum 0.0)
+			     (softmax-dim-slice (list case-dim-slice (list start end))))
+			 (array-fun h-probs (lambda (x)
+						  (let ((from sum) (to (+ sum x)))
+						    ;;(prind from r to)
+						    (setf sum to)
+						    (if (and (<= from r) (< r to)) 1 0)))
+				    h-states :a-slice softmax-dim-slice :r-slice softmax-dim-slice)
+			 ;;(prind pos-h-probs r pos-h-states)
+			 )))))
+      ;; positive phase
+      (array-array-mul data w pos-h-probs)
+      (array-array-fun pos-h-probs (array-repeat h-biases (list n-cases) nil) #'+ pos-h-probs)
+;;      (print (list "prod" pos-h-probs "a-slice" (list cases-dim-slice h-binary)))
+      (array-fun pos-h-probs (lambda (x) (sigmoid x)) pos-h-probs :a-slice (list cases-dim-slice h-binary) :r-slice (list cases-dim-slice h-binary))
+      (calc-h-softmax-probs pos-h-probs)
+;;      (print (list "pos-h-probs" pos-h-probs))
+      (array-array-mul data pos-h-probs pos-prods :a-t t)
+      (setf pos-h-act (array-project pos-h-probs #'+))
+      (setf pos-v-act (array-project data #'+))
+;;      (print (list "pos-prods" pos-prods "pos-h-act" pos-h-act "pos-v-act" pos-v-act))
+      (array-fun pos-h-probs (lambda (x) (if (> x (random 1.0)) 1 0)) pos-h-states :a-slice (list cases-dim-slice h-binary) :r-slice (list cases-dim-slice h-binary))
+      (calc-h-softmax-states pos-h-probs pos-h-states)
+      (array-fun pos-h-probs (lambda (x) (+ x (random-gaussian))) pos-h-states :a-slice (list cases-dim-slice h-gaussian-linear-merged) :r-slice (list cases-dim-slice h-gaussian-linear-merged))
+      (array-fun pos-h-states (lambda (x) (max 0 x)) pos-h-states :a-slice (list cases-dim-slice h-linear) :r-slice (list cases-dim-slice h-linear))
+      (array-fun pos-h-probs #'identity pos-h-states :a-slice (list cases-dim-slice h-noisefree) :r-slice (list cases-dim-slice h-noisefree))
+;;      (print (list "pos-h-states" pos-h-states))
+      ;; negative phase
+      (array-array-mul pos-h-states w neg-data :b-t t)
+      (array-array-fun neg-data (array-repeat v-biases (list n-cases) nil) #'+ neg-data)
+      (array-fun neg-data (lambda (x) (sigmoid x)) neg-data :a-slice (list cases-dim-slice v-binary) :r-slice (list cases-dim-slice v-binary))
+      (array-fun neg-data (lambda (x) (max x 0)) neg-data :a-slice (list cases-dim-slice v-linear) :r-slice (list cases-dim-slice v-linear))
+;;      (print (list "neg-data" neg-data))
+      (array-array-mul neg-data w neg-h-probs)
+      (array-array-fun neg-h-probs (array-repeat h-biases (list n-cases) nil) #'+ neg-h-probs)
+      (array-fun neg-h-probs (lambda (x) (sigmoid x)) neg-h-probs :a-slice (list cases-dim-slice h-binary) :r-slice (list cases-dim-slice h-binary))
+      (calc-h-softmax-probs neg-h-probs)
+;;      (print (list "neg-h-probs" neg-h-probs))
+      (array-array-mul neg-data neg-h-probs neg-prods :a-t t)
+      (setf neg-h-act (array-project neg-h-probs #'+))
+      (setf neg-v-act (array-project neg-data #'+))
+;;      (print (list "neg-prods" neg-prods "neg-h-act" neg-h-act "neg-v-act" neg-v-act))
+      ;; learning
+      (array-array-fun pos-prods neg-prods (lambda (a b) (/ (- a b) n-cases)) w-inc)
+      (array-array-fun pos-v-act neg-v-act (lambda (a b) (/ (- a b) n-cases)) v-biases-inc)
+      (array-array-fun pos-h-act neg-h-act (lambda (a b) (/ (- a b) n-cases)) h-biases-inc)
+;;      (print (list "w-inc" w-inc "v-biases-inc" v-biases-inc "h-biases-inc" h-biases-inc))
+      (let ((err-array (make-array (list n-cases n-v) :element-type 'float))
+	    (err nil))
+	(array-array-fun data neg-data (lambda (a b) (expt (- a b) 2)) err-array)
+	(setf err (aref (array-project (array-project err-array #'+) #'+)))
+	(print (list "err" err)))
+      (values w-inc v-biases-inc h-biases-inc))))
 
 (defparameter *data-imbalanced* #2A((1 1 0 0 0 0) (0 0 1 1 0 0) (0 0 0 0 1 1) (0 0 0 0 1 1)))
 (defparameter *data* #2A((1 1 0 0 0 0) (0 0 1 1 0 0) (0 0 0 0 1 1)))
 (defparameter *data900* (make-array '(3 900) :initial-element 0.0 :element-type 'float :initial-contents (list (nconc (loop for i below 300 collect 1) (loop for i below 600 collect 0)) (nconc (loop for i below 300 collect 0) (loop for i below 300 collect 1) (loop for i below 300 collect 0)) (nconc (loop for i below 600 collect 0) (loop for i below 300 collect 1)))))
 (defparameter *data2* #2A((0 0) (0 1) (1 0) (1 1)))
 (defparameter *data3* #2A((0 0 0) (0 0 1) (0 1 0) (0 1 1) (1 0 0) (1 0 1) (1 1 0) (1 1 1)))
+(defparameter *data-l* #2A((2 2 0 0) (3 3 0 0) (4 4 0 0) (5 5 0 0) (0 0 2 2) (0 0 3 3) (0 0 4 4) (0 0 5 5)))
 
 (defun rbm-update (rbm w-inc v-biases-inc h-biases-inc learn-rate)
   (let* ((w (rbm-w rbm))
@@ -888,7 +1056,9 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
       (array-array-fun w w-inc #'update-learn w-new)
       (array-array-fun v-biases v-biases-inc #'update-learn v-biases-new)
       (array-array-fun h-biases h-biases-inc #'update-learn h-biases-new)
-      (make-rbm :w w-new :v-biases v-biases-new :h-biases h-biases-new :h-binary (rbm-h-binary rbm) :h-gaussian (rbm-h-gaussian rbm) :h-linear (rbm-h-linear rbm) :h-errorfree (rbm-h-errorfree rbm)))))
+      (make-rbm :w w-new :v-biases v-biases-new :h-biases h-biases-new
+		:v-binary (rbm-v-binary rbm) :v-gaussian (rbm-v-gaussian rbm) :v-linear (rbm-v-linear rbm)
+		:h-binary (rbm-h-binary rbm) :h-softmax (rbm-h-softmax rbm) :h-softmax-merged (rbm-h-softmax-merged rbm) :h-gaussian (rbm-h-gaussian rbm) :h-linear (rbm-h-linear rbm) :h-noisefree (rbm-h-noisefree rbm)))))
 
 (defun rbm-learn (data rbm learn-rate momentum weight-cost max-iterations)
   (assert (> max-iterations 0))
@@ -916,26 +1086,53 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 	 (pos-h-probs (make-array (list n-cases n-h) :element-type 'float))
 	 (cases-dim-slice (list 0 n-cases))
 	 (h-binary (rbm-h-binary rbm))
+	 (h-softmax (rbm-h-softmax rbm))
+	 (h-softmax-merged (rbm-h-softmax-merged rbm))
 	 (h-gaussian (rbm-h-gaussian rbm))
 	 (h-linear (rbm-h-linear rbm)))
     (declare (ignore h-gaussian h-linear))
-    ;; positive phase
-    (array-array-mul data w pos-h-probs)
-    (array-array-fun pos-h-probs (array-repeat h-biases (list n-cases) nil) #'+ pos-h-probs)
-    (array-fun pos-h-probs (lambda (x) (sigmoid x)) pos-h-probs :a-slice (list cases-dim-slice h-binary))
-    pos-h-probs))
+    (flet ((calc-h-softmax-probs (h-probs)
+	     (array-fun h-probs #'exp h-probs :a-slice (list cases-dim-slice h-softmax-merged) :r-slice (list cases-dim-slice h-softmax-merged))
+	     (loop for l on h-softmax by #'cddr
+		for start = (car l)
+		for end = (cadr l) do
+		;;(prind l start end)
+		  (let* ((h-probs-softmax-dim-slice (list cases-dim-slice (list start end)))
+			 (sum (array-project h-probs #'+ :a-slice h-probs-softmax-dim-slice :dim 1))
+			 (n-softmax (- end start))
+			 (sum-repeated (array-repeat sum nil (list n-softmax)))
+			 (sum-repeated-softmax-dim-slice (list cases-dim-slice (list 0 n-softmax))))
+		    ;;(prind h-probs-softmax-dim-slice sum-repeated-softmax-dim-slice)
+		    ;;(prind h-probs sum-repeated)
+		    (array-array-fun h-probs sum-repeated (lambda (x sum) (/ x sum)) h-probs :a-slice h-probs-softmax-dim-slice :b-slice sum-repeated-softmax-dim-slice :r-slice h-probs-softmax-dim-slice)))))
+      ;; positive phase
+      (array-array-mul data w pos-h-probs)
+      (array-array-fun pos-h-probs (array-repeat h-biases (list n-cases) nil) #'+ pos-h-probs)
+      (array-fun pos-h-probs (lambda (x) (sigmoid x)) pos-h-probs :a-slice (list cases-dim-slice h-binary) :r-slice (list cases-dim-slice h-binary))
+      (calc-h-softmax-probs pos-h-probs)
+      pos-h-probs)))
 
 (defun rbm-v-from-h (pos-h-states rbm)
   (let* ((w (rbm-w rbm))
 	 (n-v (rbm-n-v rbm))
 	 (v-biases (rbm-v-biases rbm))
 	 (n-cases (array-dimension pos-h-states 0))
-	 (neg-data (make-array (list n-cases n-v) :element-type 'float)))
+	 (neg-data (make-array (list n-cases n-v) :element-type 'float))
+	 (cases-dim-slice (list 0 n-cases))
+	 (v-binary (rbm-v-binary rbm))
+	 (v-linear (rbm-v-linear rbm)))
     ;; negative phase
     (array-array-mul pos-h-states w neg-data :b-t t)
     (array-array-fun neg-data (array-repeat v-biases (list n-cases) nil) #'+ neg-data)
-    (array-fun neg-data (lambda (x) (sigmoid x)) neg-data)
+    (array-fun neg-data (lambda (x) (sigmoid x)) neg-data :a-slice (list cases-dim-slice v-binary) :r-slice (list cases-dim-slice v-binary))
+    (array-fun neg-data (lambda (x) (max x 0)) neg-data :a-slice (list cases-dim-slice v-linear) :r-slice (list cases-dim-slice v-linear))
     neg-data))
+
+;; this should give a good model:
+;;(defparameter *rbm* (rbm-learn *data* (new-rbm 6 3 :v-binary 6 :h-softmax '(3)) .01 0 .002 10000))
+;;(let* ((h (rbm-h-from-v *data* *rbm*))
+;;       (v (rbm-v-from-h h *rbm*)))
+;;  (list h v))
 
 (defun h-from-v (v w)
 ;;  (format t "h-from-v~%")
@@ -957,6 +1154,11 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 		       (progn 
 ;;				   (format t "i:~A j:~A wij:~A~%" i j (elt wi j))
 			 (* hj (elt wi j))))))))
+
+;;(require :sb-sprof)
+;;(defun do-sprof-rbm-learn (max-iterations)
+;;  (sb-sprof:with-profiling (:max-samples 1000 :report :flat :loop nil :reset t)
+;;    (rbm-learn *data* (new-rbm 6 3 :h-binary 3) 1 .9 .0002 max-iterations))
 
 (defun activate (n)
   (loop for p in n collect
