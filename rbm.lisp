@@ -450,7 +450,7 @@ SLICES is the list of array slices."
   ;;(prind n-dim i0s i0s-muls slices)
   (let ((i-muls (mapcar #'car i0s-muls))
 	(dim-slices (mapcar #'car slices)))
-    (if (/= 0 n-dim)
+    (if (> n-dim 0)
 	(array-dim-slice-iterate
 	 dim-slices i-muls i0s
 	 (lambda (&rest d-indices)
@@ -752,6 +752,7 @@ Return the new array."
 	   (r-dim-mul (array-row-major-multipliers r-dim))
 	   (slice-perm (permute (reverse-permute a-slice a-perm) new-perm))
 	   (slice-perm-butlast (butlast slice-perm))
+	   (r-slice slice-perm-butlast)
 	   (last-dim-slice (car (last slice-perm)))
 	   (last-dim-slice-inc-by-1 (inc-dim-slice-by-1 last-dim-slice))
 	   (last-dim-slice-orig-start (car last-dim-slice))
@@ -759,9 +760,14 @@ Return the new array."
 	   (a-dim-mul-perm (permute a-dim-mul new-perm))
 	   (a-last-dim-mul (car (last a-dim-mul-perm))))
       (declare (type index a-last-dim-mul last-dim-slice-orig-start))
+      ;;(prind r-dim r a-rank)
       ;;(prind r-dim-mul a-dim-mul-perm slice-perm)
+      (when (= a-rank 1)
+	(setf r-dim-mul (list 0))
+	(setf slice-perm-butlast slice-perm)
+	(setf r-slice '((0 1))))
       (array-slices-iterate
-       (- a-rank 2) (list 0 0) (list r-dim-mul a-dim-mul-perm) (list slice-perm-butlast slice-perm-butlast)
+       (- a-rank 2) (list 0 0) (list r-dim-mul a-dim-mul-perm) (list r-slice slice-perm-butlast)
        (lambda (r-index a-index)
 	 (declare (type index r-index a-index))
 	 (let* ((a-last-dim-start-index (the index (+ a-index (the index (* a-last-dim-mul last-dim-slice-orig-start)))))
@@ -772,7 +778,9 @@ Return the new array."
 	   (setf (row-major-aref r r-index) res))))
       r)))
 
-(let* ((a #3A(((0 1 2 3) (4 5 6 7) (8 9 10 11)) ((12 13 14 15) (16 17 18 19) (20 21 22 23)))))
+(let* ((a #3A(((0 1 2 3) (4 5 6 7) (8 9 10 11)) ((12 13 14 15) (16 17 18 19) (20 21 22 23))))
+       (b #(0 1 2 3 4 5)))
+  (assert (equalp (array-project-perm-slice b #'+) #0A15))
   (assert (equalp (array-project-perm-slice a #'+) (array-project-noperm a #'+)))
   (assert (equalp (array-project-perm-slice a #'+ :dim 1) (array-project-noperm a #'+ :dim 1)))
   (assert (equalp (array-project-perm-slice a #'+ :a-perm '(2 0 1)) (array-project-noperm (array-permute a '(2 0 1)) #'+)))
