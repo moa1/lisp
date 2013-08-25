@@ -1100,6 +1100,13 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 (defparameter *data3* #2A((0 0 0) (0 0 1) (0 1 0) (0 1 1) (1 0 0) (1 0 1) (1 1 0) (1 1 1)))
 (defparameter *data-l* #2A((2 2 0 0) (3 3 0 0) (4 4 0 0) (5 5 0 0) (0 0 2 2) (0 0 3 3) (0 0 4 4) (0 0 5 5)))
 (defparameter *data*1000* #2A((1000 1000 0 0 0 0) (0 0 1000 1000 0 0) (0 0 0 0 1000 1000)))
+(defparameter *data+0.5* #2A((0 0.5) (0.1 0.6) (0.2 0.7) (0.3 0.8) (0.4 0.9) (0.5 1)))
+(defparameter *data+0.5-unseen* #2A((0.05 0.55) (0.15 0.65) (0.25 0.75) (0.35 0.85) (0.45 0.95)
+				    (0.05 1) (0.15 0.9) (0.25 0.8) (0.35 0.7) (0.45 0.6) ;some examples not following the rule to see what the network does
+				    (0 1) (0.1 1) (0.2 1) (0.3 1) (0.4 1) (0.5 1)))
+(defparameter *data+0.5-extrapolate* #2A((0.5 1) (0.6 1.1) (0.7 1.2) (0.8 1.3) (0.9 1.4) (1 1.5)))
+(defparameter *data+5* #2A((0 5) (1 6) (2 7) (3 8) (4 9) (5 10)))
+(defparameter *data+5-extrapolate* #2A((6 11) (7 12) (8 13) (9.5 14.5) (-40 -35) (0 0)))
 
 (defun rbm-update (rbm w-inc v-biases-inc h-biases-inc learn-rate)
   (let* ((w (rbm-w rbm))
@@ -1183,11 +1190,13 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
     (array-fun neg-data (lambda (x) (max x 0)) neg-data :a-slice (list cases-dim-slice v-linear) :r-slice (list cases-dim-slice v-linear))
     neg-data))
 
-;; this should give a good model:
+;; these give good models:
 ;;(defparameter *rbm* (rbm-learn *data* (new-rbm 6 3 :v-binary 6 :h-softmax '(3)) .01 0 .002 10000))
 ;;(let* ((h (rbm-h-from-v *data* *rbm*))
 ;;       (v (rbm-v-from-h h *rbm*)))
 ;;  (list h v))
+;;(defparameter *rbm* (rbm-learn *data+0.5* (new-rbm 2 1 :v-gaussian 2 :h-noisefree 1) .001 .9 .0002 10000))
+;;(defparameter *rbm* (rbm-learn *data+5* (new-rbm 2 1 :v-gaussian 2 :h-gaussian 1) .001 .9 .0002 10000))
 
 (defun h-from-v (v w)
 ;;  (format t "h-from-v~%")
