@@ -33,14 +33,14 @@ This function is faster than map-into, but slower than DO (which is possible whe
   (macrolet ((labels-rec-n (name n &body body)
 	       (let ((list-vars (loop for i below n collect (gensym))))
 		 `(labels ((,name (res ,@list-vars)
-			     (if (null res) (return-from ,name))
-			     ,@(mapcar (lambda (x) `(if (null ,x) (return-from ,name))) list-vars)
+			     (if (null res) (return-from ,name result-list))
+			     ,@(mapc (lambda (x) `(if (null ,x) (return-from ,name))) list-vars)
 			     (setf (car res)
 				   (funcall (the function function) ,@(mapcar (lambda (x) `(car ,x)) list-vars)))
 			     (,name (cdr res) ,@(mapcar (lambda (x) `(cdr ,x)) list-vars))))
 		    ,@body))))
     (labels ((rec (res lists)
-	       (if (null res) (return-from rec))
+	       (if (null res) (return-from rec result-list))
 	       (loop for l in lists do
 		    (if (null l) (return-from rec)))
 	       (setf (car res)
@@ -49,26 +49,22 @@ This function is faster than map-into, but slower than DO (which is possible whe
 		 (setf (car l) (cdar l)))
 	       (rec (cdr res) lists)))
       (labels-rec-n
-       rec1 1
+       rec0 0
        (labels-rec-n
-	rec2 2
+	rec1 1
 	(labels-rec-n
-	 rec3 3
+	 rec2 2
 	 (labels-rec-n
-	  rec4 4
-	  (case (length lists)
-	    (1 (rec1 result-list (first lists)))
-	    (2 (rec2 result-list (first lists) (second lists)))
-	    (3 (rec3 result-list (first lists) (second lists) (third lists)))
-	    (4 (rec4 result-list (first lists) (second lists) (third lists) (fourth lists)))
-	    (t (rec result-list (copy-list lists)))))))))))
-
-(defun test ()
-	   (declare (optimize (speed 3)))
-	   (let ((r '(1 2 3 4)))
-	     (map-into-list r (lambda (a b) (declare (type fixnum a b)) (the fixnum (+ a b)))
-			    r '(3 4 5 6))
-	     r))
+	  rec3 3
+	  (labels-rec-n
+	   rec4 4
+	   (case (length lists)
+	     (0 (rec0 result-list))
+	     (1 (rec1 result-list (first lists)))
+	     (2 (rec2 result-list (first lists) (second lists)))
+	     (3 (rec3 result-list (first lists) (second lists) (third lists)))
+	     (4 (rec4 result-list (first lists) (second lists) (third lists) (fourth lists)))
+	     (t (rec result-list (copy-list lists))))))))))))
 
 (defun random-gaussian-2 ()
   "Return two with mean 0 and standard deviation 1 normally distributed random variables."
@@ -116,6 +112,60 @@ This function is faster than map-into, but slower than DO (which is possible whe
   (cond
     ((>= x -88) (/ 1 (1+ (exp (- x)))))
     (t 0.0)))
+
+(defun permute (sequence permutation &optional (result-type 'list))
+  (declare (type sequence sequence) (type list permutation) (type (member list vector) result-type))
+  "Permute sequence SEQUENCE with permutation list PERMUTATION and return the resulting list.
+PERMUTATION contains, for each element at position x, the dimension number that is mapped to dimension x.
+PERMUTATION must contain all numbers between 0 and (1- (length perm)), and each number only once."
+  (ecase result-type
+    (list (loop for p in permutation collect
+	       (elt sequence p)))
+    (vector (let ((v (make-array (length sequence))))
+	      (loop for p in permutation for i from 0 do
+		   (setf (elt v i) (elt sequence p)))
+	      v))))
+
+(defun reverse-permute (sequence permutation &optional (result-type 'list))
+  (declare (type sequence sequence) (type list permutation) (type (member list vector) result-type))
+  "Reverse-permute sequence SEQUENCE with permutation list PERMUTATION and return the resulting list.
+Reverse-permute means, that for each element e at position x in PERMUTATION, the dimension x of SEQUENCE is mapped to position e in the result.
+PERMUTATION must contain all numbers between 0 and (1- (length PERMUTATION)), and each number only once."
+  (let ((res (ecase result-type
+	       (list (loop for i below (length permutation) collect -1))
+	       (vector (make-array (length permutation))))))
+    (loop for e in permutation for x below (length permutation) do
+	 (setf (elt res e) (elt sequence x)))
+    res))
+
+(defun inverse-permutation (perm)
+  "Return the permutation that must be applied after or before applying PERM to obtain the identity permutation."
+  (reverse-permute (loop for i below (length perm) collect i) perm))
+
+(defun permutation-product (perm-a perm-b)
+  "Return the permutation that results from first applying PERM-A, then PERM-B."
+  ;; (0 1 2 3 4 5) * (0 1 2 3 4 5) = (0 1 2 3 4 5)
+  ;; (0 3 2 1 5 4)   (0 5 2 1 3 4)   (0 1 2 5 4 3)
+  (permute perm-b perm-a))
+
+;; test permutations
+(let* (;;          0 1 2 3 4 5
+       (a        '(2 1 3 0 5 4))
+       (a-vector #(2 1 3 0 5 4))
+       (a-1 (inverse-permutation a))
+       ;;   0 1 2 3 4 5
+       (b '(2 4 3 5 1 0))
+       (b-1 (inverse-permutation b))
+       (id (loop for i below 6 collect i))
+       (id-vector (make-array 6 :initial-contents (loop for i below 6 collect i))))
+  (assert (equal (permute id a) a))
+  (assert (equalp (permute id a 'vector) a-vector))
+  (assert (equal (reverse-permute a a) id))
+  (assert (equalp (reverse-permute a a 'vector) id-vector))
+  (assert (equal (permutation-product a a-1) id))
+  (assert (equal (permutation-product a-1 a) id))
+  (assert (equal (permutation-product a b) '(3 4 5 2 0 1)))
+  (assert (equal (permutation-product (permutation-product a b) b-1) a)))
 
 (defun array-slice-valid (slice array-dimensions)
   "Check if the list SLICE is a valid array slice of array ARRAY.
@@ -257,6 +307,7 @@ Example: (array-dim-slice-iterate '((0 1 3 4) (6 8)) '(10 1) '(5 10) (lambda (i 
 
 (defun array-transpose (a r)
   "Put the transpose of 2-dimensional array A into array R."
+  (assert (= 2 (array-rank a) (array-rank r)))
   (let ((arows (array-dimension a 0))
 	(acols (array-dimension a 1))
 	(rrows (array-dimension r 0))
@@ -316,49 +367,6 @@ The array slice for R is computed from A-SLICE and B-SLICE."
 				 (incf sum (* (aref a i aj) (aref b bi j)))))))
 		      sum))))))
   nil)
-
-(defun permute (sequence permutation)
-  "Permute sequence SEQUENCE with permutation list PERMUTATION and return the resulting list.
-PERMUTATION contains, for each element at position x, the dimension number that is mapped to dimension x.
-PERMUTATION must contain all numbers between 0 and (1- (length perm)), and each number only once."
-  ;; TODO: make it possible to specify the resulting type (vector or list).
-  (loop for p in permutation collect
-       (elt sequence p)))
-
-(defun reverse-permute (sequence permutation)
-  "Reverse-permute sequence SEQUENCE with permutation list PERMUTATION and return the resulting list.
-Reverse-permute means, that for each element e at position x in PERMUTATION, the dimension x of SEQUENCE is mapped to position e in the result.
-PERMUTATION must contain all numbers between 0 and (1- (length PERMUTATION)), and each number only once."
-  ;; TODO: make it possible to specify the resulting type (vector or list.)
-  (let ((res (loop for i below (length permutation) collect -1)))
-    (loop for e in permutation for x below (length permutation) do
-	 (setf (elt res e) (elt sequence x)))
-    res))
-
-(defun inverse-permutation (perm)
-  "Return the permutation that must be applied after or before applying PERM to obtain the identity permutation."
-  (reverse-permute (loop for i below (length perm) collect i) perm))
-
-(defun permutation-product (perm-a perm-b)
-  "Return the permutation that results from first applying PERM-A, then PERM-B."
-  ;; (0 1 2 3 4 5) * (0 1 2 3 4 5) = (0 1 2 3 4 5)
-  ;; (0 3 2 1 5 4)   (0 5 2 1 3 4)   (0 1 2 5 4 3)
-  (permute perm-b perm-a))
-
-;; test permutations
-(let* (;;   0 1 2 3 4 5
-       (a '(2 1 3 0 5 4))
-       (a-1 (inverse-permutation a))
-       ;;   0 1 2 3 4 5
-       (b '(2 4 3 5 1 0))
-       (b-1 (inverse-permutation b))
-       (id (loop for i below 6 collect i)))
-  (assert (equal (permute id a) a))
-  (assert (equal (reverse-permute a a) id))
-  (assert (equal (permutation-product a a-1) id))
-  (assert (equal (permutation-product a-1 a) id))
-  (assert (equal (permutation-product a b) '(3 4 5 2 0 1)))
-  (assert (equal (permutation-product (permutation-product a b) b-1) a)))
 
 (defun default-array-permutation (a)
   (loop for i below (array-rank a) collect i))
@@ -824,6 +832,39 @@ Return the new array."
 	  (setf (row-major-aref r r-index) (row-major-aref a a-index)))))
     r))
 
+(defun array-select-perm-slice (a a-perm a-slice)
+  "Return a new array obtained from permuting array's A dimensions with permutation A-PERM, and slicing the resulting array using slice A-SLICE."
+  (labels ((slice-dimensions (slice dim)
+	     (if (null slice)
+		 (nreverse dim)
+		 (slice-dimensions (cdr slice) (cons (array-dim-slice-count (car slice)) dim)))))
+    (let* ((a-dim (array-dimensions a))
+	   (r-dim (slice-dimensions a-slice nil))
+	   (r (make-array r-dim :element-type (array-element-type a)))
+	   (r-perm (default-array-permutation r))
+	   (r-slice (default-array-slice r-dim))) ;don't need to permute r-dim, because r-perm is identity
+      (assert (array-slice-valid a-slice a-dim))
+      (arrays-walk (list a-dim r-dim) (list a-perm r-perm) (list a-slice r-slice)
+		   (lambda (a-index r-index)
+		     (setf (row-major-aref r r-index) (row-major-aref a a-index))))
+      r)))
+
+(defun array-insert-perm-slice (a a-perm a-slice r r-perm r-slice)
+  "Insert the with A-PERM permuted and A-SLICe sliced elements of array A into the elements of R specified by dimension permutation R-PERM and slice R-SLICE."
+  (array-fun a #'identity r :a-perm a-perm :a-slice a-slice :r-perm r-perm :r-slice r-slice))
+
+(let* ((a #3A(((0 1 2 3) (4 5 6 7) (8 9 10 11)) ((12 13 14 15) (16 17 18 19) (20 21 22 23))))
+       (a-perm '(1 0 2))
+       (a-slice '((0 1) (1 2) (0 1 3 4)))
+       (r (array-select-perm-slice a a-perm a-slice))
+       (r-perm (default-array-permutation r))
+       (r-slice (default-array-slice (permute (array-dimensions r) r-perm))))
+  (assert (equalp r #3A(((12 15)))))
+  (array-fun r #'1+ r)
+  (array-insert-perm-slice r r-perm r-slice a a-perm a-slice)
+  ;;(assert (equalp a #3A(((0 1 2 3) (4 5 6 7) (8 9 10 11)) ((13 13 14 16) (16 17 18 19) (20 21 22 23))))) ;SBCL says this assertion doesn't hold, but that's wrong, so I'm commenting it out.
+  )
+
 (defun compile-map-into-array (arrays-dim arrays-perm arrays-slice arrays-type)
   "Returns a compiled function MAP-INTO-ARRAY, which is to be called with simple-arrays RES, a function F, and simple-arrays A, ..., Z.
 MAP-INTO-ARRAY walks in parallel over the elements of RES, A, ..., Z specified by ARRAYS-DIM, ARRAYS-PERM and ARRAYS-SLICE, and calls F with the elements.
@@ -863,7 +904,6 @@ ARRAYS-TYPE is the element-type of RES, A, ..., Z."
   (v-linear nil :type list)
   (h-binary nil :type list)
   (h-softmax nil :type list) ;dim-slice (4 6 6 9) means two softmax units with 2 and 3 alternative states
-  (h-softmax-merged nil :type list) ;the h-softmax dim-slices merged
   (h-gaussian nil :type list)
   (h-linear nil :type list)
   (h-noisefree nil :type list))
@@ -878,7 +918,7 @@ The sum of the numbers of the H-parameters plus the sum of the list of numbers o
 	(v-biases (make-array n-visible :element-type 'float))
 	(h-biases (make-array n-hidden :element-type 'float)))
     (declare (type (simple-array float) w v-biases h-biases))
-    (let (h-softmax-merged)
+    (let nil
       (flet ((dim-slice-for-softmax (start softmax-list)
 	       (if (null softmax-list)
 		   (list start start)
@@ -897,9 +937,7 @@ The sum of the numbers of the H-parameters plus the sum of the list of numbers o
 			       (apply #'+ h-softmax))))
 	(setf h-binary (list 0 h-binary))
 	(setf h-softmax (dim-slice-for-softmax (second h-binary) h-softmax))
-	(setf h-softmax-merged (array-dim-slices-merge h-softmax))
-	(assert (= 2 (length h-softmax-merged)))
-	(setf h-gaussian (list (second h-softmax-merged) (+ (second h-softmax-merged) h-gaussian)))
+	(setf h-gaussian (list (car (last h-softmax)) (+ (car (last h-softmax)) h-gaussian)))
 	(setf h-linear (list (second h-gaussian) (+ (second h-gaussian) h-linear)))
 	(setf h-noisefree (list (second h-linear) (+ (second h-linear) h-noisefree)))
 	;; init weights and biases
@@ -910,7 +948,7 @@ The sum of the numbers of the H-parameters plus the sum of the list of numbers o
 	(loop for j below n-hidden do (setf (aref h-biases j) 0.0))
 	(make-rbm :w w :v-biases v-biases :h-biases h-biases
 		  :v-binary v-binary :v-gaussian v-gaussian :v-linear v-linear
-		  :h-binary h-binary :h-softmax h-softmax :h-softmax-merged h-softmax-merged :h-gaussian h-gaussian :h-linear h-linear :h-noisefree h-noisefree)))))
+		  :h-binary h-binary :h-softmax h-softmax :h-gaussian h-gaussian :h-linear h-linear :h-noisefree h-noisefree)))))
 
 (defun new-rbm-1 ()
   (make-rbm :w #2A((0.40 0.50 0.60)
@@ -927,6 +965,26 @@ The sum of the numbers of the H-parameters plus the sum of the list of numbers o
 
 (defun rbm-n-h (rbm)
   (array-dimension (rbm-w rbm) 1))
+
+(defun softmax-from-exps-to-probs (terms)
+  "Given a sequence of TERMS=A1,A2,...,An, compute the corresponding sequence (/ (exp A1) S),(/ (exp A2) S),...,(/ (exp An) S) with S=(sum-of (exp A1) (exp A2) ... (exp An)) in a way that doesn't produce floating-point overflows."
+  ;; A disadvantage of this algorithm is that it takes O(|terms|^2), because REC needs to loop over all AIS-REST.
+  ;; If speed becomes critical, one could sort the Ais, detect the Ai-mid where (- Ai0 Ai-mid) is greater than, say 20 (because (/ 1 (exp 20)) is neglegibly small), run REC only on the list from Ai0 to Ai-mid, and fill the end of the by REC returned list with a list of zeroes.
+  (labels ((rec (ais bi-1 bis)
+	     (if (null ais)
+		 (nreverse bis)
+		 (let* ((ai (car ais))
+			(ais-rest (cdr ais))
+			(si (loop for aj in ais-rest sum (exp (- aj ai))))
+			(bi (/ bi-1 (1+ si))))
+		   (rec ais-rest (- bi-1 bi) (cons bi bis))))))
+    (let* ((terms-and-order (map 'list (lambda (a b) (cons a b)) terms (loop for i below (length terms) collect i)))
+	   (terms-and-order-sorted (sort terms-and-order #'> :key #'car))
+	   (terms-sorted (mapcar #'car terms-and-order-sorted))
+	   (order-sorted (mapcar #'cdr terms-and-order-sorted))
+	   (probs-sorted (rec terms-sorted 1 nil))
+	   (probs-orig (reverse-permute probs-sorted order-sorted 'vector)))
+      probs-orig)))
 
 (defun rbm-learn-cd1 (data rbm)
   ;;TODO: possibility to specify neuron types
@@ -958,25 +1016,23 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 	 (v-linear (rbm-v-linear rbm))
 	 (h-binary (rbm-h-binary rbm))
 	 (h-softmax (rbm-h-softmax rbm))
-	 (h-softmax-merged (rbm-h-softmax-merged rbm))
 	 (h-gaussian (rbm-h-gaussian rbm))
 	 (h-linear (rbm-h-linear rbm))
 	 (h-gaussian-linear-merged (array-dim-slices-merge h-gaussian h-linear))
 	 (h-noisefree (rbm-h-noisefree rbm)))
     (flet ((calc-h-softmax-probs (h-probs)
-	     (array-fun h-probs #'exp h-probs :a-slice (list cases-dim-slice h-softmax-merged) :r-slice (list cases-dim-slice h-softmax-merged))
-	     (loop for l on h-softmax by #'cddr
-		for start = (car l)
-		for end = (cadr l) do
-		;;(prind l start end)
-		  (let* ((h-probs-softmax-dim-slice (list cases-dim-slice (list start end)))
-			 (sum (array-project h-probs #'+ :a-slice h-probs-softmax-dim-slice :dim 1))
-			 (n-softmax (- end start))
-			 (sum-repeated (array-repeat sum nil (list n-softmax)))
-			 (sum-repeated-softmax-dim-slice (list cases-dim-slice (list 0 n-softmax))))
-		    ;;(prind h-probs-softmax-dim-slice sum-repeated-softmax-dim-slice)
-		    ;;(prind h-probs sum-repeated)
-		    (array-array-fun h-probs sum-repeated (lambda (x sum) (/ x sum)) h-probs :a-slice h-probs-softmax-dim-slice :b-slice sum-repeated-softmax-dim-slice :r-slice h-probs-softmax-dim-slice))))
+	     (loop for case below n-cases for case-dim-slice = (list case (1+ case)) do
+		  (loop for l on h-softmax by #'cddr
+		     for start = (car l)
+		     for end = (cadr l) do
+		     ;;(prind l start end)
+		       (let* ((h-probs-perm (default-array-permutation h-probs))
+			      (h-probs-softmax-slice (list case-dim-slice (list start end)))
+			      (terms (array-select-perm-slice h-probs h-probs-perm h-probs-softmax-slice))
+			      (terms-1d (make-array (- end start) :displaced-to terms))
+			      (probs (softmax-from-exps-to-probs terms-1d))
+			      (probs-2d (make-array (list 1 (- end start)) :initial-contents (list probs))))
+			 (array-insert-perm-slice probs-2d (default-array-permutation probs-2d) (default-array-slice (array-dimensions probs-2d)) h-probs h-probs-perm h-probs-softmax-slice)))))
 	   (calc-h-softmax-states (h-probs h-states)
 	     (loop for case below n-cases for case-dim-slice = (list case (1+ case)) do
 		  (loop for l on h-softmax by #'cddr
@@ -986,10 +1042,10 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 			     (sum 0.0)
 			     (softmax-dim-slice (list case-dim-slice (list start end))))
 			 (array-fun h-probs (lambda (x)
-						  (let ((from sum) (to (+ sum x)))
-						    ;;(prind from r to)
-						    (setf sum to)
-						    (if (and (<= from r) (< r to)) 1 0)))
+					      (let ((from sum) (to (+ sum x)))
+						;;(prind from r to)
+						(setf sum to)
+						(if (and (<= from r) (< r to)) 1 0)))
 				    h-states :a-slice softmax-dim-slice :r-slice softmax-dim-slice)
 			 ;;(prind pos-h-probs r pos-h-states)
 			 )))))
@@ -1039,10 +1095,11 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 
 (defparameter *data-imbalanced* #2A((1 1 0 0 0 0) (0 0 1 1 0 0) (0 0 0 0 1 1) (0 0 0 0 1 1)))
 (defparameter *data* #2A((1 1 0 0 0 0) (0 0 1 1 0 0) (0 0 0 0 1 1)))
-(defparameter *data900* (make-array '(3 900) :initial-element 0.0 :element-type 'float :initial-contents (list (nconc (loop for i below 300 collect 1) (loop for i below 600 collect 0)) (nconc (loop for i below 300 collect 0) (loop for i below 300 collect 1) (loop for i below 300 collect 0)) (nconc (loop for i below 600 collect 0) (loop for i below 300 collect 1)))))
+(defparameter *data900* (make-array '(3 900) :initial-contents (list (nconc (loop for i below 300 collect 1) (loop for i below 600 collect 0)) (nconc (loop for i below 300 collect 0) (loop for i below 300 collect 1) (loop for i below 300 collect 0)) (nconc (loop for i below 600 collect 0) (loop for i below 300 collect 1)))))
 (defparameter *data2* #2A((0 0) (0 1) (1 0) (1 1)))
 (defparameter *data3* #2A((0 0 0) (0 0 1) (0 1 0) (0 1 1) (1 0 0) (1 0 1) (1 1 0) (1 1 1)))
 (defparameter *data-l* #2A((2 2 0 0) (3 3 0 0) (4 4 0 0) (5 5 0 0) (0 0 2 2) (0 0 3 3) (0 0 4 4) (0 0 5 5)))
+(defparameter *data*1000* #2A((1000 1000 0 0 0 0) (0 0 1000 1000 0 0) (0 0 0 0 1000 1000)))
 
 (defun rbm-update (rbm w-inc v-biases-inc h-biases-inc learn-rate)
   (let* ((w (rbm-w rbm))
@@ -1058,7 +1115,7 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
       (array-array-fun h-biases h-biases-inc #'update-learn h-biases-new)
       (make-rbm :w w-new :v-biases v-biases-new :h-biases h-biases-new
 		:v-binary (rbm-v-binary rbm) :v-gaussian (rbm-v-gaussian rbm) :v-linear (rbm-v-linear rbm)
-		:h-binary (rbm-h-binary rbm) :h-softmax (rbm-h-softmax rbm) :h-softmax-merged (rbm-h-softmax-merged rbm) :h-gaussian (rbm-h-gaussian rbm) :h-linear (rbm-h-linear rbm) :h-noisefree (rbm-h-noisefree rbm)))))
+		:h-binary (rbm-h-binary rbm) :h-softmax (rbm-h-softmax rbm) :h-gaussian (rbm-h-gaussian rbm) :h-linear (rbm-h-linear rbm) :h-noisefree (rbm-h-noisefree rbm)))))
 
 (defun rbm-learn (data rbm learn-rate momentum weight-cost max-iterations)
   (assert (> max-iterations 0))
@@ -1087,24 +1144,22 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 	 (cases-dim-slice (list 0 n-cases))
 	 (h-binary (rbm-h-binary rbm))
 	 (h-softmax (rbm-h-softmax rbm))
-	 (h-softmax-merged (rbm-h-softmax-merged rbm))
 	 (h-gaussian (rbm-h-gaussian rbm))
 	 (h-linear (rbm-h-linear rbm)))
     (declare (ignore h-gaussian h-linear))
     (flet ((calc-h-softmax-probs (h-probs)
-	     (array-fun h-probs #'exp h-probs :a-slice (list cases-dim-slice h-softmax-merged) :r-slice (list cases-dim-slice h-softmax-merged))
-	     (loop for l on h-softmax by #'cddr
-		for start = (car l)
-		for end = (cadr l) do
-		;;(prind l start end)
-		  (let* ((h-probs-softmax-dim-slice (list cases-dim-slice (list start end)))
-			 (sum (array-project h-probs #'+ :a-slice h-probs-softmax-dim-slice :dim 1))
-			 (n-softmax (- end start))
-			 (sum-repeated (array-repeat sum nil (list n-softmax)))
-			 (sum-repeated-softmax-dim-slice (list cases-dim-slice (list 0 n-softmax))))
-		    ;;(prind h-probs-softmax-dim-slice sum-repeated-softmax-dim-slice)
-		    ;;(prind h-probs sum-repeated)
-		    (array-array-fun h-probs sum-repeated (lambda (x sum) (/ x sum)) h-probs :a-slice h-probs-softmax-dim-slice :b-slice sum-repeated-softmax-dim-slice :r-slice h-probs-softmax-dim-slice)))))
+	     (loop for case below n-cases for case-dim-slice = (list case (1+ case)) do
+		  (loop for l on h-softmax by #'cddr
+		     for start = (car l)
+		     for end = (cadr l) do
+		     ;;(prind l start end)
+		       (let* ((h-probs-perm (default-array-permutation h-probs))
+			      (h-probs-softmax-slice (list case-dim-slice (list start end)))
+			      (terms (array-select-perm-slice h-probs h-probs-perm h-probs-softmax-slice))
+			      (terms-1d (make-array (- end start) :displaced-to terms))
+			      (probs (softmax-from-exps-to-probs terms-1d))
+			      (probs-2d (make-array (list 1 (- end start)) :initial-contents (list probs))))
+			 (array-insert-perm-slice probs-2d (default-array-permutation probs-2d) (default-array-slice (array-dimensions probs-2d)) h-probs h-probs-perm h-probs-softmax-slice))))))
       ;; positive phase
       (array-array-mul data w pos-h-probs)
       (array-array-fun pos-h-probs (array-repeat h-biases (list n-cases) nil) #'+ pos-h-probs)
