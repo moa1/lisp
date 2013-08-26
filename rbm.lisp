@@ -900,6 +900,7 @@ ARRAYS-TYPE is the element-type of RES, A, ..., Z."
   (h-biases nil :type (simple-array float (*)))
   ;; the neuron descriptors are dim-slices for the hidden or visible layer
   (v-binary nil :type list)
+  (v-softmax nil :type list) ;dim-slice (4 6 6 9) means two softmax units with 2 and 3 alternative states
   (v-gaussian nil :type list)
   (v-linear nil :type list)
   (h-binary nil :type list)
@@ -908,11 +909,11 @@ ARRAYS-TYPE is the element-type of RES, A, ..., Z."
   (h-linear nil :type list)
   (h-noisefree nil :type list))
 
-(defun new-rbm (n-visible n-hidden &key (v-binary 0) (v-gaussian 0) (v-linear 0) (h-binary 0) (h-softmax nil) (h-gaussian 0) (h-linear 0) (h-noisefree 0))
+(defun new-rbm (n-visible n-hidden &key (v-binary 0) (v-softmax nil) (v-gaussian 0) (v-linear 0) (h-binary 0) (h-softmax nil) (h-gaussian 0) (h-linear 0) (h-noisefree 0))
   "Return a new randomly initialized restricted boltzmann machine.
 V-BINARY, V-GAUSSIAN, V-LINEAR must be non-negative integers adding up to N-VISIBLE.
 H-BINARY, H-GAUSSIAN, H-LINEAR, H-NOISEFREE must be non-negative integers.
-H-SOFTMAX must be a list of integers bigger than 2 each specifying the number of alternative states that each softmax unit can have.
+V-SOFTMAX and H-SOFTMAX must each be a list of integers greater than 2 each specifying the number of alternative states that each softmax unit can have.
 The sum of the numbers of the H-parameters plus the sum of the list of numbers of H-SOFTMAX must add up to N-HIDDEN."
   (let ((w (make-array (list n-visible n-hidden) :element-type 'float))
 	(v-biases (make-array n-visible :element-type 'float))
@@ -927,17 +928,21 @@ The sum of the numbers of the H-parameters plus the sum of the list of numbers o
 					(let* ((end (+ start n-states))
 					       (range (list start end)))
 					  (setf start end)
-					  range))))))
+					  range)))))
+	     (last-car (list)
+	       (car (last list))))
 	;; check that the visible and hidden neuron type ranges fit seamlessly
-	(assert (= n-visible (apply #'+ (list v-binary v-gaussian v-linear))))
+	(assert (= n-visible (+ (apply #'+ (list v-binary v-gaussian v-linear))
+				(apply #'+ v-softmax))))
 	(setf v-binary (list 0 v-binary))
-	(setf v-gaussian (list (second v-binary) (+ (second v-binary) v-gaussian)))
+	(setf v-softmax (dim-slice-for-softmax (second v-binary) v-softmax))
+	(setf v-gaussian (list (last-car v-softmax) (+ (last-car v-softmax) v-gaussian)))
 	(setf v-linear (list (second v-gaussian) (+ (second v-gaussian) v-linear)))
 	(assert (= n-hidden (+ (apply #'+ (list h-binary h-gaussian h-linear h-noisefree))
 			       (apply #'+ h-softmax))))
 	(setf h-binary (list 0 h-binary))
 	(setf h-softmax (dim-slice-for-softmax (second h-binary) h-softmax))
-	(setf h-gaussian (list (car (last h-softmax)) (+ (car (last h-softmax)) h-gaussian)))
+	(setf h-gaussian (list (last-car h-softmax) (+ (last-car h-softmax) h-gaussian)))
 	(setf h-linear (list (second h-gaussian) (+ (second h-gaussian) h-linear)))
 	(setf h-noisefree (list (second h-linear) (+ (second h-linear) h-noisefree)))
 	;; init weights and biases
@@ -947,7 +952,7 @@ The sum of the numbers of the H-parameters plus the sum of the list of numbers o
 	(loop for i below n-visible do (setf (aref v-biases i) 0.0))
 	(loop for j below n-hidden do (setf (aref h-biases j) 0.0))
 	(make-rbm :w w :v-biases v-biases :h-biases h-biases
-		  :v-binary v-binary :v-gaussian v-gaussian :v-linear v-linear
+		  :v-binary v-binary :v-softmax v-softmax :v-gaussian v-gaussian :v-linear v-linear
 		  :h-binary h-binary :h-softmax h-softmax :h-gaussian h-gaussian :h-linear h-linear :h-noisefree h-noisefree)))))
 
 (defun new-rbm-1 ()
@@ -986,6 +991,22 @@ The sum of the numbers of the H-parameters plus the sum of the list of numbers o
 	   (probs-orig (reverse-permute probs-sorted order-sorted 'vector)))
       probs-orig)))
 
+(defun softmax-calc-probs (n-cases softmax probs)
+  "For the softmax units specified in SOFTMAX, calculate from the input array PROBS their probabilities and put them back into PROBS."
+  (loop for case below n-cases for case-dim-slice = (list case (1+ case)) do
+       (loop for l on softmax by #'cddr
+	  for start = (car l)
+	  for end = (cadr l) do
+	    ;;(prind l start end)
+	    (let* ((probs-perm (default-array-permutation probs))
+		   (probs-softmax-slice (list case-dim-slice (list start end)))
+		   (terms (array-select-perm-slice probs probs-perm probs-softmax-slice))
+		   (terms-1d (make-array (- end start) :displaced-to terms))
+		   (softmax-probs (softmax-from-exps-to-probs terms-1d))
+		   (softmax-probs-2d (make-array (list 1 (- end start)) :initial-contents (list softmax-probs))))
+	      (array-insert-perm-slice softmax-probs-2d (default-array-permutation softmax-probs-2d) (default-array-slice (array-dimensions softmax-probs-2d)) probs probs-perm probs-softmax-slice))))
+  nil)
+
 (defun rbm-learn-cd1 (data rbm)
   ;;TODO: possibility to specify neuron types
   "Do one contrastive-divergence-1 step on a restricted boltzmann machine.
@@ -1012,6 +1033,7 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 	 (h-biases-inc (make-array (list n-h) :initial-element 0.0 :element-type 'float))
 	 (cases-dim-slice (list 0 n-cases))
 	 (v-binary (rbm-v-binary rbm))
+	 (v-softmax (rbm-v-softmax rbm))
 	 ;;(v-gaussian (rbm-v-gaussian rbm))
 	 (v-linear (rbm-v-linear rbm))
 	 (h-binary (rbm-h-binary rbm))
@@ -1020,48 +1042,35 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 	 (h-linear (rbm-h-linear rbm))
 	 (h-gaussian-linear-merged (array-dim-slices-merge h-gaussian h-linear))
 	 (h-noisefree (rbm-h-noisefree rbm)))
-    (flet ((calc-h-softmax-probs (h-probs)
+    (flet ((softmax-calc-states (softmax probs states)
 	     (loop for case below n-cases for case-dim-slice = (list case (1+ case)) do
-		  (loop for l on h-softmax by #'cddr
-		     for start = (car l)
-		     for end = (cadr l) do
-		     ;;(prind l start end)
-		       (let* ((h-probs-perm (default-array-permutation h-probs))
-			      (h-probs-softmax-slice (list case-dim-slice (list start end)))
-			      (terms (array-select-perm-slice h-probs h-probs-perm h-probs-softmax-slice))
-			      (terms-1d (make-array (- end start) :displaced-to terms))
-			      (probs (softmax-from-exps-to-probs terms-1d))
-			      (probs-2d (make-array (list 1 (- end start)) :initial-contents (list probs))))
-			 (array-insert-perm-slice probs-2d (default-array-permutation probs-2d) (default-array-slice (array-dimensions probs-2d)) h-probs h-probs-perm h-probs-softmax-slice)))))
-	   (calc-h-softmax-states (h-probs h-states)
-	     (loop for case below n-cases for case-dim-slice = (list case (1+ case)) do
-		  (loop for l on h-softmax by #'cddr
+		  (loop for l on softmax by #'cddr
 		     for start = (car l)
 		     for end = (cadr l) do
 		       (let ((r (random 1.0))
 			     (sum 0.0)
 			     (softmax-dim-slice (list case-dim-slice (list start end))))
-			 (array-fun h-probs (lambda (x)
-					      (let ((from sum) (to (+ sum x)))
-						;;(prind from r to)
-						(setf sum to)
-						(if (and (<= from r) (< r to)) 1 0)))
-				    h-states :a-slice softmax-dim-slice :r-slice softmax-dim-slice)
-			 ;;(prind pos-h-probs r pos-h-states)
+			 (array-fun probs (lambda (x)
+					    (let ((from sum) (to (+ sum x)))
+					      ;;(prind from r to)
+					      (setf sum to)
+					      (if (and (<= from r) (< r to)) 1 0)))
+				    states :a-slice softmax-dim-slice :r-slice softmax-dim-slice)
+			 ;;(prind probs r states)
 			 )))))
       ;; positive phase
       (array-array-mul data w pos-h-probs)
       (array-array-fun pos-h-probs (array-repeat h-biases (list n-cases) nil) #'+ pos-h-probs)
 ;;      (print (list "prod" pos-h-probs "a-slice" (list cases-dim-slice h-binary)))
       (array-fun pos-h-probs (lambda (x) (sigmoid x)) pos-h-probs :a-slice (list cases-dim-slice h-binary) :r-slice (list cases-dim-slice h-binary))
-      (calc-h-softmax-probs pos-h-probs)
+      (softmax-calc-probs n-cases h-softmax pos-h-probs)
 ;;      (print (list "pos-h-probs" pos-h-probs))
       (array-array-mul data pos-h-probs pos-prods :a-t t)
       (setf pos-h-act (array-project pos-h-probs #'+))
       (setf pos-v-act (array-project data #'+))
 ;;      (print (list "pos-prods" pos-prods "pos-h-act" pos-h-act "pos-v-act" pos-v-act))
       (array-fun pos-h-probs (lambda (x) (if (> x (random 1.0)) 1 0)) pos-h-states :a-slice (list cases-dim-slice h-binary) :r-slice (list cases-dim-slice h-binary))
-      (calc-h-softmax-states pos-h-probs pos-h-states)
+      (softmax-calc-states h-softmax pos-h-probs pos-h-states)
       (array-fun pos-h-probs (lambda (x) (+ x (random-gaussian))) pos-h-states :a-slice (list cases-dim-slice h-gaussian-linear-merged) :r-slice (list cases-dim-slice h-gaussian-linear-merged))
       (array-fun pos-h-states (lambda (x) (max 0 x)) pos-h-states :a-slice (list cases-dim-slice h-linear) :r-slice (list cases-dim-slice h-linear))
       (array-fun pos-h-probs #'identity pos-h-states :a-slice (list cases-dim-slice h-noisefree) :r-slice (list cases-dim-slice h-noisefree))
@@ -1070,12 +1079,13 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
       (array-array-mul pos-h-states w neg-data :b-t t)
       (array-array-fun neg-data (array-repeat v-biases (list n-cases) nil) #'+ neg-data)
       (array-fun neg-data (lambda (x) (sigmoid x)) neg-data :a-slice (list cases-dim-slice v-binary) :r-slice (list cases-dim-slice v-binary))
+      (softmax-calc-probs n-cases v-softmax neg-data)
       (array-fun neg-data (lambda (x) (max x 0)) neg-data :a-slice (list cases-dim-slice v-linear) :r-slice (list cases-dim-slice v-linear))
 ;;      (print (list "neg-data" neg-data))
       (array-array-mul neg-data w neg-h-probs)
       (array-array-fun neg-h-probs (array-repeat h-biases (list n-cases) nil) #'+ neg-h-probs)
       (array-fun neg-h-probs (lambda (x) (sigmoid x)) neg-h-probs :a-slice (list cases-dim-slice h-binary) :r-slice (list cases-dim-slice h-binary))
-      (calc-h-softmax-probs neg-h-probs)
+      (softmax-calc-probs n-cases h-softmax neg-h-probs)
 ;;      (print (list "neg-h-probs" neg-h-probs))
       (array-array-mul neg-data neg-h-probs neg-prods :a-t t)
       (setf neg-h-act (array-project neg-h-probs #'+))
@@ -1107,6 +1117,7 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 (defparameter *data+0.5-extrapolate* #2A((0.5 1) (0.6 1.1) (0.7 1.2) (0.8 1.3) (0.9 1.4) (1 1.5)))
 (defparameter *data+5* #2A((0 5) (1 6) (2 7) (3 8) (4 9) (5 10)))
 (defparameter *data+5-extrapolate* #2A((6 11) (7 12) (8 13) (9.5 14.5) (-40 -35) (0 0)))
+(defparameter *data-softmax* #2A((1 0 0 1 0 0) (0 1 0 0 1 0) (0 0 1 0 0 1))) ;v-softmax='(3 3)
 
 (defun rbm-update (rbm w-inc v-biases-inc h-biases-inc learn-rate)
   (let* ((w (rbm-w rbm))
@@ -1121,7 +1132,7 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
       (array-array-fun v-biases v-biases-inc #'update-learn v-biases-new)
       (array-array-fun h-biases h-biases-inc #'update-learn h-biases-new)
       (make-rbm :w w-new :v-biases v-biases-new :h-biases h-biases-new
-		:v-binary (rbm-v-binary rbm) :v-gaussian (rbm-v-gaussian rbm) :v-linear (rbm-v-linear rbm)
+		:v-binary (rbm-v-binary rbm) :v-softmax (rbm-v-softmax rbm) :v-gaussian (rbm-v-gaussian rbm) :v-linear (rbm-v-linear rbm)
 		:h-binary (rbm-h-binary rbm) :h-softmax (rbm-h-softmax rbm) :h-gaussian (rbm-h-gaussian rbm) :h-linear (rbm-h-linear rbm) :h-noisefree (rbm-h-noisefree rbm)))))
 
 (defun rbm-learn (data rbm learn-rate momentum weight-cost max-iterations)
@@ -1151,28 +1162,15 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 	 (cases-dim-slice (list 0 n-cases))
 	 (h-binary (rbm-h-binary rbm))
 	 (h-softmax (rbm-h-softmax rbm))
-	 (h-gaussian (rbm-h-gaussian rbm))
-	 (h-linear (rbm-h-linear rbm)))
-    (declare (ignore h-gaussian h-linear))
-    (flet ((calc-h-softmax-probs (h-probs)
-	     (loop for case below n-cases for case-dim-slice = (list case (1+ case)) do
-		  (loop for l on h-softmax by #'cddr
-		     for start = (car l)
-		     for end = (cadr l) do
-		     ;;(prind l start end)
-		       (let* ((h-probs-perm (default-array-permutation h-probs))
-			      (h-probs-softmax-slice (list case-dim-slice (list start end)))
-			      (terms (array-select-perm-slice h-probs h-probs-perm h-probs-softmax-slice))
-			      (terms-1d (make-array (- end start) :displaced-to terms))
-			      (probs (softmax-from-exps-to-probs terms-1d))
-			      (probs-2d (make-array (list 1 (- end start)) :initial-contents (list probs))))
-			 (array-insert-perm-slice probs-2d (default-array-permutation probs-2d) (default-array-slice (array-dimensions probs-2d)) h-probs h-probs-perm h-probs-softmax-slice))))))
-      ;; positive phase
-      (array-array-mul data w pos-h-probs)
-      (array-array-fun pos-h-probs (array-repeat h-biases (list n-cases) nil) #'+ pos-h-probs)
-      (array-fun pos-h-probs (lambda (x) (sigmoid x)) pos-h-probs :a-slice (list cases-dim-slice h-binary) :r-slice (list cases-dim-slice h-binary))
-      (calc-h-softmax-probs pos-h-probs)
-      pos-h-probs)))
+	 ;;(h-gaussian (rbm-h-gaussian rbm))
+	 ;;(h-linear (rbm-h-linear rbm))
+	 )
+    ;; positive phase
+    (array-array-mul data w pos-h-probs)
+    (array-array-fun pos-h-probs (array-repeat h-biases (list n-cases) nil) #'+ pos-h-probs)
+    (array-fun pos-h-probs (lambda (x) (sigmoid x)) pos-h-probs :a-slice (list cases-dim-slice h-binary) :r-slice (list cases-dim-slice h-binary))
+    (softmax-calc-probs n-cases h-softmax pos-h-probs)
+    pos-h-probs))
 
 (defun rbm-v-from-h (pos-h-states rbm)
   (let* ((w (rbm-w rbm))
@@ -1182,11 +1180,13 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 	 (neg-data (make-array (list n-cases n-v) :element-type 'float))
 	 (cases-dim-slice (list 0 n-cases))
 	 (v-binary (rbm-v-binary rbm))
+	 (v-softmax (rbm-v-softmax rbm))
 	 (v-linear (rbm-v-linear rbm)))
     ;; negative phase
     (array-array-mul pos-h-states w neg-data :b-t t)
     (array-array-fun neg-data (array-repeat v-biases (list n-cases) nil) #'+ neg-data)
     (array-fun neg-data (lambda (x) (sigmoid x)) neg-data :a-slice (list cases-dim-slice v-binary) :r-slice (list cases-dim-slice v-binary))
+    (softmax-calc-probs n-cases v-softmax neg-data)
     (array-fun neg-data (lambda (x) (max x 0)) neg-data :a-slice (list cases-dim-slice v-linear) :r-slice (list cases-dim-slice v-linear))
     neg-data))
 
@@ -1197,6 +1197,7 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 ;;  (list h v))
 ;;(defparameter *rbm* (rbm-learn *data+0.5* (new-rbm 2 1 :v-gaussian 2 :h-noisefree 1) .001 .9 .0002 10000))
 ;;(defparameter *rbm* (rbm-learn *data+5* (new-rbm 2 1 :v-gaussian 2 :h-gaussian 1) .001 .9 .0002 10000))
+;;(defparameter *rbm* (rbm-learn *data-softmax* (new-rbm 6 3 :v-softmax '(3 3) :h-softmax '(3)) .1 0 .0002 1000))
 
 (defun h-from-v (v w)
 ;;  (format t "h-from-v~%")
