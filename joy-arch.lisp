@@ -135,7 +135,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 	 (dip     (cons (cadr stk) (joy-eval (cddr stk) (car stk) :heap heap :c c :cd cd)))
 	 (/       
 	  #+sbcl
-	  (if (eql 0.0 (car stk)) ;work around SBCL bug (/ 1.0 0.0)
+	  (if (= 0.0 (car stk)) ;work around SBCL bug (/ 1.0 0.0)
 	      (error (make-condition 'divison-by-zero :operands (list (cadr stk) (car stk))))
 	      (cons (/ (cadr stk) (car stk)) (cddr stk))) ;divide
 	  #-sbcl
@@ -157,7 +157,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 	 (quote   (cons (list (car stk)) (cdr stk)))
 	 (rem     
 	  #+sbcl
-	  (if (eql 0.0 (car stk)) ;work around SBCL bug (mod 1.0 0.0)
+	  (if (= 0.0 (car stk)) ;work around SBCL bug (mod 1.0 0.0)
 	      (error (make-condition 'divison-by-zero :operands (list (cadr stk) (car stk))))
 	      (cons (mod (cadr stk) (car stk)) (cddr stk)))
 	  #-sbcl
@@ -621,6 +621,10 @@ As a second value, the remainder of stk is returned, or :error if the stack didn
 (assert (eq t (valid-joy-exp '((1) define (2)))))
 (assert (eq nil (valid-joy-exp '(1 define (2)))))
 
+;; examples of equivalent joy expressions:
+;; (joy-eval nil '(1024 nill (succ) dip (swap 1 < not) ((pred dup 64 rem 0 equal) dip swap ((dup) dip cons) () branch) while))
+;; (joy-eval nil '(1024 nill (64 +) dip (swap 1 < not) ((64 - dup) dip cons) while))
+
 (defun fitness-generate-test-goal-values (fitness)
   (let* ((v (test-cases-values fitness))
 	 (generate-fn (test-cases-generate fitness))
@@ -1021,7 +1025,7 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
       (extend-exp-and-test maxlevel fitness-test-case nil l0-stks l0-heaps l0-fits goal-values #'collectfit joy-ops max-ticks max-seconds)
       (values best-exp best-fit))))
 
-;;(time (systematicmapping2 4 *fitness-sqrt-test* (cons '(1 A) *joy-ops*) 1000 .01))
+;;(time (systematicmapping2 4 *fitness-sqrt-test* (append '(1 A) *joy-ops*) 1000 .01))
 
 ;;(require :sb-sprof)
 ;;(sb-sprof:with-profiling (:max-samples 1000 :report :flat :loop nil)
