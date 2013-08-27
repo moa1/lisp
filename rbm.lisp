@@ -1135,7 +1135,7 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 		:v-binary (rbm-v-binary rbm) :v-softmax (rbm-v-softmax rbm) :v-gaussian (rbm-v-gaussian rbm) :v-linear (rbm-v-linear rbm)
 		:h-binary (rbm-h-binary rbm) :h-softmax (rbm-h-softmax rbm) :h-gaussian (rbm-h-gaussian rbm) :h-linear (rbm-h-linear rbm) :h-noisefree (rbm-h-noisefree rbm)))))
 
-(defun rbm-learn (data rbm learn-rate momentum weight-cost max-iterations)
+(defun rbm-learn-minibatch (data rbm learn-rate momentum weight-cost max-iterations)
   (assert (> max-iterations 0))
   (labels ((rec (rbm w-inc v-biases-inc h-biases-inc iteration)
 	     (print (list "iteration" iteration))
@@ -1152,6 +1152,32 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 	  (v-biases-inc (make-array (array-dimensions (rbm-v-biases rbm)) :element-type 'float))
 	  (h-biases-inc (make-array (array-dimensions (rbm-h-biases rbm)) :element-type 'float)))
       (rec rbm w-inc v-biases-inc h-biases-inc 1))))
+
+(defun rbm-learn (get-data-fn rbm learn-rate momentum weight-cost max-iterations)
+  "Learn a Restricted Boltzmann Machine (rbm) using different mini-batches of data and using RBM-LEARN-CD1 on the current rbm RBM to get a training signal.
+Each iteration, the funtion GET-DATA-FN is called with the current iteration and rbm.
+The function must decide whether to proceed with learning or to abort.
+If it wants to proceed, it must return a list of input data to be learned.
+If it wants to quit, it must return NIL.
+The training signal obtained from RBM-LEARN-CD1 is added, after using LEARN-RATE, MOMENTUM, and WEIGHT-COST, to the current RBM using RBM-UPDATE.
+This procedure is repeated at most MAX-ITERATIONS times and the resulting rbm is returned."
+  (assert (>= max-iterations 0))
+  (labels ((rec (rbm w-inc v-biases-inc h-biases-inc iteration)
+	     (print (list "iteration" iteration))
+	     (let ((data (funcall get-data-fn iteration rbm)))
+	       (if (or (null data) (>= iteration max-iterations))
+		   rbm
+		   (multiple-value-bind (w-inc-1 v-biases-inc-1 h-biases-inc-1) (rbm-learn-cd1 data rbm)
+		     (array-array-fun w-inc-1 (rbm-w rbm) (lambda (a b) (- a (* weight-cost b))) w-inc-1) ;add weight-cost
+		     (array-array-fun w-inc w-inc-1 (lambda (a b) (+ (* a momentum) b)) w-inc)
+		     (array-array-fun v-biases-inc v-biases-inc-1 (lambda (a b) (+ (* a momentum) b)) v-biases-inc)
+		     (array-array-fun h-biases-inc h-biases-inc-1 (lambda (a b) (+ (* a momentum) b)) h-biases-inc)
+		     (let ((new-rbm (rbm-update rbm w-inc v-biases-inc h-biases-inc learn-rate)))
+		       (rec new-rbm w-inc v-biases-inc h-biases-inc (1+ iteration))))))))
+    (let ((w-inc (make-array (array-dimensions (rbm-w rbm)) :element-type 'float))
+	  (v-biases-inc (make-array (array-dimensions (rbm-v-biases rbm)) :element-type 'float))
+	  (h-biases-inc (make-array (array-dimensions (rbm-h-biases rbm)) :element-type 'float)))
+      (rec rbm w-inc v-biases-inc h-biases-inc 0))))
 
 (defun rbm-h-from-v (data rbm)
   (let* ((w (rbm-w rbm))
@@ -1191,13 +1217,18 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
     neg-data))
 
 ;; these give good models:
-;;(defparameter *rbm* (rbm-learn *data* (new-rbm 6 3 :v-binary 6 :h-softmax '(3)) .01 0 .002 10000))
+;;(defparameter *rbm* (rbm-learn-minibatch *data* (new-rbm 6 3 :v-binary 6 :h-softmax '(3)) .01 0 .002 10000))
 ;;(let* ((h (rbm-h-from-v *data* *rbm*))
 ;;       (v (rbm-v-from-h h *rbm*)))
 ;;  (list h v))
-;;(defparameter *rbm* (rbm-learn *data+0.5* (new-rbm 2 1 :v-gaussian 2 :h-noisefree 1) .001 .9 .0002 10000))
-;;(defparameter *rbm* (rbm-learn *data+5* (new-rbm 2 1 :v-gaussian 2 :h-gaussian 1) .001 .9 .0002 10000))
-;;(defparameter *rbm* (rbm-learn *data-softmax* (new-rbm 6 3 :v-softmax '(3 3) :h-softmax '(3)) .1 0 .0002 1000))
+;;(defparameter *rbm* (rbm-learn-minibatch *data+0.5* (new-rbm 2 1 :v-gaussian 2 :h-noisefree 1) .001 .9 .0002 10000))
+;;(defparameter *rbm* (rbm-learn-minibatch *data+5* (new-rbm 2 1 :v-gaussian 2 :h-gaussian 1) .001 .9 .0002 10000))
+;;(defparameter *rbm* (rbm-learn-minibatch *data-softmax* (new-rbm 6 3 :v-softmax '(3 3) :h-softmax '(3)) .1 0 .0002 1000))
+
+;;(require :sb-sprof)
+;;(defun do-sprof-rbm-learn-minibatch (max-iterations)
+;;  (sb-sprof:with-profiling (:max-samples 1000 :report :flat :loop nil :reset t)
+;;    (rbm-learn-minibatch *data* (new-rbm 6 3 :h-binary 3) 1 .9 .0002 max-iterations))
 
 (defun h-from-v (v w)
 ;;  (format t "h-from-v~%")
@@ -1219,11 +1250,6 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 		       (progn 
 ;;				   (format t "i:~A j:~A wij:~A~%" i j (elt wi j))
 			 (* hj (elt wi j))))))))
-
-;;(require :sb-sprof)
-;;(defun do-sprof-rbm-learn (max-iterations)
-;;  (sb-sprof:with-profiling (:max-samples 1000 :report :flat :loop nil :reset t)
-;;    (rbm-learn *data* (new-rbm 6 3 :h-binary 3) 1 .9 .0002 max-iterations))
 
 (defun activate (n)
   (loop for p in n collect
