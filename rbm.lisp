@@ -666,13 +666,17 @@ A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices 
 
 (defun array-fun-noperm (a f r)
   "Fill the array R by calling function F on each element of A."
+  (declare (optimize (speed 3) (debug 0) (safety 0) (space 0) (compilation-speed 0))
+	   (type (simple-array single-float) a r))
   (let ((x (reduce #'* (array-dimensions a))))
+    (declare (type index x))
     (loop for i below x do
-	 (setf (row-major-aref r i) (funcall f (row-major-aref a i)))))
+	 (setf (row-major-aref r i) (funcall (the function f) (row-major-aref a i)))))
   nil)
 
 (defun array-fun-perm-slice (a f r a-perm r-perm a-slice r-slice)
-  (declare (type (simple-array single-float *) a r)) ;important float declaration
+  (declare (optimize (speed 3) (debug 0) (safety 0) (space 0) (compilation-speed 0))
+	   (type (simple-array single-float *) a r)) ;important float declaration
   (arrays-walk (list (array-dimensions a) (array-dimensions r))
 	       (list a-perm r-perm)
 	       (list a-slice r-slice)
@@ -787,6 +791,7 @@ Return the new array."
       ;;(prind r-dim r a-rank)
       ;;(prind r-dim-mul a-dim-mul-perm slice-perm)
       (when (= a-rank 1)
+	(setf a-rank 2)
 	(setf r-dim-mul (list 0))
 	(setf slice-perm-butlast slice-perm)
 	(setf r-slice '((0 1))))
@@ -1077,7 +1082,7 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
       (setf pos-h-act (array-project pos-h-probs #'+))
       (setf pos-v-act (array-project data #'+))
 ;;      (print (list "pos-prods" pos-prods "pos-h-act" pos-h-act "pos-v-act" pos-v-act))
-      (array-fun pos-h-probs (lambda (x) (declare (type single-float x)) (if (> x (random 1.0)) 1 0)) pos-h-states :a-slice (list cases-dim-slice h-binary) :r-slice (list cases-dim-slice h-binary))
+      (array-fun pos-h-probs (lambda (x) (declare (type single-float x)) (if (> x (random 1.0)) 1.0 0.0)) pos-h-states :a-slice (list cases-dim-slice h-binary) :r-slice (list cases-dim-slice h-binary))
       (softmax-calc-states h-softmax pos-h-probs pos-h-states)
       (array-fun pos-h-probs (lambda (x) (declare (type single-float x)) (+ x (the single-float (random-gaussian)))) pos-h-states :a-slice (list cases-dim-slice h-gaussian-linear-merged) :r-slice (list cases-dim-slice h-gaussian-linear-merged))
       (array-fun pos-h-states (lambda (x) (declare (type single-float x)) (max 0 x)) pos-h-states :a-slice (list cases-dim-slice h-linear) :r-slice (list cases-dim-slice h-linear))
@@ -1233,14 +1238,24 @@ This procedure is repeated at most MAX-ITERATIONS times and the resulting rbm is
 ;;(defparameter *rbm* (rbm-learn-minibatch *data+5* (new-rbm 2 1 :v-gaussian 2 :h-gaussian 1) .001 .9 .0002 10000))
 ;;(defparameter *rbm* (rbm-learn-minibatch *data-softmax* (new-rbm 6 3 :v-softmax '(3 3) :h-softmax '(3)) .1 0 .0002 1000))
 
-(let ((c '((0.0 1.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 0.0
-	    0.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 0.0 0.0
-	    0.0 0.0 0.0 0.0 1.0 0.0 0.0 5.5 0.0 0.0 0.0 6.5 0.0)
-	   (0.0 1.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 0.0
-	    0.0 0.0 1.0 0.0 0.0 0.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 0.0 0.0
-	    0.0 0.0 0.0 0.0 1.0 0.0 0.0 5.5 0.0 0.0 0.0 4.5 0.0))))
+(let ((c '((0.0
+	    1.0 0.0 0.0 0.0 0.0 0.0 0.0
+	    0.0 0.0 0.0 0.0 1.0 0.0 0.0
+	    0.0 0.0 0.0 0.0 0.0 0.0 1.0
+	    0.0 0.0 0.0 0.0 1.0 0.0 0.0
+	    1.0 0.0 0.0 0.0 0.0 0.0 0.0
+	    0.0 0.0 0.0 0.0 1.0 0.0 0.0
+	    5.5 0.0 0.0 0.0 6.5 0.0)
+	   (0.0
+	    1.0 0.0 0.0 0.0 0.0 0.0 0.0
+	    0.0 0.0 0.0 0.0 1.0 0.0 0.0
+	    0.0 0.0 0.0 0.0 0.0 1.0 0.0
+	    0.0 0.0 0.0 0.0 1.0 0.0 0.0
+	    1.0 0.0 0.0 0.0 0.0 0.0 0.0
+	    0.0 0.0 0.0 0.0 1.0 0.0 0.0
+	    5.5 0.0 0.0 0.0 4.5 0.0))))
   (defparameter *data-code* (make-array '(2 49) :element-type 'single-float :initial-contents c))
-  (defparameter *rbm-mini*  (new-rbm 49 3 :V-BINARY 1 :V-SOFTMAX '(7 7 7 7 7 7) :V-GAUSSIAN 6 :H-SOFTMAX '(2) :H-BINARY 1 :H-GAUSSIAN 0)))
+  (defparameter *rbm-mini*  (new-rbm 49 49 :V-BINARY 1 :V-SOFTMAX '(7 7 7 7 7 7) :V-GAUSSIAN 6 :H-SOFTMAX '(0) :H-BINARY 49 :H-GAUSSIAN 0 :h-noisefree 0)))
 
 ;;(require :sb-sprof)
 ;;(defun do-sprof-rbm-learn-minibatch (max-iterations)
