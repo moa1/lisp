@@ -122,7 +122,7 @@ JOY-OPS is the list of joy operations that are possible on the STK, EXP, and RES
 	 (res-gaussian-end (+ res-gaussian-offset res-length))
 	 (code-length res-gaussian-end))
     (labels ((set-code-val (val code softmax-offset gaussian-offset)
-	       ;;(prind "enc" val code offset)
+	       ;;(prind "enc" val code softmax-offset gaussian-offset)
 	       (cond
 		 ((numberp val) (progn (setf (aref code gaussian-offset) (float val))
 				       (setf (aref code (+ softmax-offset 0)) 1.0)))
@@ -159,13 +159,19 @@ JOY-OPS is the list of joy operations that are possible on the STK, EXP, and RES
 			for gaussian-offset from res-gaussian-offset by 1
 			do
 			  (set-code-val val code softmax-offset gaussian-offset)))
-		 code)))
-      (let ((stk-l (tree-to-list stk :nest-sym nest-sym :unnest-sym unnest-sym))
-	    (exp-l (tree-to-list exp :nest-sym nest-sym :unnest-sym unnest-sym))
-	    (res-l (if (eq res 'error)
-			      'error
-			      (tree-to-list res :nest-sym nest-sym :unnest-sym unnest-sym))))
-	(encode stk-l exp-l res-l)))))
+		 code))
+	     (append-with-symbol (l len sym)
+	       "Append a list of SYMs to L so that it has LEN elements."
+	       (append l (loop for i below (- len (length l)) collect sym))))
+      (let* ((stk-l (tree-to-list stk :nest-sym nest-sym :unnest-sym unnest-sym))
+	     (exp-l (tree-to-list exp :nest-sym nest-sym :unnest-sym unnest-sym))
+	     (res-l (if (eq res 'error)
+			'error
+			(tree-to-list res :nest-sym nest-sym :unnest-sym unnest-sym)))
+	     (stk-f (append-with-symbol stk-l stk-length unnest-sym))
+	     (exp-f (append-with-symbol exp-l exp-length unnest-sym))
+	     (res-f (append-with-symbol res-l res-length unnest-sym)))
+	(encode stk-f exp-f res-f)))))
 
 (defun decode-joy-input-and-result (code joy-ops nest-sym unnest-sym stk-length exp-length res-length)
   (let* ((ext-joy-ops (cons nest-sym (cons unnest-sym joy-ops)))
@@ -312,15 +318,18 @@ JOY-OPS is the list of joy operations that are possible on the STK, EXP, and RES
 		       stk (car decode) exp (cadr decode) res (caddr decode)) ;;does not hold if the -LENGTH variables are too small
 	       (setf codes (cons code codes)))))
       (enumerate-trees n joy-ops #'print #'gen-code))
-    ;; convert codes into a vector
-    (make-array (length codes) :initial-contents codes)))
+    ;; codes must be a sequence, otherwise sample-with-replacement cannot pick elements as a mini-batch
+    codes))
 
 (defun reconstruct-joy-step (stk exp res joy-ops stk-length exp-length res-length rbm)
+  (when (null res)
+    (setf res (joy-eval-handler stk exp)))
+  (print (list stk exp res))
   (let* ((code (encode-joy-input-and-result stk exp res joy-ops 'nest 'unnest stk-length exp-length res-length))
 	 (code-vector (make-array (list 1 (length code)) :initial-contents (list code)))
 	 (h (rbm-h-from-v code-vector rbm))
 	 (v (rbm-v-from-h h rbm))
-	 (v1 (make-array (rbm-n-v rbm) :displaced-to v))
+	 (v1 (make-array (rbm-n-v rbm) :element-type (array-element-type v) :displaced-to v))
 	 (decode (decode-joy-input-and-result v1 joy-ops 'nest 'unnest stk-length exp-length res-length)))
     (print (list "rbm-h" h))
     (print (list "rbm-decode" decode))))
@@ -340,7 +349,9 @@ JOY-OPS is the list of joy operations that are possible on the STK, EXP, and RES
 		 (when (= 0 (rem iteration 10))
 		   (print (list "decode" decode-1))
 		   (reconstruct-joy-step (car decode-1) (cadr decode-1) (caddr decode-1) joy-ops stk-length exp-length res-length rbm))
-		 (make-array (list n-minibatch n-visible) :element-type 'float :initial-contents data))))
+		 (make-array (list n-minibatch n-visible) :element-type 'single-float :initial-contents data))))
+	(print (list "rbm-parameters" rbm-parameters))
+	(print (list "(length codes)" (length codes)))
 	(rbm-learn #'get-data rbm learn-rate momentum weight-cost max-iterations)))))
 
 ;;(defparameter *rbm* (learn-joy-step 1 '(5.5) *joy-ops* 1000 .01 10 10 10 11 '(:h-binary 10 :h-gaussian 1) 1 .001 0 .0002 1000))

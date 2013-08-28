@@ -68,13 +68,15 @@ This function is faster than map-into, but slower than DO (which is possible whe
 
 (defun random-gaussian-2 ()
   "Return two with mean 0 and standard deviation 1 normally distributed random variables."
+  (declare (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0)))
   (flet ((xinit ()
-	   (- (* 2.0 (random 1.0)) 1)))
+	   (the single-float (- (* 2.0 (random 1.0)) 1))))
     (do* ((x1 (xinit) (xinit))
 	  (x2 (xinit) (xinit))
 	  (w (+ (* x1 x1) (* x2 x2)) (+ (* x1 x1) (* x2 x2))))
  	 ((< w 1.0)
-	  (let ((v (sqrt (/ (* -2.0 (log w)) w))))
+	  (let* ((wlog (if (<= w 0) -1000.0 (the single-float (log w))))
+		 (v (the single-float (sqrt (/ (* -2.0 wlog) w)))))
 	    (values (* x1 v) (* x2 v)))))))
 
 (defun random-gaussians (n &key (mean 0) (sd 1))
@@ -100,13 +102,14 @@ This function is faster than map-into, but slower than DO (which is possible whe
 (let ((next-random-gaussian nil))
   (defun random-gaussian ()
     "Return a with mean MEAN and standard deviation SD normally distributed random variable."
+    (declare (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0)))
     (if (null next-random-gaussian)
 	(multiple-value-bind (r1 r2) (random-gaussian-2)
 	  (setf next-random-gaussian r2)
-	  r1)
+	  (the single-float r1))
 	(let ((r1 next-random-gaussian))
 	  (setf next-random-gaussian nil)
-	  r1))))
+	  (the single-float r1)))))
 
 (defun sigmoid (x)
   (cond
@@ -513,7 +516,7 @@ ARRAYS-SLICE is the list of array slices which is applied before iterating but a
   )
 
 (defun array-array-fun-perm-slice (a b f r a-perm b-perm r-perm a-slice b-slice r-slice)
-  (declare (type (simple-array float *) a b r)) ;important float declaration
+  (declare (type (simple-array single-float *) a b r)) ;important float declaration
   (arrays-walk (list (array-dimensions a) (array-dimensions b) (array-dimensions r))
 	       (list a-perm b-perm r-perm)
 	       (list a-slice b-slice r-slice)
@@ -527,7 +530,7 @@ ARRAYS-SLICE is the list of array slices which is applied before iterating but a
   nil)
 
 (defun array-array-fun-noperm (a b f r)
-  (declare (type (simple-array float *) a b r)
+  (declare (type (simple-array single-float *) a b r)
 	   (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0)))
   (let* ((a-dims (array-dimensions a))
 	 (b-dims (array-dimensions b))
@@ -545,7 +548,7 @@ ARRAYS-SLICE is the list of array slices which is applied before iterating but a
   "Return the result array R of applying each element in arrays A and B to the function F.
 A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices used to address elements of A and B are permuted with the function PERMUTE before calling function F."
   (declare (type cons a-perm b-perm)
-	   (type (simple-array float *) a b r)
+	   (type (simple-array single-float *) a b r)
 	   (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0)))
   (let* ((a-dims (array-dimensions a))
 	 (b-dims (array-dimensions b))
@@ -583,14 +586,14 @@ A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices 
 		  (incf b-index perm-b-inc))))))
   nil)
 
-(defun array-speed-test ()
-  (let ((a (make-array '(500 10) :element-type 'float :initial-element 1.0))
-	(r (make-array '(500 10) :initial-element 0.0 :element-type 'float)))
-    (time (loop for i below 10 do
+(defun array-speed-test (&optional (iterations 10))
+  (let ((a (make-array '(500 10) :element-type 'single-float :initial-element 1.0))
+	(r (make-array '(500 10) :element-type 'single-float :initial-element 0.0)))
+    (time (loop for i below iterations do
 	       (array-array-fun-noperm a a #'+ r)))
-    (time (loop for i below 10 do
+    (time (loop for i below iterations do
 	       (array-array-fun-perm a a #'+ r '(0 1) '(0 1))))
-    (time (loop for i below 10 do
+    (time (loop for i below iterations do
 	       (array-array-fun-perm-slice a a #'+ r '(0 1) '(0 1) '(0 1) '((0 500) (0 10)) '((0 500) (0 10)) '((0 500) (0 10)))))))
 
 (defun array-array-fun (a b f r &key a-perm b-perm r-perm a-slice b-slice r-slice)
@@ -624,12 +627,12 @@ A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices 
 	    (array-array-fun-perm-slice a b f r a-perm b-perm r-perm a-slice b-slice r-slice)))))
 
 ;; test array-array-mul and array-array-fun
-(let ((a #2A((1 2 3) (4 5 6)))
-      (b #2A((0 1) (2 3) (4 5)))
-      (r (make-array '(2 2)))
-      (ta (make-array '(3 2)))
-      (tb (make-array '(2 3)))
-      (ra (make-array '(2 3))))
+(let ((a (make-array '(2 3) :element-type 'single-float :initial-contents #(#(1.0 2.0 3.0) #(4.0 5.0 6.0))))
+      (b #2A((0.0 1.0) (2.0 3.0) (4.0 5.0)))
+      (r (make-array '(2 2) :element-type 'single-float :initial-element 0.0))
+      (ta (make-array '(3 2) :element-type 'single-float :initial-element 0.0))
+      (tb (make-array '(2 3) :element-type 'single-float :initial-element 0.0))
+      (ra (make-array '(2 3) :element-type 'single-float :initial-element 0.0)))
   (array-transpose a ta)
   (array-transpose b tb)
   ;;(print (list a ta b tb))
@@ -653,11 +656,12 @@ A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices 
   (assert (equalp ra #2A((1 4 9) (16 25 36))))
   ;; some tests for :a-slice, :b-slice and :r-slice are missing here
   )
-(let ((a (make-array '(3 4 2))))
-  (array-array-fun #1=#3A(((0 1 2 3) (4 5 6 7) (8 9 10 11)) ((12 13 14 15) (16 17 18 19) (20 21 22 23))) #1# #'+ a :a-perm '(2 0 1) :b-perm '(2 0 1) :r-perm '(2 0 1))
+(let ((init (make-array '(2 3 4) :element-type 'single-float :initial-contents '(((0.0 1.0 2.0 3.0) (4.0 5.0 6.0 7.0) (8.0 9.0 10.0 11.0)) ((12.0 13.0 14.0 15.0) (16.0 17.0 18.0 19.0) (20.0 21.0 22.0 23.0)))))
+      (a (make-array '(3 4 2) :element-type 'single-float)))
+  (array-array-fun init init #'+ a :a-perm '(2 0 1) :b-perm '(2 0 1) :r-perm '(2 0 1))
   (assert (equalp a #3A(((0 24) (2 26) (4 28) (6 30)) ((8 32) (10 34) (12 36) (14 38)) ((16 40) (18 42) (20 44) (22 46)))))
-  (setf a #3A(((0 0 0 0) (0 0 0 0) (0 0 0 0)) ((0 0 0 0) (0 0 0 0) (0 0 0 0))))
-  (array-array-fun #2=#3A(((0 1 2 3) (4 5 6 7) (8 9 10 11)) ((12 13 14 15) (16 17 18 19) (20 21 22 23))) #2# #'+ a :a-perm '(2 0 1) :b-perm '(2 0 1) :r-perm '(2 0 1) :a-slice #3='((0 4) (0 2) (1 2)) :b-slice #3# :r-slice #3#)
+  (setf a (make-array '(2 3 4) :element-type 'single-float :initial-element 0.0))
+  (array-array-fun init init #'+ a :a-perm '(2 0 1) :b-perm '(2 0 1) :r-perm '(2 0 1) :a-slice #3='((0 4) (0 2) (1 2)) :b-slice #3# :r-slice #3#)
   (assert (equalp a #3A(((0 0 0 0) (8 10 12 14) (0 0 0 0)) ((0 0 0 0) (32 34 36 38) (0 0 0 0))))))
 
 (defun array-fun-noperm (a f r)
@@ -668,7 +672,7 @@ A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices 
   nil)
 
 (defun array-fun-perm-slice (a f r a-perm r-perm a-slice r-slice)
-  (declare (type (simple-array float *) a r)) ;important float declaration
+  (declare (type (simple-array single-float *) a r)) ;important float declaration
   (arrays-walk (list (array-dimensions a) (array-dimensions r))
 	       (list a-perm r-perm)
 	       (list a-slice r-slice)
@@ -714,7 +718,7 @@ This produces a new array, where DIM is omitted.
 For all elements of the new array, call function F with pairwise items (like reduce) along the DIM axis and store the result in the element.
 Return the new array."
   (declare (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0))
-	   (type (simple-array float) a))
+	   (type (simple-array single-float) a))
   (let* ((a-dimensions (array-dimensions a))
 	 (before-dimensions (subseq a-dimensions 0 dim))
 	 (after-dimensions (subseq a-dimensions (1+ dim)))
@@ -748,7 +752,7 @@ For all elements of the new array, call function F with pairwise items (like red
 Return the new array."
   ;; The idea of this function is to permute the dimensions of A so that the dimension DIM to be omitted is coming last, and when walking the permuted array to use the consecutive elements of the last dimension in calling F.
   (declare (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0))
-	   (type (simple-array float) a))
+	   (type (simple-array single-float) a))
   (flet ((perm-last (perm dim)
 	   "Modify PERM so that dimension DIM is mapped last."
 	   (declare (type list perm))
@@ -798,8 +802,8 @@ Return the new array."
 	   (setf (row-major-aref r r-index) res))))
       r)))
 
-(let* ((a #3A(((0 1 2 3) (4 5 6 7) (8 9 10 11)) ((12 13 14 15) (16 17 18 19) (20 21 22 23))))
-       (b #(0 1 2 3 4 5)))
+(let* ((a (make-array '(2 3 4) :element-type 'single-float :initial-contents '(((0.0 1.0 2.0 3.0) (4.0 5.0 6.0 7.0) (8.0 9.0 10.0 11.0)) ((12.0 13.0 14.0 15.0) (16.0 17.0 18.0 19.0) (20.0 21.0 22.0 23.0)))))
+       (b (make-array '(6) :element-type 'single-float :initial-contents '(0.0 1.0 2.0 3.0 4.0 5.0))))
   (assert (equalp (array-project-perm-slice b #'+) #0A15))
   (assert (equalp (array-project-perm-slice a #'+) (array-project-noperm a #'+)))
   (assert (equalp (array-project-perm-slice a #'+ :dim 1) (array-project-noperm a #'+ :dim 1)))
@@ -853,7 +857,7 @@ Return the new array."
   "Insert the with A-PERM permuted and A-SLICe sliced elements of array A into the elements of R specified by dimension permutation R-PERM and slice R-SLICE."
   (array-fun a #'identity r :a-perm a-perm :a-slice a-slice :r-perm r-perm :r-slice r-slice))
 
-(let* ((a #3A(((0 1 2 3) (4 5 6 7) (8 9 10 11)) ((12 13 14 15) (16 17 18 19) (20 21 22 23))))
+(let* ((a (make-array '(2 3 4) :element-type 'single-float :initial-contents '(((0.0 1.0 2.0 3.0) (4.0 5.0 6.0 7.0) (8.0 9.0 10.0 11.0)) ((12.0 13.0 14.0 15.0) (16.0 17.0 18.0 19.0) (20.0 21.0 22.0 23.0)))))
        (a-perm '(1 0 2))
        (a-slice '((0 1) (1 2) (0 1 3 4)))
        (r (array-select-perm-slice a a-perm a-slice))
@@ -895,9 +899,9 @@ ARRAYS-TYPE is the element-type of RES, A, ..., Z."
       (compile nil map-into-array))))
 
 (defstruct rbm
-  (w nil :type (simple-array float (* *)))
-  (v-biases nil :type (simple-array float (*)))
-  (h-biases nil :type (simple-array float (*)))
+  (w nil :type (simple-array single-float (* *)))
+  (v-biases nil :type (simple-array single-float (*)))
+  (h-biases nil :type (simple-array single-float (*)))
   ;; the neuron descriptors are dim-slices for the hidden or visible layer
   (v-binary nil :type list)
   (v-softmax nil :type list) ;dim-slice (4 6 6 9) means two softmax units with 2 and 3 alternative states
@@ -915,10 +919,10 @@ V-BINARY, V-GAUSSIAN, V-LINEAR must be non-negative integers adding up to N-VISI
 H-BINARY, H-GAUSSIAN, H-LINEAR, H-NOISEFREE must be non-negative integers.
 V-SOFTMAX and H-SOFTMAX must each be a list of integers greater than 2 each specifying the number of alternative states that each softmax unit can have.
 The sum of the numbers of the H-parameters plus the sum of the list of numbers of H-SOFTMAX must add up to N-HIDDEN."
-  (let ((w (make-array (list n-visible n-hidden) :element-type 'float))
-	(v-biases (make-array n-visible :element-type 'float))
-	(h-biases (make-array n-hidden :element-type 'float)))
-    (declare (type (simple-array float) w v-biases h-biases))
+  (let ((w (make-array (list n-visible n-hidden) :element-type 'single-float))
+	(v-biases (make-array n-visible :element-type 'single-float))
+	(h-biases (make-array n-hidden :element-type 'single-float)))
+    (declare (type (simple-array single-float) w v-biases h-biases))
     (let nil
       (flet ((dim-slice-for-softmax (start softmax-list)
 	       (if (null softmax-list)
@@ -955,15 +959,15 @@ The sum of the numbers of the H-parameters plus the sum of the list of numbers o
 		  :v-binary v-binary :v-softmax v-softmax :v-gaussian v-gaussian :v-linear v-linear
 		  :h-binary h-binary :h-softmax h-softmax :h-gaussian h-gaussian :h-linear h-linear :h-noisefree h-noisefree)))))
 
-(defun new-rbm-1 ()
-  (make-rbm :w #2A((0.40 0.50 0.60)
-		   (0.41 0.51 0.61)
-		   (0.42 0.52 0.62)
-		   (0.43 0.53 0.63)
-		   (0.44 0.54 0.64)
-		   (0.45 0.55 0.65))
-	    :v-biases #(0 0 0 0 0 0)
-	    :h-biases #(0 0 0)))
+;;(defun new-rbm-1 ()
+;;  (make-rbm :w #2A((0.40 0.50 0.60)
+;;		   (0.41 0.51 0.61)
+;;		   (0.42 0.52 0.62)
+;;		   (0.43 0.53 0.63)
+;;		   (0.44 0.54 0.64)
+;;		   (0.45 0.55 0.65))
+;;	    :v-biases #(0 0 0 0 0 0)
+;;	    :h-biases #(0 0 0)))
 
 (defun rbm-n-v (rbm)
   (array-dimension (rbm-w rbm) 0))
@@ -1001,9 +1005,9 @@ The sum of the numbers of the H-parameters plus the sum of the list of numbers o
 	    (let* ((probs-perm (default-array-permutation probs))
 		   (probs-softmax-slice (list case-dim-slice (list start end)))
 		   (terms (array-select-perm-slice probs probs-perm probs-softmax-slice))
-		   (terms-1d (make-array (- end start) :displaced-to terms))
+		   (terms-1d (make-array (- end start) :element-type (array-element-type terms) :displaced-to terms))
 		   (softmax-probs (softmax-from-exps-to-probs terms-1d))
-		   (softmax-probs-2d (make-array (list 1 (- end start)) :initial-contents (list softmax-probs))))
+		   (softmax-probs-2d (make-array (list 1 (- end start)) :element-type (array-element-type probs) :initial-contents (list softmax-probs))))
 	      (array-insert-perm-slice softmax-probs-2d (default-array-permutation softmax-probs-2d) (default-array-slice (array-dimensions softmax-probs-2d)) probs probs-perm probs-softmax-slice))))
   nil)
 
@@ -1012,25 +1016,26 @@ The sum of the numbers of the H-parameters plus the sum of the list of numbers o
   "Do one contrastive-divergence-1 step on a restricted boltzmann machine.
 DATA is a two-dimensional array of input values: the first dimension represents the cases of the mini-batch, the second dimension represents visible neurons.
 RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
+  (declare (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0)))
   (let* ((w (rbm-w rbm))
 	 (v-biases (rbm-v-biases rbm))
 	 (h-biases (rbm-h-biases rbm))
 	 (n-v (rbm-n-v rbm))
 	 (n-h (rbm-n-h rbm))
 	 (n-cases (array-dimension data 0))
-	 (pos-h-probs (make-array (list n-cases n-h) :element-type 'float))
-	 (pos-prods (make-array (list n-v n-h) :element-type 'float))
+	 (pos-h-probs (make-array (list n-cases n-h) :element-type 'single-float))
+	 (pos-prods (make-array (list n-v n-h) :element-type 'single-float))
 	 (pos-h-act nil)
 	 (pos-v-act nil)
-	 (pos-h-states (make-array (list n-cases n-h) :element-type 'float))
-	 (neg-data (make-array (list n-cases n-v) :element-type 'float))
-	 (neg-h-probs (make-array (list n-cases n-h) :element-type 'float))
-	 (neg-prods (make-array (list n-v n-h) :element-type 'float))
+	 (pos-h-states (make-array (list n-cases n-h) :element-type 'single-float))
+	 (neg-data (make-array (list n-cases n-v) :element-type 'single-float))
+	 (neg-h-probs (make-array (list n-cases n-h) :element-type 'single-float))
+	 (neg-prods (make-array (list n-v n-h) :element-type 'single-float))
 	 (neg-h-act nil)
 	 (neg-v-act nil)
-	 (w-inc (make-array (list n-v n-h) :element-type 'float))
-	 (v-biases-inc (make-array (list n-v) :initial-element 0.0 :element-type 'float))
-	 (h-biases-inc (make-array (list n-h) :initial-element 0.0 :element-type 'float))
+	 (w-inc (make-array (list n-v n-h) :element-type 'single-float))
+	 (v-biases-inc (make-array (list n-v) :initial-element 0.0 :element-type 'single-float))
+	 (h-biases-inc (make-array (list n-h) :initial-element 0.0 :element-type 'single-float))
 	 (cases-dim-slice (list 0 n-cases))
 	 (v-binary (rbm-v-binary rbm))
 	 (v-softmax (rbm-v-softmax rbm))
@@ -1050,8 +1055,11 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 		       (let ((r (random 1.0))
 			     (sum 0.0)
 			     (softmax-dim-slice (list case-dim-slice (list start end))))
+			 (declare (type single-float r sum))
 			 (array-fun probs (lambda (x)
-					    (let ((from sum) (to (+ sum x)))
+					    (declare (type single-float x))
+					    (let ((from sum) (to (the single-float (+ sum x))))
+					      (declare (type single-float from to))
 					      ;;(prind from r to)
 					      (setf sum to)
 					      (if (and (<= from r) (< r to)) 1 0)))
@@ -1069,10 +1077,10 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
       (setf pos-h-act (array-project pos-h-probs #'+))
       (setf pos-v-act (array-project data #'+))
 ;;      (print (list "pos-prods" pos-prods "pos-h-act" pos-h-act "pos-v-act" pos-v-act))
-      (array-fun pos-h-probs (lambda (x) (if (> x (random 1.0)) 1 0)) pos-h-states :a-slice (list cases-dim-slice h-binary) :r-slice (list cases-dim-slice h-binary))
+      (array-fun pos-h-probs (lambda (x) (declare (type single-float x)) (if (> x (random 1.0)) 1 0)) pos-h-states :a-slice (list cases-dim-slice h-binary) :r-slice (list cases-dim-slice h-binary))
       (softmax-calc-states h-softmax pos-h-probs pos-h-states)
-      (array-fun pos-h-probs (lambda (x) (+ x (random-gaussian))) pos-h-states :a-slice (list cases-dim-slice h-gaussian-linear-merged) :r-slice (list cases-dim-slice h-gaussian-linear-merged))
-      (array-fun pos-h-states (lambda (x) (max 0 x)) pos-h-states :a-slice (list cases-dim-slice h-linear) :r-slice (list cases-dim-slice h-linear))
+      (array-fun pos-h-probs (lambda (x) (declare (type single-float x)) (+ x (the single-float (random-gaussian)))) pos-h-states :a-slice (list cases-dim-slice h-gaussian-linear-merged) :r-slice (list cases-dim-slice h-gaussian-linear-merged))
+      (array-fun pos-h-states (lambda (x) (declare (type single-float x)) (max 0 x)) pos-h-states :a-slice (list cases-dim-slice h-linear) :r-slice (list cases-dim-slice h-linear))
       (array-fun pos-h-probs #'identity pos-h-states :a-slice (list cases-dim-slice h-noisefree) :r-slice (list cases-dim-slice h-noisefree))
 ;;      (print (list "pos-h-states" pos-h-states))
       ;; negative phase
@@ -1080,11 +1088,11 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
       (array-array-fun neg-data (array-repeat v-biases (list n-cases) nil) #'+ neg-data)
       (array-fun neg-data (lambda (x) (sigmoid x)) neg-data :a-slice (list cases-dim-slice v-binary) :r-slice (list cases-dim-slice v-binary))
       (softmax-calc-probs n-cases v-softmax neg-data)
-      (array-fun neg-data (lambda (x) (max x 0)) neg-data :a-slice (list cases-dim-slice v-linear) :r-slice (list cases-dim-slice v-linear))
+      (array-fun neg-data (lambda (x) (declare (type single-float x)) (max x 0)) neg-data :a-slice (list cases-dim-slice v-linear) :r-slice (list cases-dim-slice v-linear))
 ;;      (print (list "neg-data" neg-data))
       (array-array-mul neg-data w neg-h-probs)
       (array-array-fun neg-h-probs (array-repeat h-biases (list n-cases) nil) #'+ neg-h-probs)
-      (array-fun neg-h-probs (lambda (x) (sigmoid x)) neg-h-probs :a-slice (list cases-dim-slice h-binary) :r-slice (list cases-dim-slice h-binary))
+      (array-fun neg-h-probs (lambda (x) (declare (type single-float x)) (sigmoid x)) neg-h-probs :a-slice (list cases-dim-slice h-binary) :r-slice (list cases-dim-slice h-binary))
       (softmax-calc-probs n-cases h-softmax neg-h-probs)
 ;;      (print (list "neg-h-probs" neg-h-probs))
       (array-array-mul neg-data neg-h-probs neg-prods :a-t t)
@@ -1092,14 +1100,14 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
       (setf neg-v-act (array-project neg-data #'+))
 ;;      (print (list "neg-prods" neg-prods "neg-h-act" neg-h-act "neg-v-act" neg-v-act))
       ;; learning
-      (array-array-fun pos-prods neg-prods (lambda (a b) (/ (- a b) n-cases)) w-inc)
-      (array-array-fun pos-v-act neg-v-act (lambda (a b) (/ (- a b) n-cases)) v-biases-inc)
-      (array-array-fun pos-h-act neg-h-act (lambda (a b) (/ (- a b) n-cases)) h-biases-inc)
+      (array-array-fun pos-prods neg-prods (lambda (a b) (declare (type single-float a b)) (/ (- a b) n-cases)) w-inc)
+      (array-array-fun pos-v-act neg-v-act (lambda (a b) (declare (type single-float a b)) (/ (- a b) n-cases)) v-biases-inc)
+      (array-array-fun pos-h-act neg-h-act (lambda (a b) (declare (type single-float a b)) (/ (- a b) n-cases)) h-biases-inc)
 ;;      (print (list "w-inc" w-inc "v-biases-inc" v-biases-inc "h-biases-inc" h-biases-inc))
-      (let ((err-array (make-array (list n-cases n-v) :element-type 'float))
+      (let ((err-array (make-array (list n-cases n-v) :element-type 'single-float))
 	    (err nil))
-	(array-array-fun data neg-data (lambda (a b) (expt (- a b) 2)) err-array)
-	(setf err (aref (array-project (array-project err-array #'+) #'+)))
+	(array-array-fun data neg-data (lambda (a b) (declare (type single-float a b)) (expt (- a b) 2)) err-array)
+	(setf err (aref (the (simple-array single-float) (array-project (the (simple-array single-float) (array-project err-array #'+)) #'+))))
 	(print (list "err" err)))
       (values w-inc v-biases-inc h-biases-inc))))
 
@@ -1148,9 +1156,9 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 		 (if (= iteration max-iterations)
 		     new-rbm
 		     (rec new-rbm w-inc v-biases-inc h-biases-inc (1+ iteration)))))))
-    (let ((w-inc (make-array (array-dimensions (rbm-w rbm)) :element-type 'float))
-	  (v-biases-inc (make-array (array-dimensions (rbm-v-biases rbm)) :element-type 'float))
-	  (h-biases-inc (make-array (array-dimensions (rbm-h-biases rbm)) :element-type 'float)))
+    (let ((w-inc (make-array (array-dimensions (rbm-w rbm)) :element-type 'single-float))
+	  (v-biases-inc (make-array (array-dimensions (rbm-v-biases rbm)) :element-type 'single-float))
+	  (h-biases-inc (make-array (array-dimensions (rbm-h-biases rbm)) :element-type 'single-float)))
       (rec rbm w-inc v-biases-inc h-biases-inc 1))))
 
 (defun rbm-learn (get-data-fn rbm learn-rate momentum weight-cost max-iterations)
@@ -1174,9 +1182,9 @@ This procedure is repeated at most MAX-ITERATIONS times and the resulting rbm is
 		     (array-array-fun h-biases-inc h-biases-inc-1 (lambda (a b) (+ (* a momentum) b)) h-biases-inc)
 		     (let ((new-rbm (rbm-update rbm w-inc v-biases-inc h-biases-inc learn-rate)))
 		       (rec new-rbm w-inc v-biases-inc h-biases-inc (1+ iteration))))))))
-    (let ((w-inc (make-array (array-dimensions (rbm-w rbm)) :element-type 'float))
-	  (v-biases-inc (make-array (array-dimensions (rbm-v-biases rbm)) :element-type 'float))
-	  (h-biases-inc (make-array (array-dimensions (rbm-h-biases rbm)) :element-type 'float)))
+    (let ((w-inc (make-array (array-dimensions (rbm-w rbm)) :element-type 'single-float))
+	  (v-biases-inc (make-array (array-dimensions (rbm-v-biases rbm)) :element-type 'single-float))
+	  (h-biases-inc (make-array (array-dimensions (rbm-h-biases rbm)) :element-type 'single-float)))
       (rec rbm w-inc v-biases-inc h-biases-inc 0))))
 
 (defun rbm-h-from-v (data rbm)
@@ -1184,7 +1192,7 @@ This procedure is repeated at most MAX-ITERATIONS times and the resulting rbm is
 	 (h-biases (rbm-h-biases rbm))
 	 (n-h (rbm-n-h rbm))
 	 (n-cases (array-dimension data 0))
-	 (pos-h-probs (make-array (list n-cases n-h) :element-type 'float))
+	 (pos-h-probs (make-array (list n-cases n-h) :element-type 'single-float))
 	 (cases-dim-slice (list 0 n-cases))
 	 (h-binary (rbm-h-binary rbm))
 	 (h-softmax (rbm-h-softmax rbm))
@@ -1203,7 +1211,7 @@ This procedure is repeated at most MAX-ITERATIONS times and the resulting rbm is
 	 (n-v (rbm-n-v rbm))
 	 (v-biases (rbm-v-biases rbm))
 	 (n-cases (array-dimension pos-h-states 0))
-	 (neg-data (make-array (list n-cases n-v) :element-type 'float))
+	 (neg-data (make-array (list n-cases n-v) :element-type 'single-float))
 	 (cases-dim-slice (list 0 n-cases))
 	 (v-binary (rbm-v-binary rbm))
 	 (v-softmax (rbm-v-softmax rbm))
@@ -1224,6 +1232,15 @@ This procedure is repeated at most MAX-ITERATIONS times and the resulting rbm is
 ;;(defparameter *rbm* (rbm-learn-minibatch *data+0.5* (new-rbm 2 1 :v-gaussian 2 :h-noisefree 1) .001 .9 .0002 10000))
 ;;(defparameter *rbm* (rbm-learn-minibatch *data+5* (new-rbm 2 1 :v-gaussian 2 :h-gaussian 1) .001 .9 .0002 10000))
 ;;(defparameter *rbm* (rbm-learn-minibatch *data-softmax* (new-rbm 6 3 :v-softmax '(3 3) :h-softmax '(3)) .1 0 .0002 1000))
+
+(let ((c '((0.0 1.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 0.0
+	    0.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 0.0 0.0
+	    0.0 0.0 0.0 0.0 1.0 0.0 0.0 5.5 0.0 0.0 0.0 6.5 0.0)
+	   (0.0 1.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 0.0
+	    0.0 0.0 1.0 0.0 0.0 0.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 0.0 0.0
+	    0.0 0.0 0.0 0.0 1.0 0.0 0.0 5.5 0.0 0.0 0.0 4.5 0.0))))
+  (defparameter *data-code* (make-array '(2 49) :element-type 'single-float :initial-contents c))
+  (defparameter *rbm-mini*  (new-rbm 49 3 :V-BINARY 1 :V-SOFTMAX '(7 7 7 7 7 7) :V-GAUSSIAN 6 :H-SOFTMAX '(2) :H-BINARY 1 :H-GAUSSIAN 0)))
 
 ;;(require :sb-sprof)
 ;;(defun do-sprof-rbm-learn-minibatch (max-iterations)
