@@ -104,16 +104,16 @@ The *-LENGTH-variables are the maximum lengths that the respective * variables m
 JOY-OPS is the list of joy operations that are possible on the STK, EXP, and RES."
   (let* ((ext-joy-ops (cons nest-sym (cons unnest-sym joy-ops))) ;extend the joy-ops by nest-sym and unnest-sym
 	 ;; The code consists of one binary neuron, one softmax neuron for each value and element in ext-joy-ops, and one number neuron for each value.
-	 (val-length (+ (length ext-joy-ops) 3)) ;'(number-p nil t) plus the ext-joy-ops
+	 (n-softmax (+ (length ext-joy-ops) 3)) ;'(number-p nil t) plus the ext-joy-ops
 	 ;; The code array is arranged in this order:
 	 (res-errorp-binary-offset 0)
 	 (res-errorp-binary-end (+ res-errorp-binary-offset 1))
 	 (stk-softmax-offset res-errorp-binary-end)
-	 (stk-softmax-end (+ stk-softmax-offset (* val-length stk-length)))
+	 (stk-softmax-end (+ stk-softmax-offset (* n-softmax stk-length)))
 	 (exp-softmax-offset stk-softmax-end)
-	 (exp-softmax-end (+ exp-softmax-offset (* val-length exp-length)))
+	 (exp-softmax-end (+ exp-softmax-offset (* n-softmax exp-length)))
 	 (res-softmax-offset exp-softmax-end)
-	 (res-softmax-end (+ res-softmax-offset (* val-length res-length)))
+	 (res-softmax-end (+ res-softmax-offset (* n-softmax res-length)))
 	 (stk-gaussian-offset res-softmax-end)
 	 (stk-gaussian-end (+ stk-gaussian-offset stk-length))
 	 (exp-gaussian-offset stk-gaussian-end)
@@ -139,14 +139,14 @@ JOY-OPS is the list of joy operations that are possible on the STK, EXP, and RES
 		 (loop
 		    for i below stk-length
 		    for val in stk
-		    for softmax-offset from stk-softmax-offset by val-length
+		    for softmax-offset from stk-softmax-offset by n-softmax
 		    for gaussian-offset from stk-gaussian-offset by 1
 		    do
 		      (set-code-val val code softmax-offset gaussian-offset))
 		 (loop
 		    for i below exp-length
 		    for val in exp
-		    for softmax-offset from exp-softmax-offset by val-length
+		    for softmax-offset from exp-softmax-offset by n-softmax
 		    for gaussian-offset from exp-gaussian-offset by 1
 		    do
 		      (set-code-val val code softmax-offset gaussian-offset))
@@ -155,7 +155,7 @@ JOY-OPS is the list of joy operations that are possible on the STK, EXP, and RES
 		     (loop
 			for i below res-length
 			for val in res
-			for softmax-offset from res-softmax-offset by val-length
+			for softmax-offset from res-softmax-offset by n-softmax
 			for gaussian-offset from res-gaussian-offset by 1
 			do
 			  (set-code-val val code softmax-offset gaussian-offset)))
@@ -170,24 +170,23 @@ JOY-OPS is the list of joy operations that are possible on the STK, EXP, and RES
 			(tree-to-list res :nest-sym nest-sym :unnest-sym unnest-sym)))
 	     (stk-f (append-with-symbol stk-l stk-length unnest-sym))
 	     (exp-f (append-with-symbol exp-l exp-length unnest-sym))
-	     (res-f (append-with-symbol res-l res-length unnest-sym)))
+	     (res-f (if (eq res-l 'error)
+			'error
+			(append-with-symbol res-l res-length unnest-sym))))
 	(encode stk-f exp-f res-f)))))
 
 (defun decode-joy-input-and-result (code joy-ops nest-sym unnest-sym stk-length exp-length res-length)
   (let* ((ext-joy-ops (cons nest-sym (cons unnest-sym joy-ops)))
 	 ;; The code consists of one binary neuron, one softmax neuron for each value and element in ext-joy-ops, and one number neuron for each value.
-
-	 ;; TODO: rename val-length into n-softmax-units
-
-	 (val-length (+ (length ext-joy-ops) 3))
+	 (n-softmax (+ (length ext-joy-ops) 3))
 	 (res-errorp-binary-offset 0)
 	 (res-errorp-binary-end (+ res-errorp-binary-offset 1))
 	 (stk-softmax-offset res-errorp-binary-end)
-	 (stk-softmax-end (+ stk-softmax-offset (* val-length stk-length)))
+	 (stk-softmax-end (+ stk-softmax-offset (* n-softmax stk-length)))
 	 (exp-softmax-offset stk-softmax-end)
-	 (exp-softmax-end (+ exp-softmax-offset (* val-length exp-length)))
+	 (exp-softmax-end (+ exp-softmax-offset (* n-softmax exp-length)))
 	 (res-softmax-offset exp-softmax-end)
-	 (res-softmax-end (+ res-softmax-offset (* val-length res-length)))
+	 (res-softmax-end (+ res-softmax-offset (* n-softmax res-length)))
 	 (stk-gaussian-offset res-softmax-end)
 	 (stk-gaussian-end (+ stk-gaussian-offset stk-length))
 	 (exp-gaussian-offset stk-gaussian-end)
@@ -198,7 +197,7 @@ JOY-OPS is the list of joy operations that are possible on the STK, EXP, and RES
     (declare (ignore code-length))
     (labels ((get-code-val (code softmax-offset gaussian-offset softmax-max-pos)
 	       (declare (ignore softmax-offset))
-	       (assert (and (<= 0 softmax-max-pos) (< softmax-max-pos val-length)))
+	       (assert (and (<= 0 softmax-max-pos) (< softmax-max-pos n-softmax)))
 	       ;;(prind max-pos offset)
 	       (case softmax-max-pos
 		 (0 (aref code (+ gaussian-offset 0)))
@@ -208,7 +207,7 @@ JOY-OPS is the list of joy operations that are possible on the STK, EXP, and RES
 	     (top-softmax-pos (softmax-offset)
 	       (- (position-top code #'>
 				:start softmax-offset
-				:end (+ softmax-offset val-length))
+				:end (+ softmax-offset n-softmax))
 		  softmax-offset))
 	     (decode (code)
 	       "Return stk, exp and res."
@@ -216,7 +215,7 @@ JOY-OPS is the list of joy operations that are possible on the STK, EXP, and RES
 		 (setf stk
 		       (loop
 			  for i below stk-length
-			  for softmax-offset from stk-softmax-offset by val-length
+			  for softmax-offset from stk-softmax-offset by n-softmax
 			  for gaussian-offset from stk-gaussian-offset by 1
 			  for softmax-max-pos = (top-softmax-pos softmax-offset)
 			  collect
@@ -224,7 +223,7 @@ JOY-OPS is the list of joy operations that are possible on the STK, EXP, and RES
 		 (setf exp
 		       (loop
 			  for i below exp-length
-			  for softmax-offset from exp-softmax-offset by val-length
+			  for softmax-offset from exp-softmax-offset by n-softmax
 			  for gaussian-offset from exp-gaussian-offset by 1
 			  for softmax-max-pos = (top-softmax-pos softmax-offset)
 			  collect
@@ -234,7 +233,7 @@ JOY-OPS is the list of joy operations that are possible on the STK, EXP, and RES
 			   'error
 			   (loop
 			      for i below res-length
-			      for softmax-offset from res-softmax-offset by val-length
+			      for softmax-offset from res-softmax-offset by n-softmax
 			      for gaussian-offset from res-gaussian-offset by 1
 			      for softmax-max-pos = (top-softmax-pos softmax-offset)
 			      collect
@@ -250,15 +249,15 @@ JOY-OPS is the list of joy operations that are possible on the STK, EXP, and RES
 
 (defun rbm-input-parameters-joy-input-and-result (joy-ops stk-length exp-length res-length)
   (let* ((ext-joy-ops(cons 'nest (cons 'unnest joy-ops)))
-	 (val-length (+ (length ext-joy-ops) 3))
+	 (n-softmax (+ (length ext-joy-ops) 3))
 	 (res-errorp-binary-offset 0)
 	 (res-errorp-binary-end (+ res-errorp-binary-offset 1))
 	 (stk-softmax-offset res-errorp-binary-end)
-	 (stk-softmax-end (+ stk-softmax-offset (* val-length stk-length)))
+	 (stk-softmax-end (+ stk-softmax-offset (* n-softmax stk-length)))
 	 (exp-softmax-offset stk-softmax-end)
-	 (exp-softmax-end (+ exp-softmax-offset (* val-length exp-length)))
+	 (exp-softmax-end (+ exp-softmax-offset (* n-softmax exp-length)))
 	 (res-softmax-offset exp-softmax-end)
-	 (res-softmax-end (+ res-softmax-offset (* val-length res-length)))
+	 (res-softmax-end (+ res-softmax-offset (* n-softmax res-length)))
 	 (stk-gaussian-offset res-softmax-end)
 	 (stk-gaussian-end (+ stk-gaussian-offset stk-length))
 	 (exp-gaussian-offset stk-gaussian-end)
@@ -268,9 +267,9 @@ JOY-OPS is the list of joy operations that are possible on the STK, EXP, and RES
 	 (code-length res-gaussian-end))
     (declare (ignore code-length))
     (let* ((v-binary 1)
-	   (v-softmax (append (loop for softmax-offset from stk-softmax-offset below stk-softmax-end by val-length collect val-length)
-			      (loop for softmax-offset from exp-softmax-offset below exp-softmax-end by val-length collect val-length)
-			      (loop for softmax-offset from res-softmax-offset below res-softmax-end by val-length collect val-length)))
+	   (v-softmax (append (loop for softmax-offset from stk-softmax-offset below stk-softmax-end by n-softmax collect n-softmax)
+			      (loop for softmax-offset from exp-softmax-offset below exp-softmax-end by n-softmax collect n-softmax)
+			      (loop for softmax-offset from res-softmax-offset below res-softmax-end by n-softmax collect n-softmax)))
 	   (v-gaussian (- res-gaussian-end stk-gaussian-offset)))
       (values (+ v-binary (apply #'+ v-softmax) v-gaussian)
 	      (list :v-binary v-binary
