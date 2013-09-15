@@ -1052,7 +1052,7 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
 	       (if (eq ret 'error)
 		   (incf errors)
 		   (incf oks)))))
-      (enumerate-trees n joy-ops #'print #'try))
+      (enumerate-labelled-trees n joy-ops #'print #'try))
     (values errors oks)))
 
 ; (count-error-joy-expressions 5 '(0) *joy-ops* 1000 .01)

@@ -316,7 +316,7 @@ JOY-OPS is the list of joy operations that are possible on the STK, EXP, and RES
 		       "stk:~A d-stk:~A~%exp:~A d-exp:~A~%res:~A d-res:~A~%"
 		       stk (car decode) exp (cadr decode) res (caddr decode)) ;;does not hold if the -LENGTH variables are too small
 	       (setf codes (cons code codes)))))
-      (enumerate-trees n joy-ops #'print #'gen-code))
+      (enumerate-labelled-trees n joy-ops #'print #'gen-code))
     ;; codes must be a sequence, otherwise sample-with-replacement cannot pick elements as a mini-batch
     codes))
 
