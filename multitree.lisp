@@ -236,3 +236,190 @@ If OBJ is true, the list is made of the DLL elements, and of the objects of DLL 
 	(do-dllist (cur dll :circular dll-is-circular)
 	  (setf l (cons cur l))))
     (nreverse l)))
+
+;;;; implement a priority queue using a fibonacci heap to find the element with lowest/highest priority.
+;;;; See Wikipedia article "Fibonacci heap".
+
+(deftype dltree ()
+  `dllist)
+
+(defstruct node
+  (priority 0 :type number)
+  (marked nil :type (or t null))
+  ;; The number of children (total number of leaves) of this node.
+  (degree 0 :type (and unsigned-byte fixnum))
+  ;; The doubly linked list of children nodes. (Or NIL if no children).
+  (children nil :type (or null dltree)))
+
+(defclass fibheap ()
+  ((forest :accessor fibheap-forest :type (or null dllist) :initarg nil
+	   :documentation "A doubly linked list of trees. Each object (accessed by dllist-obj) of the list is a NODE."
+	   :initarg :forest)
+   (root :accessor fibheap-root :type (or null dltree)
+	 :documentation "A pointer to the minimum of FOREST."
+	 :initarg :root)
+   (size :accessor fibheap-size :type (and fixnum unsigned-byte)
+	 :documentation "The total number of nodes stored in the heap."
+	 :initarg :size))
+  (:documentation "A fibonacci heap."))
+
+(defmethod print-object ((fh fibheap) stream)
+  (print-unreadable-object (fh stream)
+    (format stream "FIBHEAP :FOREST ~A :ROOT ~A :SIZE ~A" (fibheap-forest fh) (fibheap-root fh) (fibheap-size fh))))
+(defun list-fibheap-forest (fh-forest)
+  (labels ((collect (dll)
+	     (if (null dll)
+		 nil
+		 (let ((ret nil))
+		   (do-dllist (cur dll :circular t)
+		     (setf ret (append ret (list :P (node-priority (dllist-obj cur))
+						 :C (collect (node-children (dllist-obj cur)))))))
+		   ret))))
+    (collect fh-forest)))
+
+(defgeneric fibheap-empty (fh))
+(defmethod fibheap-empty ((fh fibheap))
+  (null (fibheap-root fh)))
+
+(defgeneric fibheap-min (fh))
+(defmethod fibheap-min ((fh fibheap))
+  "Return the minimum of the fibonacci heap FH, or NIL if FH is empty."
+  (if (fibheap-empty fh)
+      nil
+      (node-priority (dllist-obj (fibheap-root fh)))))
+
+(defgeneric fibheap-merge (fh1 fh2)
+  (:documentation "Destructively merge fibonacci heaps FH1 and FH2 and return the resulting fibonacci heap (which shares memory with FH1 and FH2)."))
+(defmethod fibheap-merge ((fh1 fibheap) (fh2 fibheap))
+  ;; FIXME: Change this function so that it always changes FH1 and doesn't choose returning FH1 or FH2 (this makes it possible to avoid a (setf fh (fibheap-merge fh1 fh2)).
+  (if (fibheap-empty fh1)
+      (if (fibheap-empty fh2)
+	  nil
+	  fh2)
+      (if (fibheap-empty fh2)
+	  fh1
+	  (if (< (fibheap-min fh1) (fibheap-min fh2))
+	      (progn
+		(setf (fibheap-forest fh1)
+		      (dllist-insert-list (fibheap-forest fh1) (fibheap-forest fh2) :dll2-is-circular t))
+		;; (fibheap-root fh1) points to the correct element
+		(incf (fibheap-size fh1) (fibheap-size fh2))
+		fh1)
+	      (progn
+		(setf (fibheap-forest fh2)
+		      (dllist-insert-list (fibheap-forest fh2) (fibheap-forest fh1) :dll2-is-circular t))
+		;; (fibheap-root fh2) points to the correct element
+		(incf (fibheap-size fh2) (fibheap-size fh1))
+		fh2)))))
+
+(defun fibheap-new (&optional priority)
+  "Create a new fibheap.
+If PRIORITY is specified, a node with this priority is created."
+  (if priority
+      (let* ((new-node (make-node :priority priority))
+	     (new-forest (dllist-circular new-node))
+	     (new-fibheap (make-instance 'fibheap
+					 :forest new-forest
+					 :root new-forest
+					 :size 1)))
+	new-fibheap)
+      (make-instance 'fibheap :forest nil :root nil :size 0)))
+
+(defgeneric fibheap-insert (fh priority)
+  (:documentation "Destructively insert a new element with priority PRIORITY into the fibonaccy heap FH and return the new element."))
+(defmethod fibheap-insert ((fh fibheap) priority)
+  (fibheap-merge fh (fibheap-new priority)))
+
+(defmacro swap (var1 var2)
+  "Swap the values of places VAR1 and VAR2.
+Returns VAR1."
+  (with-gensyms (temp)
+    `(progn
+       (let ((,temp ,var1))
+	 (setf ,var1 ,var2)
+	 (setf ,var2 ,temp)))))
+
+(defgeneric fibheap-pop (fh)
+  (:documentation "Destructively remove the minimum of fibheap FH and return the resulting tree.
+Get the minimum value by fibheap-min first."))
+(defmethod fibheap-pop ((fh fibheap))
+  (declare (optimize (debug 3) (safety 3)))
+  (labels ((remove-root ()
+	     "In the first phase, remove the root node; its children become part of the forest."
+	     (let* ((children (node-children (dllist-obj (fibheap-root fh)))))
+	       (setf (fibheap-forest fh) (dllist-delete (fibheap-root fh)))
+	       (setf (fibheap-root fh) nil) ;; Just so that we remember that the root is invalid for now.
+	       ;;(format t "AAAREMOVE-ROOT A (fibheap-forest fh):~A children:~A~%" (list-fibheap-forest (fibheap-forest fh)) (list-fibheap-forest children))
+	       (setf (fibheap-forest fh) (dllist-insert-list (fibheap-forest fh) children :dll2-is-circular t))
+	       ;;(format t "AAAREMOVE-ROOT B (fibheap-forest fh):~A~%" (list-fibheap-forest (fibheap-forest fh)))
+	       (decf (fibheap-size fh))))
+	   (merge-trees-from-forest (root1 root2)
+	     "TREE1 and TREE2 are elements of (FIBHEAP-FOREST FH). Merge them and return the remaining tree."
+	     (let ((node1 (dllist-obj root1))
+		   (node2 (dllist-obj root2)))
+	       (when (> (node-priority node1) (node-priority node2))
+		 (swap root1 root2)
+		 (swap node1 node2))
+	       ;; make root2 a child of root1
+	       ;;(format t "children-root1:~A root2-obj:~A~%" (node-children (dllist-obj root1)) (dllist-obj root2))
+	       (setf (node-children node1)
+		     (dllist-insert (node-children node1) node2 :new-circular t))
+	       (incf (node-degree node1) (node-degree node2))
+	       ;; delete root2 from fibheap-forest
+	       (setf (fibheap-forest fh) (dllist-delete root2))
+	       ;; root1 remains
+	       root1))
+	   (merge-trees ()
+	     "In the second phase, merge trees of the forest which have equal degree.
+To find trees of the same degree efficiently we use an array of length O(log n) in which we keep a pointer to one root of each degree. When a second root is found of the same degree, the two are linked and the array is updated."
+	     ;;(format t "AAAMERGE-TREES~%")
+	     (when (> (fibheap-size fh) 1)
+	       (let* ((logsize (ceiling (log (fibheap-size fh) 2)))
+		      (degree-array (make-array logsize :element-type '(or dltree null) :initial-element nil))
+		      ;; copying the forest is neccessary because it is changed in merge-trees-from-forest
+		      (forest (dllist-to-list (fibheap-forest fh) :dll-is-circular t :obj nil)))
+		 ;;(format t "fibheap-size:~A logsize:~A~%" (fibheap-size fh) logsize)
+		 (dolist (cur forest)
+		   (let* ((node (dllist-obj cur))
+			  (degree (node-degree node)))
+		     ;;(format t "degree:~A~%" degree)
+		     (if (aref degree-array degree)
+			 ;; merge trees
+			 (setf (aref degree-array degree)
+			       (merge-trees-from-forest (aref degree-array degree) cur))
+			 (setf (aref degree-array degree) cur))))
+		 ;; fibheap-forest was already updated by merge-trees-from-forest
+		 )))
+	   (find-new-root ()
+	     "In the third phase we check each of the remaining roots and find the minimum.
+Update root and decrease size by 1."
+	     (let* ((min (fibheap-forest fh))
+		    (min-priority (node-priority (dllist-obj min))))
+	       ;; FIXME: the first element is checked twice. Omit checking it against itself.
+	       (do-dllist (cur (fibheap-forest fh) :circular t)
+		 (let ((cur-priority (node-priority (dllist-obj cur))))
+		   ;;(format t "cur:~A cur-prio:~A min:~A min-prio:~A~%" cur cur-priority min min-priority)
+		   (when (< cur-priority min-priority)
+		     (setf min cur)
+		     (setf min-priority cur-priority))))
+	       (setf (fibheap-root fh) min))))
+    (when (fibheap-empty fh)
+      (error "Cannot pop an element off of an empty fibheap."))
+    (remove-root)
+    (if (null (fibheap-forest fh))
+	fh ;; root was set to nil already by remove-root, therefore fh is consistent like this.
+	(progn
+	  (merge-trees)
+	  (find-new-root)
+	  fh))))
+
+;;(let ((fh (fibheap-new 4))
+;;	       ;(ins (loop for i below 10 collect (random 10)))
+;;	       (ins '(1 8 4 8 8 3 2 3 5 3)))
+;;	   (print ins)
+;;	   (loop for i in ins do (setf fh (fibheap-insert fh i)))
+;;	   (loop for i below 10 do
+;;		(print (list "fibheap-min" (fibheap-min fh)))
+;;		(fibheap-pop fh))
+;;	   fh)
+
