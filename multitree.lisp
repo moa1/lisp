@@ -1,4 +1,4 @@
-(use-package :cl-custom-hash-table)
+;;(use-package :cl-custom-hash-table)
 
 (defstruct multitree-type
   ;; Takes the multitree, a key, and a value. Destructively add the value or change the value stored below the key in the multitree. Returns the modified multitree and a boolean indicating if the key was changed (and not added).
@@ -55,14 +55,17 @@ Returns as values the subtree found and a value indicating if all elements of PA
                     xy
                     (ash xy -5)))))
 
-(declaim (inline lsxhash))
+;;(declaim (inline lsxhash))
 (defun lsxhash (x)
   "Return a hash value for value X.
 X, (car X), and (cdr X) may be a list, a symbol, or a number."
   (declare (optimize (speed 3) (safety 0) (compilation-speed 0) (space 0)))
   (declare (values (and fixnum unsigned-byte))) ;inferred automatically (see describe 'lsxhash)
   (etypecase x
-    (number (sxhash x))
+    (single-float (sxhash x))
+    (double-float (sxhash x))
+    (fixnum (sxhash x))
+    ;;(number (sxhash x))
     (symbol (sxhash x))
     ;; here, X can't be nil since (symbolp nil) == T.
     (list (mix (lsxhash (car x)) (lsxhash (cdr x))))))
@@ -72,14 +75,12 @@ X, (car X), and (cdr X) may be a list, a symbol, or a number."
 
 ;;;; A doubly linked list
 
-;;(defclass dllist ()
-;;  ((obj :accessor dllist-obj :type t :initarg nil)
-;;   (bdr :accessor dllist-bdr :initarg nil :type (or dllist nil) :documentation "The ancestor list.")
-;;   (cdr :accessor dllist-cdr :initarg nil :type (or dllist nil) :documentation "The successor list."))
-;;  (:documentation "A doubly linked list"))
+;;(deftype dllist ()
+;;  (or null dllist))
 
 (defstruct dllist
-  "An element of a doubly linked list."
+  "An element of a doubly linked list.
+To clarify the nomenclature of 'element' and 'object' for DLLIST, the object of this element is OBJ."
   (:print-function #'print-dllist)
   (obj nil :type t)
   (bdr nil :type (or null dllist))
@@ -164,13 +165,74 @@ Returns the former cdr of DLL if RETURN-CDR is T, the bdr otherwise, and NIL if 
 (defun dllist-insert (dll obj &key (after t) (new-circular nil))
   "Modify the dllist DLL by inserting OBJ after the element DLL (or before DLL if after is NIL).
 Returns the dllist pointing to the newly inserted element, or a newly constructed (circular if NEW-CIRCULAR is T) dllist."
+  (assert (eq after t))
   (if (null dll)
       (if new-circular (dllist-circular obj) (dllist obj))
       (progn
-	(when (not after)
-	  (setf dll (dllist-bdr dll)))
 	(let* ((cdr (dllist-cdr dll))
 	       (new-dll (make-dllist :obj obj :bdr dll :cdr cdr)))
 	  (setf (dllist-cdr dll) new-dll)
-	  (setf (dllist-bdr cdr) new-dll)
+	  (unless (null cdr)
+	    (setf (dllist-bdr cdr) new-dll))
 	  new-dll))))
+
+(defmacro with-gensyms (symbols &body body)
+  ;;(declare (type unique-list symbols))
+  `(let ,(loop for symbol in symbols collect `(,symbol (gensym)))
+     ,@body))
+
+(defmacro specializing-if (test then &optional else)
+  "If TEST is T, only insert THEN, if TEST is NIL, only ELSE, otherwise the if-statement (if ,test ,then ,else)."
+  (case test
+    ((t) then)
+    ((nil) else)
+    (t `(if ,test ,then ,else))))
+
+(defmacro do-dllist ((cur dll &key circular) &body body)
+  "Iterate over the elements of DLL and assign CUR to each element (get the object using (DLLIST-OBJ CUR)).
+If CIRCULAR is true, DLL is assumed to be a circular list and the iteration starts at DLL and ends at (DLLIST-BDR DLL).
+If CIRCULAR is false, DLL is non-circular and iteration starts at (DLLIST-FIRST DLL) and ends at (DLLIST-LAST DLL).
+Returns NIL."
+  ;; FIXME: add an option :dir with values :bdr or :cdr, which determines the direction. (i.e. a non-circular list will only be traversed in one direction.)
+  ;; FIXME: get rid of warning "undefined variable #:GO" in (do-dllist (cur (dllist 1 2 3)) (print (dllist-obj cur)))
+  (with-gensyms (dll-evaluated first)
+    `(let ((,dll-evaluated ,dll))
+       (when ,dll-evaluated
+	 (specializing-if ,circular
+	     (let* ((,first ,dll-evaluated)
+		    (,cur ,first))
+	       ,@body
+	       (do ((,cur (dllist-cdr ,dll-evaluated) (dllist-cdr ,cur))) ((eq ,cur ,first))
+		 ,@body))
+	     (do ((,cur (dllist-first ,dll-evaluated) (dllist-cdr ,cur))) ((null ,cur))
+	       ,@body))))))
+
+(defun dllist-insert-list (dll dll2 &key (after t) (dll2-is-circular nil))
+  "Modify the dllist DLL by inserting all elements of dllist DLL2 (in order) after the element DLL.
+If DLL2-IS-CIRCULAR is true, the circle of DLL2 is broken before the element DLL2 before inserting.
+If DLL2 is circular, and DLL2-IS-CIRCULAR is false, the result is undefined.
+If DLL is empty and DLL2 is circular, the result is the circular DLL2.
+DLL may or may not be circular.
+Return the modified DLL at the position of the original DLL."
+  (if (null dll)
+      dll2
+      (let ((orig-dll dll))
+	(do-dllist (cur dll2 :circular dll2-is-circular)
+	  (setf dll (dllist-insert dll (dllist-obj cur) :after after)))
+	orig-dll)))
+;; write tests for dllist-insert-list
+
+(defun dllist-to-list (dll &key dll-is-circular obj)
+  "Return a freshly consed list of the doubly linked list DLL with the same order as followed by DO-DLLIST.
+If DLL-IS-CIRCULAR is true, DLL may be a circular dllist.
+If OBJ is true, the list is made of the DLL elements, and of the objects of DLL otherwise."
+  ;; FIXME: add option :dir which determines the dir of do-dllist.
+  (let ((l nil))
+    ;; FIXME: when do-dllist has option :dir, avoid nreverse by inverting dir for circular lists.
+    ;; FIXME avoid nreverse for non-circular lists by first going into :dir and then iterating until the original DLL is reached (and consing every position. this gives a list of correct order).
+    (if obj
+	(do-dllist (cur dll :circular dll-is-circular)
+	  (setf l (cons (dllist-obj cur) l)))
+	(do-dllist (cur dll :circular dll-is-circular)
+	  (setf l (cons cur l))))
+    (nreverse l)))
