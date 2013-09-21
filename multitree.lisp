@@ -59,16 +59,26 @@ Returns as values the subtree found and a value indicating if all elements of PA
 (defun lsxhash (x)
   "Return a hash value for value X.
 X, (car X), and (cdr X) may be a list, a symbol, or a number."
+  ;; FIXME: handle circular lists
   (declare (optimize (speed 3) (safety 0) (compilation-speed 0) (space 0)))
   (declare (values (and fixnum unsigned-byte))) ;inferred automatically (see describe 'lsxhash)
   (etypecase x
     (single-float (sxhash x))
     (double-float (sxhash x))
+    (ratio (sxhash x))
     (fixnum (sxhash x))
     ;;(number (sxhash x))
     (symbol (sxhash x))
     ;; here, X can't be nil since (symbolp nil) == T.
-    (list (mix (lsxhash (car x)) (lsxhash (cdr x))))))
+    (list (mix (lsxhash (car x)) (lsxhash (cdr x))))
+    (hash-table (let ((ret 448291823))
+		  (declare (type (and fixnum unsigned-byte) ret))
+		  (setf ret (mix (sxhash (hash-table-count x))
+				 (mix ret (sxhash (hash-table-test x)))))
+		  ;; use logxor for speed and so that the order of key/value pairs does not matter
+		  (maphash (lambda (k v) (setf ret (logxor ret (mix (lsxhash k) (lsxhash v)))))
+			   x)
+		  ret))))
 
 (defun make-bit-cache (size)
   (make-array size :element-type 'fixnum :initial-element 0))
@@ -422,4 +432,3 @@ Update root and decrease size by 1."
 ;;		(print (list "fibheap-min" (fibheap-min fh)))
 ;;		(fibheap-pop fh))
 ;;	   fh)
-

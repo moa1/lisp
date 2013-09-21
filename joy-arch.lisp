@@ -133,14 +133,14 @@ This function must not modify stk, only copy it (otherwise test values might be 
 	 (concat  (cons (append (cadr stk) (car stk)) (cddr stk)))
 	 (cons    (cons (cons (cadr stk) (let ((a (car stk))) (if (proper-list-p a) a (error (make-condition 'type-error :datum a :expected-type 'list))))) (cddr stk))) ; same as papply
 	 (dip     (cons (cadr stk) (joy-eval (cddr stk) (car stk) :heap heap :c c :cd cd)))
-	 (/       
-	  #+sbcl
-	  (if (= 0.0 (car stk)) ;work around SBCL bug (/ 1.0 0.0)
-	      (error (make-condition 'divison-by-zero :operands (list (cadr stk) (car stk))))
-	      (cons (/ (cadr stk) (car stk)) (cddr stk))) ;divide
-	  #-sbcl
-	  (cons (/ (cadr stk) (car stk)) (cddr stk)) ;divide
-	  )
+	 (/       (cons (/ (cadr stk) (car stk)) (cddr stk)))
+	 ;; #+sbcl
+	 ;; (if (= 0.0 (car stk)) ;work around SBCL bug (/ 1.0 0.0)
+	 ;;     (error (make-condition 'divison-by-zero :operands (list (cadr stk) (car stk))))
+	 ;;     (cons (/ (cadr stk) (car stk)) (cddr stk))) ;divide
+	 ;; #-sbcl
+	 ;; (cons (/ (cadr stk) (car stk)) (cddr stk)) ;divide
+	 ;; )
 	 (dup     (cons (car stk) stk))
 	 (equal   (cons (equal (cadr stk) (car stk)) (cddr stk)))
 	 (i       (joy-eval (cdr stk) (car stk) :heap heap :c c :cd cd)) ;same as apply
@@ -155,14 +155,14 @@ This function must not modify stk, only copy it (otherwise test values might be 
 	 (pop     (cdr stk))
 	 (pred    (cons (1- (car stk)) (cdr stk)))
 	 (quote   (cons (list (car stk)) (cdr stk)))
-	 (rem     
-	  #+sbcl
-	  (if (= 0.0 (car stk)) ;work around SBCL bug (mod 1.0 0.0)
-	      (error (make-condition 'divison-by-zero :operands (list (cadr stk) (car stk))))
-	      (cons (mod (cadr stk) (car stk)) (cddr stk)))
-	  #-sbcl
-	  (cons (mod (cadr stk) (car stk)) (cddr stk))
-	  )
+	 (rem     (cons (mod (cadr stk) (car stk)) (cddr stk)))
+	 ;; #+sbcl
+	 ;; (if (= 0.0 (car stk)) ;work around SBCL bug (mod 1.0 0.0)
+	 ;;     (error (make-condition 'divison-by-zero :operands (list (cadr stk) (car stk))))
+	 ;;     (cons (mod (cadr stk) (car stk)) (cddr stk)))
+	 ;; #-sbcl
+	 ;; (cons (mod (cadr stk) (car stk)) (cddr stk))
+	 ;; )
 	 (<       (cons (< (cadr stk) (car stk)) (cddr stk))) ;smaller
 	 (stack   (cons stk stk))
 	 (step    (let ((res (cddr stk)))
@@ -191,8 +191,8 @@ This function must not modify stk, only copy it (otherwise test values might be 
 			    (setf exp (cdr exp))
 			    (cdr stk)))))
 	 ;; implement an "undefine", which ends the scope of a "define"d program, but leaves defined programs (and programs on the stack) using the to be "undefine"d program running intact. this would require replacing the "define"d name with an anonymous name.
-	 (t 
-	  (if (null heap)
+	 (t
+	  (if (or (not (symbolp (car exp))) (null heap))
 	      (cons (car exp) stk)
 	      (multiple-value-bind (value present-p) (gethash (car exp) heap)
 		(if present-p
@@ -881,15 +881,62 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 			       :rehash-size (hash-table-rehash-size ht)
 			       :rehash-threshold
 			       (hash-table-rehash-threshold ht))))
-    (maphash (lambda (key value) (setf (gethash key copy) value)) ht)
+    (with-hash-table-iterator (next ht)
+      (labels ((rec ()
+		 (multiple-value-bind (present-p key value) (next)
+		   (unless present-p (return-from rec))
+		   (setf (gethash key copy) value))))
+	(rec)))
     copy))
+
+(defmacro defun-list-cmp (name value-null-a-b value-null-a value-null-b number-cmp string-cmp)
+  "A macro for defining a lexicographic comparison function of two lists."
+  (declare (type symbol name number-cmp string-cmp)
+	   (type (or null t) value-null-a-b value-null-a value-null-b))
+  ;; TODO: also implement it for sequences
+  `(defun ,name (list-a list-b)
+     (declare (type list list-a list-b))
+     (declare (values (or null t)))
+     (if (null list-a)
+	 (if (null list-b)
+	     ,value-null-a-b
+	     ,value-null-a)
+	 (if (null list-b)
+	     ,value-null-b
+	     (let ((a (car list-a))
+		   (b (car list-b)))
+	       (etypecase a
+		 (number (if (= a b) (,name (cdr list-a) (cdr list-b)) (,number-cmp a b)))
+		 (symbol (if (string= a b) (,name (cdr list-a) (cdr list-b)) (,string-cmp (string a) (string b))))
+		 (list (,name a b))))))))
+
+(defun-list-cmp list=  t   nil nil =  string=)
+(defun-list-cmp list/= nil t   t   /= string/=)
+(defun-list-cmp list<  nil t   nil <  string<)
+(defun-list-cmp list>  nil nil t   >  string>)
+(defun-list-cmp list<= t   t   nil <= string<=)
+(defun-list-cmp list>= t   nil t   >= string>=)
+
+(defun hash-table-to-alist (ht)
+  "Return the alist that stores the same key-value pairs as hash table HT."
+  (let* ((k-v nil))
+    (with-hash-table-iterator (next ht)
+      (labels ((rec ()
+		 (multiple-value-bind (present-p key value) (next)
+		   (unless present-p (return-from rec))
+		   (setf k-v (acons key value k-v))
+		   (rec))))
+	(rec)))
+    ;; sort by key
+    (setf k-v (sort k-v #'list< :key #'car))
+    k-v))
 
 (defun extend-and-evaluate (l-exp l-1-stk l-1-heap ins goal-value fitness-fn max-ticks max-seconds)
   "appends ins to l-1-exp and calculates the fitness for each possibility.
 l-1-stk and l-1-heap must be the stack and heap returned when executing l-1-exp."
   (declare (ignorable l-1-heap) (type (function (list number list) number) fitness-fn))
   (let* ((lins (list ins))
-	 (heap (copy-hash-table l-1-heap)) ; this takes a lot of time
+	 (heap (if (null l-1-heap) nil (copy-hash-table l-1-heap))) ; this takes a lot of time
 	 ;;(heap l-1-heap)
 	 (res (joy-eval-handler l-1-stk lins :heap heap :c (make-counter max-ticks) :cd (make-countdown max-seconds)))
 	 (fit (funcall fitness-fn res goal-value l-exp)))
@@ -997,8 +1044,7 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
 			      (l-stks l-heaps l-fits fit-sum pursue)
 			    (evaluate-tests ins l-exp l-1-stks l-1-heaps l-1-fits goal-values score-fn max-ticks max-seconds)
 			  ;;(format t "  l-exp:~A fit-sum:~A      #sym:~A #nodes:~A~%" l-exp fit-sum (count-symbols-in-tree l-exp) (count-tree-nodes l-exp))
-			  (funcall collectfit l-exp fit-sum)
-			  (when pursue
+			  (when (and pursue (funcall collectfit l-stks l-heaps l-exp fit-sum))
 			    (extend-exp-and-test (- max-ext-nodes ext-nodes) fitness-test-case l-exp l-stks l-heaps l-fits goal-values collectfit joy-ops max-ticks max-seconds))))))
 	       (let* ((ins-sets (loop for i below ext-symbols collect joy-ops)))
 		 (enumerate-set-combinations ins-sets #'f1)))
@@ -1006,24 +1052,56 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
 	       (let ((elapsed-seconds (float (/ (- (get-internal-real-time) enum-fill-start-time) internal-time-units-per-second))))
 		 (format t "max-ext-nodes:~A l-1-exp:~A ext-struct:~A ext-nodes:~A ext-symbols:~A elapsed-seconds:~A~%" max-ext-nodes l-1-exp ext-struct ext-nodes ext-symbols elapsed-seconds))))))))
 
-(defun systematicmapping2 (maxlevel fitness-test-case joy-ops max-ticks max-seconds)
+(load "~/quicklisp/setup.lisp")
+(ql:quickload :cl-custom-hash-table)
+(use-package :cl-custom-hash-table)
+
+(defun systematicmapping2 (maxlevel fitness-test-case joy-ops max-ticks max-seconds cache)
+  (define-custom-hash-table-constructor make-lsxhash-hash-table
+      ;; equalp required when hashing hash tables
+      :test equal :hash-function lsxhash)
   (let* ((test-values (test-cases-values fitness-test-case))
 	 (goal-values (mapcar (test-cases-goal fitness-test-case) test-values))
 	 (l0-heaps (loop for i below (length test-values) collect (make-hash-table :size 0)))
+	 ;;(l0-heaps (loop for i below (length test-values) collect nil))
 	 (l0-exps test-values)
 	 (l0-stks (mapcar (lambda (e h) (joy-eval-handler nil e :heap h)) l0-exps l0-heaps))
 	 (fitn (mapcar (test-cases-score fitness-test-case) l0-stks goal-values l0-exps))
 	 (l0-fits (mapcar (lambda (s f) (if (not (eq s 'error)) nil f)) l0-stks fitn))
 	 (best-fit (apply #'+ fitn))
-	 (best-exp (list nil)))
-    (flet ((collectfit (exp fit)
+	 (best-exp (list nil))
+	 (number-trees (count-labelled-trees maxlevel (length joy-ops)))
+	 (results-seen-size (min number-trees 10000))
+	 (results-seen-table (make-lsxhash-hash-table))
+	 (trees-evaluated 0))
+    (flet ((collectfit (stks heaps exp fit)
+	     (incf trees-evaluated)
 	     (if (> fit best-fit)
 		 (progn (setf best-fit fit) (setf best-exp (list exp)))
 		 (when (= fit best-fit)
-		   (setf best-exp (cons exp best-exp))))))
+		   (setf best-exp (cons exp best-exp))))
+	     (if (not cache)
+		 t
+		 ;; if the results (stks and heaps) are in the cache, we don't have to pursue, since the same stk and extension ins will give same results.
+		 ;; however, if the exp that led to the results in the cache is longer than the one we found, then we have to pursue.
+		 (let* ((heap-alists (loop for h in heaps collect (if (null h) nil (hash-table-to-alist h)))) ;;convert to alist to save space
+			(res (cons stks heap-alists)))
+		   (with-custom-hash-table
+		     (multiple-value-bind (exp-old present)
+			 (gethash res results-seen-table)
+		       (let* ((exp-nodes (count-tree-nodes exp))
+			      (exp-old-nodes (count-tree-nodes exp-old))
+			      (pursue (or (not present) (< exp-nodes exp-old-nodes))))
+			 (when pursue
+			   (setf (gethash res results-seen-table) exp))
+			 ;;(when (and present (< exp-nodes exp-old-nodes))
+			 ;;  (format t "exp-old:~A exp:~A~%" exp-old exp))
+			 ;;(when present
+			 ;;  (format t "collision exp-old:~A exp:~A res:~A lsxhash:~A (not present):~A~%" exp-old exp res (lsxhash res) (not present)))
+			 pursue)))))))
       (format t "nil fitn:~A best-fit:~A~%" fitn best-fit)
       (extend-exp-and-test maxlevel fitness-test-case nil l0-stks l0-heaps l0-fits goal-values #'collectfit joy-ops max-ticks max-seconds)
-      (values best-exp best-fit))))
+      (values best-exp best-fit trees-evaluated))))
 
 ;;(time (systematicmapping2 4 *fitness-sqrt-test* (append '(1 A) *joy-ops*) 1000 .01))
 
@@ -1033,11 +1111,15 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
 ;;(sb-sprof:with-profiling (:max-samples 1000 :mode :alloc :report :flat)
 ;;  (systematicmapping2 4 *fitness-sqrt-test* (cons '(1 A) *joy-ops*) 1000 .01))
 
-;;(time (systematicmapping2 4 *fitness-sqrt-test* '(1 5 10) (remove 'define *joy-ops-with-duplicates*) 1000))
-;;auf Susi's PC
-;; (1 SWAP REM INC) 11.219
-;; (1 INC SWAP REM INC) 279.084 seconds
-;; (DUP DEC DEC REM INC) 7951.128 seconds
+;; computer-name results [score exp-evaluations] runtime
+;;(time (systematicmapping2 5 *test-cases-sqrt* *joy-ops* 1000 .01))
+;; pura ((DUP / SUCC SUCC SUCC) (DUP / SUCC DUP *) (DUP / SUCC DUP +)) 878.140 sec
+;; Bobo ((DUP / SUCC SUCC SUCC) (DUP / SUCC DUP *) (DUP / SUCC DUP +)) -85.62277 4173780 562.001
+;; Bobo (((DUP / SUCC) I)) -95.62277 857933 136.662 w/ cache
+;;(time (systematicmapping2 5 *test-cases-sqrt* (subseq *joy-ops* 20 32) 1000 .01))
+;; Bobo ((STACK (-) STEP SUCC) (STACK (- SUCC) STEP)) -100.62277 64832 13.577
+;; Bobo ((STACK (-) STEP SUCC) (STACK (- SUCC) STEP)) -100.62277 51340 11.941 w/ cache
+
 
 ; without heap
 ; 0.050 0.637 5.773 136.033
