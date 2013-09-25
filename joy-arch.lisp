@@ -797,6 +797,20 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 					     0))))
      (lambda () (values goal-c error-c ok-c)))))
 
+(defun golden-ratio (n &optional (initial 1))
+  (if (= 0 n)
+      initial
+      (golden-ratio (1- n) (1+ (/ 1 initial)))))
+
+(defparameter *test-cases-golden-ratio*
+  (make-test-cases :values '((0 1.0) (1 1.0) (2 1.0) (3 1.0) (6 1.0) (12 1.0))
+		   :generate (lambda (vs) vs)
+		   :goal (lambda (x) (golden-ratio (car x) (cadr x)))
+		   :score #'score-one-value))
+;; (joy-eval-handler '(12 1.0) '((1 swap / succ) times))
+
+;;;; tournament selection
+
 (defparameter *mut-length* (+ 11 10 (length *joy-ops*)))
 
 (defun tournament-new (o size cycles fitness max-ticks max-seconds)
