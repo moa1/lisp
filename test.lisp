@@ -35,3 +35,8 @@
   (let ((r nil))
     (maphash (lambda (k v) (setf r (cons (cons k v) r))) ht)
     r))
+
+(defun golden-ratio (n &optional (initial 1))
+  (if (= 0 n)
+      initial
+      (golden-ratio (1- n) (1+ (/ 1 initial)))))
