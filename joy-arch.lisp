@@ -444,17 +444,6 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
 	 (new (apply #'mutate-rec cross prest)))
     new))
 
-(defun make-arbitrary-tree-sampler (nodes)
-  "Return a function that, upon calling, returns a randomly sampled tree with a node maximum count of NODES (and a minimum node count of 1, i.e. '(A))."
-  (let* ((structs-nested (loop for i from 1 upto nodes collect (enumerate-tree-structures i)))
-	 (structs (apply #'nconc structs-nested)))
-    (lambda (symbol-f)
-      "Return a randomly sampled tree and each symbol is the returned symbol of the nullary function SYMBOL-F."
-      (let* ((s (sample structs))
-	     (syms (count-symbols-in-tree s))
-	     (res (replace-symbols-in-tree s (loop for i below syms collect (funcall symbol-f)))))
-	res))))
-
 ;; (defun align (exp1 exp2 &optional r)
 ;;   (cond
 ;;     ((and (null exp1) (null exp2)) r)
@@ -1134,7 +1123,7 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
       (extend-exp-and-test maxlevel fitness-test-case nil l0-stks l0-heaps l0-fits goal-values #'collectfit joy-ops max-ticks max-seconds)
       (values best-exp best-fit trees-evaluated))))
 
-;;(time (systematicmapping2 4 *fitness-sqrt-test* (append '(1 A) *joy-ops*) 1000 .01))
+;;(time (systematicmapping2 4 *test-cases-sqrt* (append '(1 A) *joy-ops*) 1000 .01 nil))
 
 ;;(require :sb-sprof)
 ;;(sb-sprof:with-profiling (:max-samples 1000 :report :flat :loop nil)
@@ -1143,11 +1132,11 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
 ;;  (systematicmapping2 4 *fitness-sqrt-test* (cons '(1 A) *joy-ops*) 1000 .01))
 
 ;; computer-name results [score exp-evaluations] runtime
-;;(time (systematicmapping2 5 *test-cases-sqrt* *joy-ops* 1000 .01))
+;;(time (systematicmapping2 6 *test-cases-sqrt* *joy-ops* 1000 .01))
 ;; pura ((DUP / SUCC SUCC SUCC) (DUP / SUCC DUP *) (DUP / SUCC DUP +)) 878.140 sec
 ;; Bobo ((DUP / SUCC SUCC SUCC) (DUP / SUCC DUP *) (DUP / SUCC DUP +)) -85.62277 4173780 562.001
 ;; Bobo (((DUP / SUCC) I)) -95.62277 857933 136.662 w/ cache
-;;(time (systematicmapping2 5 *test-cases-sqrt* (subseq *joy-ops* 20 32) 1000 .01))
+;;(time (systematicmapping2 6 *test-cases-sqrt* (subseq *joy-ops* 20 32) 1000 .01))
 ;; Bobo ((STACK (-) STEP SUCC) (STACK (- SUCC) STEP)) -100.62277 64832 13.577
 ;; Bobo ((STACK (-) STEP SUCC) (STACK (- SUCC) STEP)) -100.62277 51340 11.941 w/ cache
 
@@ -1173,6 +1162,6 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
 ; oks:    19 400 9628  257189 7524718
 
 ;(multiple-value-bind (test-cases get-counts)
-;	     (generate-test-cases-systematicmapping-oks 2)
-;	   (systematicmapping2 1 test-cases *joy-ops* 1000 .01)
-;	   (funcall get-counts))
+;    (generate-test-cases-systematicmapping-oks 2)
+;  (systematicmapping2 2 test-cases *joy-ops* 1000 .01)
+;  (funcall get-counts))

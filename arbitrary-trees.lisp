@@ -1,8 +1,8 @@
 ;; for development of the algorithms, see file arbitrary-trees.dia
 
 (defun enumerate-objects-to-bins (j i)
-  "Enumerate all the possibilities that exist for assigning j objects to i bins where j >= i (bins may have 0 or more objects).
-The possible assignments are returned as lists l where bin x has (elt l x) objects."
+  "Enumerate all the possibilities that exist for assigning J objects to I bins (bins may have 0 or more objects).
+The possible assignments are returned as lists L where bin X has (elt L X) objects."
   (assert (> i 0)) ; need at least 1 bin to distribute objects to
   (if (= i 1) ; trivial case: 1 bin
       (list (list j)) ; 1 bin and j objects
@@ -14,9 +14,9 @@ The possible assignments are returned as lists l where bin x has (elt l x) objec
 	l)))
 
 (defun enumerate-set-combinations (sets f)
-  "sets is a list of lists with objects in them.
+  "SETS is a list of lists with objects in them.
 This function computes all possible combinations of objects in the sets, i.e. one object for each set for each possibility.
-For each combination, the function f is called with the combination as argument."
+For each combination, the function F is called with the combination as argument."
   (labels ((rec (s comb)
 	     (if (null s)
 		 (funcall f (reverse comb)) ; can't use nreverse here b/c the list is also used in other 
@@ -27,7 +27,15 @@ For each combination, the function f is called with the combination as argument.
     (rec sets nil)))
 
 (defun enumerate-tree-structures (n)
-  "Enumerates all arbitrary trees with n nodes.
+  "Enumerates all arbitrary trees with N nodes, where NIL counts as a tree with one node.
+Returns a list of possibilities, where a possibility is a tree."
+  (assert (> n 0))
+  (if (= n 1)
+      (list nil)
+      (enumerate-tree-structures-1based (1- n))))
+
+(defun enumerate-tree-structures-1based (n)
+  "Enumerates all arbitrary trees with N nodes, where '(A) counts as a tree with one node.
 Returns a list of possibilities, where a possibility is a tree."
   ;;  (format t "enumerate-tree-structures n=~A~%" n)
   (assert (> n 0))
@@ -43,7 +51,7 @@ Returns a list of possibilities, where a possibility is a tree."
 				   ;;				   (format t "subtree ~A has ~A nodes~%" l m)
 				   (if (= m 0)
 				       (list 'a) ; leaf
-				       (enumerate-tree-structures m)))))
+				       (enumerate-tree-structures-1based m)))))
 			(comb nil))
 		    ;;		    (format t "new trees:~A~%" tr)
 		    (enumerate-set-combinations tr (lambda (x) (setf comb (cons x comb))))
@@ -52,7 +60,7 @@ Returns a list of possibilities, where a possibility is a tree."
 	trees)))
 
 (defun traverse-tree-symbols (f tree)
-  "Calls function f for every symbol in tree with the symbol as argument."
+  "Calls function F for every symbol in tree TREE with the symbol as argument."
   (labels ((rec (tree)
 	     (when (not (null tree))
 		 (if (listp tree)
@@ -64,7 +72,7 @@ Returns a list of possibilities, where a possibility is a tree."
     nil))
 
 (defun count-symbols-in-tree (tree)
-  "Returns the number of symbols in tree."
+  "Returns the number of symbols in tree TREE."
   (let ((c 0))
     (flet ((f (s)
 	     (declare (ignore s))
@@ -77,8 +85,8 @@ Returns a list of possibilities, where a possibility is a tree."
 (assert (= (count-symbols-in-tree '()) 0))
 
 (defun replace-symbols-in-tree (tree repl)
-  "Traverses tree and every time a symbol is encountered replace it with the next symbol in repl.
-The length of repl must be equal to the number of symbols in tree.
+  "Traverses tree TREE and every time a non-list (e.g. a symbol) is encountered replace it (non-destructively) with the next element (e.g. a symbol) in list REPL.
+The length of REPL must be equal to the number of symbols in TREE.
 Returns the new tree."
   (labels ((rec (tree new)
 	     (if (null tree)
@@ -95,7 +103,8 @@ Returns the new tree."
 
 (defun enumerate-labelled-trees (n symbols new-struct-f f)
   "Enumerates all tree structures and fill each with every possible symbol combination.
-Repeatedly calls f with each possible tree as parameter."
+N is the tree node count, SYMBOLS is a list of possible symbols, NEW-STRUCT is called with each tree structure as parameter (but with all symbols replaced by A).
+Repeatedly calls F with each possible tree as parameter."
   (let ((structs (enumerate-tree-structures n)))
     (loop for struct in structs do
 	 (funcall new-struct-f struct)
