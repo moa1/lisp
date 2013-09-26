@@ -3,6 +3,14 @@
 ;(sb-ext:restrict-compiler-policy 'debug 3)
 ;(declaim (optimize speed))
 
+(load "~/quicklisp/setup.lisp")
+(ql:quickload :cl-custom-hash-table)
+(use-package :cl-custom-hash-table)
+
+(define-custom-hash-table-constructor make-lsxhash-hash-table
+    ;; equalp required when hashing hash tables
+    :test equal :hash-function lsxhash)
+
 (defclass joy ()
   ((stack :accessor joy-stack
 	  :initform nil
@@ -621,6 +629,15 @@ As a second value, the remainder of stk is returned, or :error if the stack didn
 (assert (eq t (valid-joy-exp '((1) define (2)))))
 (assert (eq nil (valid-joy-exp '(1 define (2)))))
 
+;; I'll have another go at a type predictor.
+;; This one uses a function which receives the current stk and exp (and heap?) and computes the types on the stack.
+;; It shall use the same type notation as Common Lisp, plus some additions for describing regular stacks, like (REPEAT NUMBER BOOLEAN), which describes a sequence of alternating numbers and booleans, or (REPEAT (INTEGER -1 1) LIST 0), an instance of which would be (0 (a b c) 0 -1 (a) 0).
+;; It also shall support describing lists, like (LIST SYMBOL (NUMBER 0 5)), an instance of which would be (a 2).
+;; Supporting REPEATs and LISTs becomes problematic when instructions like UNCONS or POP can happen, because it is unclear how to describe a REPEAT or LIST of which an unknown number of elements have been removed.
+
+;; A different approach is to try to evolve a joy program that returns whether an input joy program has type errors in it.
+
+
 ;; examples of equivalent joy expressions:
 ;; (joy-eval nil '(1024 nill (succ) dip (swap 1 < not) ((pred dup 64 rem 0 equal) dip swap ((dup) dip cons) () branch) while))
 ;; (joy-eval nil '(1024 nill (64 +) dip (swap 1 < not) ((64 - dup) dip cons) while))
@@ -808,6 +825,13 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 		   :goal (lambda (x) (golden-ratio (car x) (cadr x)))
 		   :score #'score-one-value))
 ;; (joy-eval-handler '(12 1.0) '((1 swap / succ) times))
+
+;; Try to evolve a joy program that returns whether an input joy program has type errors in it.
+;; Do this by first generating all joy-exps of a certain length, and determine whether they return an error or not.
+;; Then define a test-case that in turn feeds all generated joy-exps to the joy program to be tested, and sums up the number of correct predictions.
+;; This means the test-case will be expensive to run.
+;;(defun generate-test-cases-valid-joy-exps (exp-nodes)
+
 
 ;;;; tournament selection
 
@@ -1066,14 +1090,7 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
 	       (let ((elapsed-seconds (float (/ (- (get-internal-real-time) enum-fill-start-time) internal-time-units-per-second))))
 		 (format t "max-ext-nodes:~A l-1-exp:~A ext-struct:~A ext-nodes:~A ext-symbols:~A elapsed-seconds:~A~%" max-ext-nodes l-1-exp ext-struct ext-nodes ext-symbols elapsed-seconds))))))))
 
-(load "~/quicklisp/setup.lisp")
-(ql:quickload :cl-custom-hash-table)
-(use-package :cl-custom-hash-table)
-
 (defun systematicmapping2 (maxlevel fitness-test-case joy-ops max-ticks max-seconds cache)
-  (define-custom-hash-table-constructor make-lsxhash-hash-table
-      ;; equalp required when hashing hash tables
-      :test equal :hash-function lsxhash)
   (let* ((test-values (test-cases-values fitness-test-case))
 	 (goal-values (mapcar (test-cases-goal fitness-test-case) test-values))
 	 (l0-heaps (loop for i below (length test-values) collect (make-hash-table :size 0)))
