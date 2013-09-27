@@ -688,9 +688,9 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 
 (defstruct test-cases
   (values nil :type list :read-only t)
-  (generate (lambda () (error "generate undefined")) :type function :read-only t)
-  (goal (lambda () (error "goal undefined")) :type function :read-only t)
-  (score (lambda () (error "score undefined")) :type function :read-only t))
+  (generate (lambda (&rest r) (declare (ignore r)) (error "generate undefined")) :type function :read-only t)
+  (goal (lambda (&rest r) (declare (ignore r)) (error "goal undefined")) :type function :read-only t)
+  (score (lambda (&rest r) (declare (ignore r)) (error "score undefined")) :type function :read-only t))
 
 (defparameter *test-cases-sqrt*
   (make-test-cases :values '((1.0) (25.0) (100.0) (225.0) (400.0) (625.0) (1000.0))
@@ -815,12 +815,55 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 		   :score #'score-one-value))
 ;; (joy-eval-handler '(12 1.0) '((1 swap / succ) times))
 
+(defun generate-test-cases-enumerate-all-exps-and-results (exp-nodes initial-stk)
+  "Return a test-cases instance (to be used with systematicmapping2, not tournament-new) and a function to retrieve the list of enumerated joy programs (with EXP-NODES maximal nodes) together with their results, when executed on INITIAL-STACK."
+  (let ((exps-and-results nil))
+    (values 
+     (make-test-cases :values (list initial-stk) ;one initial stack
+		      :goal (lambda (x) (declare (ignore x)) '(0))
+		      :score (lambda (r goal exp) (declare (ignore goal))
+				     (if (= exp-nodes (count-tree-nodes exp))
+					 (progn
+					   (push (cons exp r) exps-and-results)
+					   (if (eq r 'error)
+					       *fitness-invalid*
+					       0))
+					 (if (eq r 'error)
+					     *fitness-invalid*
+					     0))))
+     (lambda () exps-and-results))))
+
 ;; Try to evolve a joy program that returns whether an input joy program has type errors in it.
 ;; Do this by first generating all joy-exps of a certain length, and determine whether they return an error or not.
 ;; Then define a test-case that in turn feeds all generated joy-exps to the joy program to be tested, and sums up the number of correct predictions.
 ;; This means the test-case will be expensive to run.
-;;(defun generate-test-cases-valid-joy-exps (exp-nodes)
+(defun generate-test-cases-check-valid-joy-exps (exp-nodes initial-stk joy-ops max-ticks max-seconds)
+  (multiple-value-bind (test-cases-all-exps get-exps-and-results)
+      (generate-test-cases-enumerate-all-exps-and-results exp-nodes initial-stk)
+    (systematicmapping2 exp-nodes test-cases-all-exps joy-ops max-ticks max-seconds nil)
+    (let* ((exps-and-results (funcall get-exps-and-results))
+	   (joy-exp-to-result (make-lsxhash-hash-table)))
+      (mapcar (lambda (exp-and-result)
+		(destructuring-bind (exp . result) exp-and-result
+		  (setf (gethash exp joy-exp-to-result) (if (eq 'error result) nil t))))
+	      exps-and-results)
+      (make-test-cases :values (mapcar (lambda (x) (list (car x))) exps-and-results)
+		       :generate #'identity-1
+		       :goal (lambda (val) (gethash (car val) joy-exp-to-result))
+		       :score (lambda (r goal exp)
+				(declare (ignore exp))
+				(if (symbolp r)
+				    ;; FIXME: sometimes, R is 'TIMEOUT due to GC or so, which could lead to a wrong fitness.
+				    *fitness-invalid*
+				    (if goal
+					(if (car r) 0 -1)
+					(if (car r) -1 0))))))))
 
+;(let ((tc (generate-test-cases-check-valid-joy-exps 2 '(0) *joy-ops* 1000 .01))
+;	       (i '(dup (+) equal (pop nill) (dup (-) equal (pop nill) (pop t) branch) branch)))
+;	   (tournament-new i 20 10000 tc 1000 .01)
+;	   ;(joy-show-fitness i tc)
+;	   )
 
 ;;;; tournament selection
 
@@ -841,7 +884,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 (defun tournament (pop mut cycles fitness max-ticks max-seconds)
   (assert (= (length pop) (length mut)))
   (let* ((size (length pop))
-	 (n (loop for i below size collect i))
+	 (n (make-array size :element-type 'fixnum :initial-contents (loop for i below size collect i)))
 	 (fit (make-array size :initial-element 0))
 	 (logstream (open "/tmp/log.txt" :direction :output :if-exists :rename-and-delete :if-does-not-exist :create)))
     (let ((test-goal-values (fitness-generate-test-goal-values fitness)))
@@ -862,6 +905,9 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 	  (let ((new-fit (fitness-score-test-values fitness test-goal-values new max-ticks max-seconds)))
 	    ;;(print (list "c1" c1 "c2" c2 "c2-fit" c2-fit "new-fit" new-fit))
 	    (when (> new-fit c2-fit)
+	      ;; sometimes, c2-fit can become very low, because of a TIMEOUT in joy-eval due to garbage collection or so.
+	      ;; then, c2 is replaced by a new-mut with potentially lower fitness.
+	      ;; therefore, make the population size big enough to guard against losing good genomes.
 	      (setf (elt pop c2) new)
 	      (setf (elt fit c2) new-fit)
 	      (setf (elt mut c2) new-mut)
