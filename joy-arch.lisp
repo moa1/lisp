@@ -3,6 +3,8 @@
 ;(sb-ext:restrict-compiler-policy 'debug 3)
 ;(declaim (optimize speed))
 
+(load "~/lisp/arbitrary-trees.lisp")
+(load "~/lisp/multitree.lisp")
 (load "~/quicklisp/setup.lisp")
 (ql:quickload :cl-custom-hash-table)
 (use-package :cl-custom-hash-table)
@@ -68,6 +70,10 @@
 
 (defun stddev-corr (seq)
   (sqrt (var-corr seq)))
+
+(defun absdev (seq)
+  (let ((m (mean seq)))
+    (mean (mapcar (lambda (x) (abs (- x m))) seq))))
 
 (defun deterministic-fun-cacher (fun slots)
   (let ((ht (make-hash-table :test 'equal :size (* 3/2 slots))))
@@ -382,14 +388,16 @@ This function must not modify stk, only copy it (otherwise test values might be 
   (print (list "(find-mutate" exp prob times ")"))
   (let ((hits 0))
     (dotimes (i times (/ hits times 1.0))
-      (handler-case
-	  (progn
-	    (destructuring-bind ((v1 v2) v3) (mutate-rec exp prob) (print (list (list v1 v2) v3)))
-	    (incf hits))
-	;;(division-by-zero () (format t "division-by-zero~%") 1)
-;	(sb-kernel::arg-count-error () t)
-;	(sb-kernel::defmacro-bogus-sublist-error () t)
-	(type-error () t)))))
+      (let ((exp1 (apply #'mutate-rec exp prob)))
+	;;(print exp1)
+	(handler-case
+	    (progn
+	      (destructuring-bind ((v1 v2) v3) exp1 (print (list (list v1 v2) v3)))
+	      (incf hits))
+	  ;;(division-by-zero () (format t "division-by-zero~%") 1)
+	  ;;(sb-kernel::arg-count-error () t)
+	  ;;(sb-kernel::defmacro-bogus-sublist-error () t)
+	  (type-error () t))))))
 
 (defun subexps (exp subs)
   ;; speed this function up by tail recursion
@@ -426,15 +434,15 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
 
 (defun crossover (exp1 exp2 p0 p1)
   (let* ((se (subexps exp2 (cons exp2 nil))))
-	(mapexps (lambda (x)
-		   (if (consp x)
-		       (if (chance p0)
-			   (values (sample se) nil)
-			   (values x t))
-		       (if (chance p1)
-			   (sample se)
+    (mapexps (lambda (x)
+	       (if (consp x)
+		   (if (chance p0)
+		       (values (sample se) nil)
+		       (values x t))
+		   (if (chance p1)
+		       (sample se)
 		       x)))
-		 exp1)))
+	     exp1)))
 
 (defun crossover-and-mutate (exp1 exp2 &rest probs)
   (let* ((p1 (elt probs 1))
@@ -808,7 +816,25 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
       initial
       (golden-ratio (1- n) (1+ (/ 1 initial)))))
 
-(defparameter *test-cases-golden-ratio*
+(defmacro def-test-cases-one-value (test-cases-name value)
+  "Define a test-cases named TEST-CASES-NAME whose goal is it to obtain the value VALUE."
+  (let ((s (gensym)))
+    `(defparameter ,test-cases-name
+       (let ((,s ,value))
+	 (make-test-cases :values '(nil)
+			  :generate (lambda (vs) vs)
+			  :goal (lambda (x) (declare (ignore x)) ,s)
+			  :score #'score-one-value)))))
+
+(def-test-cases-one-value *test-cases-golden-ratio-value* (float (golden-ratio 20)))
+;;(systematicmapping2 6 *test-cases-golden-ratio-value* (cons 1 *joy-ops*) 1000 .01 nil)
+;; yields ((1 DUP SUCC / SUCC) (1 1 SUCC / SUCC)) -0.118034005 14430760
+;; (tournament-new '(1 dup succ / succ) 200 1000000 *test-cases-golden-ratio-value* 1000 .01) yields a joy expression with many nested I's and -2.1576881e-5 as error,
+;; but (tournament-new '() 200 1000000 *test-cases-golden-ratio-value* 1000 .01) yields '(2) as joy expression and consequently -0.381966 as error.
+
+(def-test-cases-one-value *test-cases-pi-value* pi)
+
+(defparameter *test-cases-golden-ratio-sequence*
   (make-test-cases :values '((0 1.0) (1 1.0) (2 1.0) (3 1.0) (6 1.0) (12 1.0))
 		   :generate (lambda (vs) vs)
 		   :goal (lambda (x) (golden-ratio (car x) (cadr x)))
@@ -904,14 +930,15 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 	(when (and (listp new) (valid-joy-exp new '(:any)))
 	  (let ((new-fit (fitness-score-test-values fitness test-goal-values new max-ticks max-seconds)))
 	    ;;(print (list "c1" c1 "c2" c2 "c2-fit" c2-fit "new-fit" new-fit))
-	    (when (> new-fit c2-fit)
+	    (when (or (> new-fit c2-fit) (and (= new-fit c2-fit) (chance .5)))
 	      ;; sometimes, c2-fit can become very low, because of a TIMEOUT in joy-eval due to garbage collection or so.
 	      ;; then, c2 is replaced by a new-mut with potentially lower fitness.
 	      ;; therefore, make the population size big enough to guard against losing good genomes.
 	      (setf (elt pop c2) new)
 	      (setf (elt fit c2) new-fit)
 	      (setf (elt mut c2) new-mut)
-	      (print (list "new" new "new-fit" new-fit "new-mut" new-mut "c2-fit" c2-fit)))))
+	      (when (> new-fit c2-fit)
+		(print (list "new" new "new-fit" new-fit "new-mut" new-mut "c2-fit" c2-fit))))))
 	(when (= 0 (mod c 1000))
 	  (print (list c c2-fit)))
 	(when (= 0 (mod c 10000))
