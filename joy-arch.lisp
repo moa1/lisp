@@ -5,11 +5,11 @@
 
 (load "~/lisp/arbitrary-trees.lisp")
 (load "~/lisp/multitree.lisp")
-(load "~/quicklisp/setup.lisp")
-(ql:quickload :cl-custom-hash-table)
-(use-package :cl-custom-hash-table)
+;;(load "~/quicklisp/setup.lisp") ;is in multitree.lisp
+;;(ql:quickload :cl-custom-hash-table)
+;;(use-package :cl-custom-hash-table)
 
-(define-custom-hash-table-constructor make-lsxhash-hash-table
+(define-custom-hash-table-constructor make-lsxhash-equal-hash-table
     ;; equalp required when hashing hash tables
     :test equal :hash-function lsxhash)
 
@@ -868,7 +868,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
       (generate-test-cases-enumerate-all-exps-and-results exp-nodes initial-stk)
     (systematicmapping2 exp-nodes test-cases-all-exps joy-ops max-ticks max-seconds nil)
     (let* ((exps-and-results (funcall get-exps-and-results))
-	   (joy-exp-to-result (make-lsxhash-hash-table)))
+	   (joy-exp-to-result (make-lsxhash-equal-hash-table)))
       (mapcar (lambda (exp-and-result)
 		(destructuring-bind (exp . result) exp-and-result
 		  (setf (gethash exp joy-exp-to-result) (if (eq 'error result) nil t))))
@@ -1165,7 +1165,7 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
 	 (best-exp (list nil))
 	 (number-trees (count-labelled-trees maxlevel (length joy-ops)))
 	 (results-seen-size (min number-trees 10000))
-	 (results-seen-table (make-lsxhash-hash-table))
+	 (results-seen-table (make-lsxhash-equal-hash-table))
 	 (trees-evaluated 0))
     (flet ((collectfit (stks heaps exp fit)
 	     (incf trees-evaluated)

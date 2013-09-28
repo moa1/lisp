@@ -1,4 +1,8 @@
-;;(use-package :cl-custom-hash-table)
+(load "~/quicklisp/setup.lisp")
+(ql:quickload :cl-custom-hash-table)
+(ql:quickload :dlist)
+(use-package :cl-custom-hash-table)
+(use-package :dlist)
 
 (defstruct multitree-type
   ;; Takes the multitree, a key, and a value. Destructively add the value or change the value stored below the key in the multitree. Returns the modified multitree and a boolean indicating if the key was changed (and not added).
@@ -80,8 +84,127 @@ X, (car X), and (cdr X) may be a list, a symbol, or a number."
 			   x)
 		  ret))))
 
-(defun make-bit-cache (size)
-  (make-array size :element-type 'fixnum :initial-element 0))
+(define-custom-hash-table-constructor make-lsxhash-equal-hash-table
+    ;; equalp required when hashing hash tables
+    :test equal :hash-function lsxhash)
+
+;;;; A deterministic function cacher
+
+(defclass mru-cache ()
+  ((slots :initarg :slots :type (and fixnum unsigned-byte))
+   (ht :initarg :ht :type hash-table)
+   (mru :initarg :mru :type dlist))
+  (:documentation "A most-recently-used-cache class."))
+
+(defun make-mru-cache (slots)
+  (declare (type (integer 1 #.most-positive-fixnum) slots))
+  (let* ((pseudo-entry (cons (gensym) t))
+	 (ht (make-lsxhash-equal-hash-table))
+	 (mru (dlist pseudo-entry))
+	 (c (make-instance 'mru-cache
+			   :slots slots
+			   :ht ht
+			   :mru mru)))
+    (setf (gethash pseudo-entry ht) (dlist-first mru)) ;enter into ht, so that (hash-table-count ht) works.
+    c))
+
+(defun mru-cache-key-present-p (mru key)
+  "Return whether the key KEY is present in the mru-cache MRU."
+  (declare (type mru-cache mru))
+  (with-custom-hash-table
+    (multiple-value-bind (mru-dcons p) (gethash key (slot-value mru 'ht))
+      (declare (ignore mru-dcons))
+      p)))
+
+(declaim (inline mru-dlist-hit-mru-dcons))
+(defun mru-dlist-hit-mru-dcons (mru mru-dcons)
+  (declare (type dlist mru)
+	   (type dcons mru-dcons))
+  "Bring the dcons MRU-DCONS to the front of the dlist MRU."
+  ;;(print "mru hit") (describe-object mru t)
+  ;; slice out mru-dcons from its current position
+  (let ((p-dcons (prev mru-dcons)))
+    ;; check if mru-dcons is already in front
+    (when (not (null p-dcons))
+      ;; move mru-dcons to first position of mru.
+      (let ((n-dcons (next mru-dcons)))
+	(setf (next p-dcons) n-dcons)
+	(if (null n-dcons)
+	    (setf (dlist-last mru) p-dcons)
+	    (setf (prev n-dcons) p-dcons)))
+      (setf (prev mru-dcons) nil)
+      (setf (next mru-dcons) (dlist-first mru))
+      (setf (prev (dlist-first mru)) mru-dcons)
+      (setf (dlist-first mru) mru-dcons)
+      ;; updating the hash-table is not necessary, because its keys still point to the dconses.
+      )))
+
+(defun mru-cache-get-value (mru key &optional (default nil))
+  "If the key KEY is present in mru-cache MRU, return the values for key KEY and T as secondary value and bring KEY to the front of MRU.
+If key is not present return the value DEFAULT and as secondary value NIL as well."
+  (let ((ht (slot-value mru 'ht))
+	(mru (slot-value mru 'mru)))
+    (with-custom-hash-table
+      (multiple-value-bind (mru-dcons p) (gethash key ht)
+	(if p
+	    ;; the function call is known, therefore bring it to front in mru.
+	    (destructuring-bind (key . value) (data mru-dcons)
+	      (declare (ignore key))
+	      (mru-dlist-hit-mru-dcons mru mru-dcons)
+	      ;;(describe-object mru t)
+	      (values value t))
+	    (values default nil))))))
+
+(defun mru-cache-set (mru key value)
+  "Set the value VALUE for the key KEY in mru-cache MRU, if KEY was not present yet.
+Bring the key-value-pair to the front of the mru-cache."
+  (declare (type mru-cache mru))
+  (let* ((ht (slot-value mru 'ht))
+	 (slots (slot-value mru 'slots))
+	 (mru (slot-value mru 'mru))
+	 (new-dcons (dcons nil (cons key value) (dlist-first mru))))
+    (with-custom-hash-table
+      (multiple-value-bind (mru-dcons p) (gethash key ht)
+	(if p
+	    (mru-dlist-hit-mru-dcons mru mru-dcons)
+	    ;; set it to front of mru.
+	    (progn
+	      (setf (prev (dlist-first mru)) new-dcons)
+	      (setf (dlist-first mru) new-dcons) ;this always works because dlist contains >= 1 dconses.
+	      ;; insert into ht
+	      (setf (gethash key ht) new-dcons)
+	      (when (> (hash-table-count ht) slots)
+		;; the cache is full. remove the oldest element (after adding the new one, so that mru doesn't point to nil).
+		(destructuring-bind (key . value) (data (dlist-last mru))
+		  (declare (ignorable value))
+		  ;;(print "mru full") (describe-object mru t)
+		  (dlist-pop mru :from-end t) ;after this, mru can't point to nil, because it was a dlit with at least two members.
+		  (remhash key ht)
+		  ;;(describe-object mru t)
+		  ))
+	      value))))))
+
+(defun mru-function-cacher (fun slots)
+  "Most-recently-used cache for determinitic and side-effect-free functions."
+  (let* ((mru (make-mru-cache slots)))
+    (lambda (&rest rest)
+      (if (mru-cache-key-present-p mru rest)
+	  (nth-value 0 (mru-cache-get-value mru rest))
+	  ;; the function call is unkown
+	  (let* ((value (apply fun rest)))
+	    (mru-cache-set mru rest value)
+	    value)))))
+
+(flet ((add (a b)
+	 ;;(print (list "add" a b))
+	 (+ a b)))
+  (let ((cadd (mru-function-cacher #'add 2)))
+    (funcall cadd 1 2)
+    (funcall cadd 3 4)
+    (funcall cadd 1 2)
+    (funcall cadd 1 2)
+    (funcall cadd 5 6)
+    (funcall cadd 3 4)))
 
 ;;;; A doubly linked list
 
