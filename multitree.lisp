@@ -108,6 +108,7 @@ X, (car X), and (cdr X) may be a list, a symbol, or a number."
     (setf (gethash pseudo-entry ht) (dlist-first mru)) ;enter into ht, so that (hash-table-count ht) works.
     c))
 
+(declaim (inline mru-cache-key-present-p))
 (defun mru-cache-key-present-p (mru key)
   "Return whether the key KEY is present in the mru-cache MRU."
   (declare (type mru-cache mru))
@@ -139,6 +140,7 @@ X, (car X), and (cdr X) may be a list, a symbol, or a number."
       ;; updating the hash-table is not necessary, because its keys still point to the dconses.
       )))
 
+(declaim (inline mru-cache-get-value))
 (defun mru-cache-get-value (mru key &optional (default nil))
   "If the key KEY is present in mru-cache MRU, return the values for key KEY and T as secondary value and bring KEY to the front of MRU.
 If key is not present return the value DEFAULT and as secondary value NIL as well."
@@ -155,6 +157,7 @@ If key is not present return the value DEFAULT and as secondary value NIL as wel
 	      (values value t))
 	    (values default nil))))))
 
+(declaim (inline mru-cache-set))
 (defun mru-cache-set (mru key value)
   "Set the value VALUE for the key KEY in mru-cache MRU, if KEY was not present yet.
 Bring the key-value-pair to the front of the mru-cache."
