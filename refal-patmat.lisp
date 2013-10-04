@@ -26,7 +26,10 @@ Doesn't yet print whether dll has any circularities in it (but detects them alre
 
 ;; Refal pattern matching
 
+(declaim (inline var-type))
 (defun var-type (var vars)
+  (declare (type symbol var)
+	   (type list vars))
   (destructuring-bind (svars tvars evars) vars
     ;; TODO: check that SVARS, TVARS, and EVARS are non-overlapping sets, i.e. (var-type 'a '((a) (a) nil)) should assert an error.
     (cond
@@ -35,10 +38,13 @@ Doesn't yet print whether dll has any circularities in it (but detects them alre
       ((find var evars) 'evar)
       (t nil))))
 
+(declaim (inline bind-closed))
 (defun bind-closed (var val closed &key (test #'equal))
   "Return an object representing the variables and their values bound in CLOSED, and the variable named VAR bound to VAL.
 Return 'FAIL if the variable VAR is already bound to another value than VAL.
 Return the unmodified CLOSED if VAR is bound to a value equal to VAL (under equality test TEST)."
+  (declare (type symbol var)
+	   (type list closed))
   ;; NOTE: this function must not modify CLOSED, since OPEN-VAR depends on an unmodified CLOSED.
   (let ((acons (assoc var closed)))
     (if (null acons)
@@ -47,7 +53,7 @@ Return the unmodified CLOSED if VAR is bound to a value equal to VAL (under equa
 	    closed
 	    'fail))))
 
-(defmacro and-fail-last (&rest forms)
+(defmacro and-fail-last (fail-form &rest forms)
   "If one of the FORMS but the last fails, return 'FAIL, otherwise the last form(which can be nil)."
   ;; TODO: add &key :fail-symbol, which customizes the fail symbol
   (labels ((rec (forms last)
@@ -55,12 +61,13 @@ Return the unmodified CLOSED if VAR is bound to a value equal to VAL (under equa
 		 last
 		 `(if ,(car forms)
 		     ,(rec (cdr forms) last)
-		     'fail))))
+		     ,fail-form))))
     (assert (not (null forms)))
     (rec (butlast forms) (car (last forms)))))
 
 (defun dlist->list* (dlist)
   "Deeply convert the dlist DLIST to a list."
+  (declare (type dlist dlist))
   (do ((cur (dlist-last dlist) (prev cur)) (l nil)) ((eq cur nil) l)
     (push (let ((d (data cur)))
 	    (if (dlistp d)
@@ -70,6 +77,7 @@ Return the unmodified CLOSED if VAR is bound to a value equal to VAL (under equa
 
 (defun list->dlist (l)
   "Deeply convert list L to a dlist."
+  (declare (type list l))
   (if (null l)
       nil
       (let ((content (loop for e in l collect
@@ -82,37 +90,47 @@ Return the unmodified CLOSED if VAR is bound to a value equal to VAL (under equa
   "Iteratively push the elements between DCONS-STOP and DCONS-START onto a newly constructed list and substitute DCONS-STOP with (funcall DIRECTION DCONS-STOP) after each iteration.
 If an element is a DLIST, it is converted into a list before pushing it.
 This function returns a list with at least one element."
+  (declare (type dcons dcons-start dcons-stop))
   (do ((cur dcons-stop (funcall iterate cur)) (l nil))
       ((eq cur dcons-start) (push (let ((d (data cur))) (if (dlistp d) (dlist->list* d) d)) l))
+    (declare (type dcons cur)
+	     (type list l))
     (push (let ((d (data cur))) (if (dlistp d) (dlist->list* d) d)) l)))
 
 (declaim (inline new-open-region))
 (defun new-open-region (exp-l exp-r pat-l pat-r)
   "Make a new open region determined by EXP-L, EXP-R, PAT-L, PAT-R."
+  (declare (type dcons exp-l exp-r pat-l pat-r))
   (let ((region (list exp-l exp-r pat-l pat-r)))
     region))
 
 (declaim (inline extract-open-region))
 (defun extract-open-region (region)
   (destructuring-bind (exp-l exp-r pat-l pat-r) region
+    (declare (type dcons exp-l exp-r pat-l pat-r))
     (values exp-l exp-r pat-l pat-r)))
 
 (defun close-var-exp-null (pat-l pat-r vars closed)
   "Bind the pattern described by PAT-L and PAT-R to a NIL-expression (therefore, the only possible binding pattern is a list of e-variables, which are all bound to NIL).
 If any closed variables in the pattern have conflicting bindings in CLOSED, return 'FAIL.
 This function returns NIL as the open variables, because there can't be open variables in an NIL-expression."
-  (flet ((pat-data ()
-	   (data pat-l)))
-    ;;(prind pat-l) (prind pat-r)
-    (let ((pat (pat-data)))
-      ;;(prind pat)
-      (and-fail-last (symbolp pat) (eq (var-type pat vars) 'evar)
-		     (let ((closed (bind-closed pat nil closed)))
-		       (and-fail-last
-			(not (eq 'fail closed))
-			(if (eq pat-l pat-r)
-			    (values closed nil)
-			    (close-var-exp-null (next pat-l) pat-r vars closed))))))))
+  (declare (type dcons pat-l pat-r)
+	   (type list vars closed)
+	   (values t list)
+	   (optimize speed))
+  ;;(prind pat-l) (prind pat-r)
+  (let ((pat (data pat-l)))
+    ;;(prind pat)
+    (and-fail-last (values 'fail nil)
+		   (symbolp pat)
+		   (eq (var-type pat vars) 'evar)
+		   (let ((closed (bind-closed pat nil closed)))
+		     (and-fail-last
+		      (values 'fail nil)
+		      (not (eq 'fail closed))
+		      (if (eq pat-l pat-r)
+			  (values closed nil)
+			  (close-var-exp-null (next pat-l) pat-r vars closed)))))))
 
 (let ((pat-1 (list->dlist '(e.1)))
       (pat-2 (list->dlist '(e.1 e.2)))
@@ -137,66 +155,82 @@ OPEN-L and OPEN-R are the open regions on the left and on the right side of the 
   (declare (type dcons exp-l exp-r pat-l pat-r)
 	   (type list vars closed open-l open-r)
 	   (type (or null t) from-r)
-	   (optimize (debug 3)))
-  (macrolet ((recurse (closed)
-	       (let ((closed-s (gensym)))
-		 `(let ((,closed-s ,closed))
-		    (if (eq pat-l pat-r)
-			(values ,closed-s open-l open-r)
-			(if from-r
-			    (close-var-notnull exp-l (prev exp-r) pat-l (prev pat-r) vars ,closed-s open-l open-r from-r)
-			    (close-var-notnull (next exp-l) exp-r (next pat-l) pat-r vars ,closed-s open-l open-r from-r)))))))
-    (flet ((pat-data ()
-	     (if from-r
-		 (data pat-r)
-		 (data pat-l)))
-	   (exp-data ()
-	     (if from-r
-		 (data exp-r)
-		 (data exp-l))))
-      ;;(prind from-r) (prind exp-l) (prind exp-r) (prind pat-l) (prind pat-r)
-      (let ((pat (pat-data))
-	    (exp (exp-data)))
-	;;(prind pat exp)
-	(etypecase pat
-	  (list (assert (null pat)) (and-fail-last (null exp) (recurse closed)))
-	  (number (and-fail-last (eq pat exp) (recurse closed)))
-	  (symbol ;;(prind (var-type pat vars))
-		  (case (var-type pat vars)
-		    ((svar) (and-fail-last (or (and (symbolp exp) (not (null exp))) (numberp exp))
-					   (recurse (bind-closed pat exp closed))))
-		    ((tvar) (and-fail-last (or (symbolp exp) (numberp exp) (dlistp exp))
-					   (recurse (bind-closed pat (if (dlistp exp) (dlist->list* exp) exp) closed))))
-		    ((evar) (if (eq pat-l pat-r)
-				;; there is no more unbound variable after the variable named by PAT, therefore bind PAT to the compound or term determined by EXP-L and EXP-R.
-				(values (let* ((val (dcons->list exp-l exp-r)))
-					  (bind-closed pat val closed))
-					(nconc open-l open-r))
-				(if from-r
-				    ;; check right end, or return
-				    (values closed (nconc open-l
-							  (list (new-open-region exp-l exp-r pat-l pat-r))
-							  open-r))
-				    (close-var-notnull exp-l exp-r pat-l pat-r vars closed open-l open-r t))))
-		    (t (and-fail-last (eq pat exp) (recurse closed)))))
-	  (dlist (multiple-value-bind (closed open)
-		     (if (null exp)
-			 (close-var-exp-null (dlist-first pat) (dlist-last pat) vars closed)
-			 (and-fail-last (dlistp exp) (close-var-notnull (dlist-first exp) (dlist-last exp) (dlist-first pat) (dlist-last pat) vars closed nil nil nil)))
-		   (and-fail-last (not (eq closed 'fail))
-				  (let ((open-l (if from-r open-l (nconc open-l open)))
-					(open-r (if from-r (nconc open open-r) open-r)))
-				    (recurse closed))))))))))
+	   (values t list)
+	   (optimize speed))
+  (flet ((recurse (closed)
+	   (declare (type (or (member fail) list) closed)
+		    (values t list))
+	   (if (eq pat-l pat-r)
+	       (values closed (nconc open-l open-r))
+	       ;; the multiple-value-bind is necessary for "Return type not fixed values, so can't use known return convention" to go away.
+	       (multiple-value-bind (c o)
+		   (if from-r
+		       (close-var-notnull exp-l (prev exp-r) pat-l (prev pat-r) vars closed open-l open-r from-r)
+		       (close-var-notnull (next exp-l) exp-r (next pat-l) pat-r vars closed open-l open-r from-r))
+		 (values c o))))
+	 (pat-data ()
+	   (if from-r
+	       (data pat-r)
+	       (data pat-l)))
+	 (exp-data ()
+	   (if from-r
+	       (data exp-r)
+	       (data exp-l))))
+    (declare (inline recurse pat-data exp-data))
+    ;;(prind from-r) (prind exp-l) (prind exp-r) (prind pat-l) (prind pat-r)
+    (let ((pat (pat-data))
+	  (exp (exp-data)))
+      ;;(prind pat exp)
+      (etypecase pat
+	(list (assert (null pat)) (and-fail-last (values 'fail nil) (null exp) (recurse closed)))
+	(number (and-fail-last (values 'fail nil) (eq pat exp) (recurse closed)))
+	(symbol ;;(prind (var-type pat vars))
+	 (case (var-type pat vars)
+	   ((svar) (and-fail-last (values 'fail nil)
+				  (or (and (symbolp exp) (not (null exp))) (numberp exp))
+				  (recurse (bind-closed pat exp closed))))
+	   ((tvar) (and-fail-last (values 'fail nil)
+				  (or (symbolp exp) (numberp exp) (dlistp exp))
+				  ;; here, checking whether exp is a dlist is necessary, since tvars match to symbols and lists.
+				  (recurse (bind-closed pat (if (and exp (dlistp exp)) (dlist->list* exp) exp) closed))))
+	   ((evar) (if (eq pat-l pat-r)
+		       ;; there is no more unbound variable after the variable named by PAT, therefore bind PAT to the compound or term determined by EXP-L and EXP-R.
+		       (values (let* ((val (dcons->list exp-l exp-r)))
+				 (bind-closed pat val closed))
+			       (nconc open-l open-r))
+		       (if from-r
+			   ;; check right end, or return
+			   (values closed
+				   (nconc open-l
+					  (list (new-open-region exp-l exp-r pat-l pat-r))
+					  open-r))
+			   (close-var-notnull exp-l exp-r pat-l pat-r vars closed open-l open-r t))))
+	   (t (and-fail-last (values 'fail nil)
+			     (eq pat exp) (recurse closed)))))
+	(dlist (multiple-value-bind (closed open)
+		   (if (null exp)
+		       (close-var-exp-null (dlist-first pat) (dlist-last pat) vars closed)
+		       (and-fail-last (values 'fail nil)
+				      (dlistp exp)
+				      (close-var-notnull (dlist-first exp) (dlist-last exp) (dlist-first pat) (dlist-last pat) vars closed nil nil nil)))
+		 (and-fail-last (values 'fail nil)
+				(not (eq closed 'fail))
+				(progn
+				  (setf open-l (if from-r open-l (nconc open-l open)))
+				  (setf open-r (if from-r (nconc open open-r) open-r))
+				  (recurse closed)))))))))
 
+(declaim (inline close-var-dlist))
 (defun close-var-dlist (exp pat vars closed)
   (declare (type (or null dlist) exp pat)
 	   (type list vars closed))
   (if (null pat)
-      (values (and-fail-last (null exp) closed) nil)
+      (values (and-fail-last 'fail (null exp) closed) nil)
       (if (null exp)
 	  (close-var-exp-null (dlist-first pat) (dlist-last pat) vars closed)
 	  (close-var-notnull (dlist-first exp) (dlist-last exp) (dlist-first pat) (dlist-last pat) vars closed nil nil nil))))
 
+(declaim (inline close-var))
 (defun close-var (exp pat vars closed)
   (let ((exp-dlist (list->dlist exp))
 	(pat-dlist (list->dlist pat)))
@@ -238,17 +272,20 @@ OPEN-L and OPEN-R are the open regions on the left and on the right side of the 
   "OPEN contains regions of the expression and the pattern.
 Iteratively extend the first e-variable in OPEN (which is at the top, because OPEN was returned by CLOSE-VAR) and call CLOSE-VAR on the remaining regions of expression and pattern.
 If this fails, try an extension of the first e-variable, or fail if all extensions were tried."
-  (declare (type list vars closed open))
+  (declare (type list vars closed open)
+	   (optimize speed))
   (if (null open)
       closed
       (multiple-value-bind (exp-l exp-r pat-l pat-r)
 	  (extract-open-region (car open))
 	(let* ((pat (data pat-l))
-	       (pat-l-next (next pat-l)))
+	       (pat-l-next (next pat-l))
+	       (open-rest (cdr open)))
 	  (flet ((try (val exp-l-next)
 		   ;;(prind pat val closed)
 		   (let* ((closed (bind-closed pat val closed)))
 		     (and-fail-last
+		      'fail
 		      (not (eq closed 'fail))
 		      (multiple-value-bind (closed open-1)
 			  (if (null exp-l-next)
@@ -256,10 +293,9 @@ If this fails, try an extension of the first e-variable, or fail if all extensio
 			      (close-var-notnull exp-l-next exp-r pat-l-next pat-r vars closed nil nil nil))
 			;;(prind closed)
 			(and-fail-last
+			 'fail
 			 (not (eq closed 'fail))
-			 (if (null open-1)
-			     (open-var vars closed (cdr open))
-			     (open-var vars closed (append open-1 (cdr open))))))))))
+			 (open-var vars closed (nconc open-1 open-rest))))))))
 	    (assert (eq 'evar (var-type pat vars)))
 	    (let* ((closed (try nil exp-l)))
 	      (when (not (eq 'fail closed))
@@ -278,7 +314,8 @@ EXP: expression, PAT: pattern, VARS: (svars tvars evars), CLOSED: ((a . value) (
   (multiple-value-bind (closed open)
       (close-var exp pat vars closed)
     ;;(prind closed)
-    (and-fail-last (not (eq 'fail closed))
+    (and-fail-last 'fail
+		   (not (eq 'fail closed))
 		   (open-var vars closed open))))
 
 (assert (equal (patmat '((s.1 s.2) (t.1) (e.1 e.2 e.3 e.4 e.5 e.6 e.7))
@@ -291,6 +328,11 @@ EXP: expression, PAT: pattern, VARS: (svars tvars evars), CLOSED: ((a . value) (
 		       '(a (x) (x y) (x y z) (a b c) (a b x (x y) (x y z)) a b c)
 		       '(e.1 (e.2 z) e.3 (e.4 (e.5 e.2 e.6)) e.7))
 	       '((e.6 . (z)) (e.5 . nil) (e.7 . (a b c)) (e.4 . (a b x (x y))) (e.3 . ((a b c))) (e.2 . (x y)) (e.1 . (a (x) (x y))))))
+;; lots of backtracking
+(assert (equal (patmat '(() () (e.1 e.2 e.3 e.4 e.5 e.6 e.7))
+		       '(a (x) (x y) (x y z) (a b c) (a b x (x y) (x y z)) a b c)
+		       '(e.1 (e.5 e.2 e.6) e.3 (e.4 (e.2 z)) e.7))
+	       '((e.7 . (a b c)) (e.4 . (a b x (x y))) (e.3 . ((x y z) (a b c))) (e.6 . nil) (e.2 . (x y)) (e.5 . nil) (e.1 . (a (x))))))
 (assert (equal (patmat '(() () (e.1 e.2 e.3 e.4 e.5 e.6 e.7))
 		       '(a (x) (x y) (x y z) (a b c) (a b x (x y) (x y z)))
 		       '(e.1 (e.2 z) e.3 (e.4 (e.5 e.2 e.6))))
