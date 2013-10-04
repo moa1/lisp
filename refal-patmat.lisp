@@ -164,9 +164,13 @@ OPEN-L and OPEN-R are the open regions on the left and on the right side of the 
 	       (values closed (nconc open-l open-r))
 	       ;; the multiple-value-bind is necessary for "Return type not fixed values, so can't use known return convention" to go away.
 	       (multiple-value-bind (c o)
-		   (if from-r
-		       (close-var-notnull exp-l (prev exp-r) pat-l (prev pat-r) vars closed open-l open-r from-r)
-		       (close-var-notnull (next exp-l) exp-r (next pat-l) pat-r vars closed open-l open-r from-r))
+		   (if (eq exp-l exp-r)
+		       (if from-r
+			   (close-var-exp-null pat-l (prev pat-r) vars closed)
+			   (close-var-exp-null (next pat-l) pat-r vars closed))
+		       (if from-r
+			   (close-var-notnull exp-l (prev exp-r) pat-l (prev pat-r) vars closed open-l open-r from-r)
+			   (close-var-notnull (next exp-l) exp-r (next pat-l) pat-r vars closed open-l open-r from-r)))
 		 (values c o))))
 	 (pat-data ()
 	   (if from-r
@@ -262,6 +266,7 @@ OPEN-L and OPEN-R are the open regions on the left and on the right side of the 
   (assert (equal '((c . 3) (b . (2)) (a . 1)) (close-var exp-3 pat-5 vars-t nil)))
   (assert (equal '((b . ((2))) (c . 3) (a . 1)) (close-var exp-3 pat-5 vars-e nil)))
   (assert (equal 'fail (close-var exp-1 pat-4 vars-e nil)))
+  (assert (equal '((c . nil) (b . 2) (a . 1)) (close-var '(1 2) '(a b c) '((a) (b) (c)) nil)))
   (assert (equal '((s.2 . 7) (t.1 . (8)) (e.1 . (2 3)) (s.1 . 1))
 		 (close-var '((1 2 3) (4) 5 6 (7) (8))
 			    '((s.1 e.1) e.2 e.3 (s.2) t.1)
