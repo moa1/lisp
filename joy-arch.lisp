@@ -358,19 +358,19 @@ This function must not modify stk, only copy it (otherwise test values might be 
   (flet ((random-final ()
 	   (weighted-sample ops-p joy-ops)))
     (cond
-      ((null exp) (if (< (random 1.0) p1) ;extend
+      ((null exp) (if (chance p1) ;extend
 		      (cons (random-final)
 			    nil)))
-      ((listp exp) (if (and debranch-p (< (random 1.0) p2))
+      ((listp exp) (if (and debranch-p (chance p2))
 		       (random-final) ; de-branch
 		       (cons (apply #'mutate joy-ops (car exp) t p1 p2 p3 p4 p5 p6 ops-p)
 			     (if (and (= 1 (length (cdr exp)))
-				      (< (random 1.0) p3))
+				      (chance p3))
 				 nil ; shorten
 				 (apply #'mutate joy-ops (cdr exp) nil p1 p2 p3 p4 p5 p6 ops-p)))))
-      (t (if (< (random 1.0) p4)
-	     (if (< (random 1.0) p5)
-		 (cons (if (< (random 1.0) p6)
+      (t (if (chance p4)
+	     (if (chance p5)
+		 (cons (if (chance p6)
 			   (random-final) ; branch
 			   exp)
 		       nil)	
@@ -382,7 +382,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
   (let ((p0 (car probs))
 	(prest (cdr probs)))
     (assert (< p0 .9))
-    (if (< (random 1.0) p0)
+    (if (chance p0)
 	(apply #'mutate-rec joy-ops (apply #'mutate joy-ops exp t prest) probs)
 	(apply #'mutate joy-ops exp t prest))))
 
@@ -390,7 +390,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
   (labels ((rec (probs mut-probs)
 	     (if (null probs)
 		 (nreverse mut-probs)
-		 (if (<= (random 1.0) p0)
+		 (if (chance p0)
 		     (rec (cdr probs) (cons (random .99) mut-probs)) ;previously, (random .99) was a random walk +- 0.1. I think mutation parameter smoothness should be provided by mutate-crossover.
 		     (rec (cdr probs) (cons (car probs) mut-probs))))))
     (rec (cdr probs) (cons (random .9) nil)))) ; recursion prob < 0.9
@@ -477,14 +477,14 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
 ;; (defun align (exp1 exp2 &optional r)
 ;;   (cond
 ;;     ((and (null exp1) (null exp2)) r)
-;;     ((null exp1) (if (< (random 1.0) 0.5)
+;;     ((null exp1) (if (chance 0.5)
 ;; 		     (append r exp2)
 ;; 		     r))
-;;     ((null exp2) (if (< (random 1.0) 0.5)
+;;     ((null exp2) (if (chance 0.5)
 ;; 		     (append r exp1)
 ;; 		     r))
 ;;     ((and (listp (car exp1))
-;; 	  (listp (car exp2))) (if (< (random 1.0) 0.5)
+;; 	  (listp (car exp2))) (if (chance 0.5)
 ;; 				  (intersect (cdr exp1) (cdr exp2)
 ;; 					     (append (list (car exp1)) r))
 ;; 				  (intersect (cdr exp1) (cdr exp2)
