@@ -936,6 +936,21 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 				    (if (<= v 0)
 					-1
 					(/ (log v) log2))))))))
+;;(time (let ((tc (generate-test-cases-maxvalue-maxprognodes 11)))
+;;	(systematicmapping 11 nil tc '(succ dup times) 1000 .01 nil)))
+;; == ((SUCC SUCC SUCC DUP (DUP (SUCC) TIMES) TIMES)) 4.5849624 4954369 (481 seconds)
+
+(defun generate-test-cases-list (list)
+  ;; TODO: extend this function to accept a list of lists, which all should be rewarded.
+  (make-test-cases :values '(nil)
+		   :generate (lambda (vs) vs)
+		   :goal (constantly list)
+		   :score #'score-list-similarity))
+;;(time (let ((tc (generate-test-cases-list '(cons cons)))
+;;	    (joy-ops '(concat cons dup list nill pop quote swap)))
+;;	(systematicmapping 6 nil tc joy-ops 1000 .01 nil)))
+;; == (((CONS) UNCONS POP DUP))
+
 
 ;;;; tournament selection
 
@@ -1178,6 +1193,8 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
 	 (trees-evaluated 0))
     (flet ((collectfit (stks heaps exp fit)
 	     (incf trees-evaluated)
+	     (when (= 0 (mod trees-evaluated 1000))
+	       (format t "percent visited (of total possible):~A~%" (float (/ trees-evaluated number-trees))))
 	     (if (> fit best-fit)
 		 (progn (setf best-fit fit) (setf best-exp (list (append exp0 exp))))
 		 (when (= fit best-fit)
