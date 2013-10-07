@@ -5,6 +5,7 @@
 
 (load "~/lisp/arbitrary-trees.lisp")
 (load "~/lisp/multitree.lisp")
+(load "~/lisp/refal-patmat.lisp")
 ;;(load "~/quicklisp/setup.lisp") ;is in multitree.lisp
 ;;(ql:quickload :cl-custom-hash-table)
 ;;(use-package :cl-custom-hash-table)
@@ -122,6 +123,23 @@ The sum of w must not be 0."
 (defun identity-1 (values)
   values)
 
+(defun list-replace-symbols (list plist)
+  "Recursively replace (non-destructively) all occurrences of the symbols in PLIST in LIST with the values stored in PLIST.
+Example: (list-replace-symbols '(a b (c a (d)) e) '(a 1 e nil)) == '(1 B (C 1 (D)) NIL)."
+  (labels ((replace-symbol (symbol)
+	     (let ((cdr (plist-cdr symbol plist)))
+	       (if (null cdr)
+		   symbol
+		   (cadr cdr))))
+	   (rec (list accum)
+	     (if (null list)
+		 (nreverse accum)
+		 (let ((el (car list)))
+		   (if (consp el)
+		       (rec (cdr list) (cons (rec el nil) accum))
+		       (rec (cdr list) (cons (replace-symbol el) accum)))))))
+    (rec list nil)))
+
 ;; '((1) 1 DEFINE 1)
 (defun joy-eval (stk exp &key (heap (make-hash-table)) (c (make-counter 0)) (cd (make-countdown 0.0)))
   (declare (optimize (debug 0) (compilation-speed 0) (speed 3) (space 0))
@@ -166,6 +184,11 @@ This function must not modify stk, only copy it (otherwise test values might be 
 	 (nill    (cons nil stk)) ;same as false
 	 (not     (cons (not (car stk)) (cdr stk))) ; can be emulated by branch
 	 (or      (cons (or (car stk) (cadr stk)) (cddr stk)))
+	 (patmat  (let ((vars (caddr stk)) (exp (cadr stk)) (pat (car stk)))
+		    (cons
+		     (alist-to-plist (patmat vars exp pat))
+		     (cdddr stk))))
+	 (patsub  (cons (list-replace-symbols (car stk) (cadr stk)) (cddr stk)))
 	 (pop     (cdr stk))
 	 (pred    (cons (1- (car stk)) (cdr stk)))
 	 (quote   (cons (list (car stk)) (cdr stk)))
@@ -275,6 +298,8 @@ This function must not modify stk, only copy it (otherwise test values might be 
 (joy-test nil '(3 4 *) '(12))
 (joy-test nil '(nill) '(()))
 (joy-test nil '(true not) '(nil))
+(joy-test nil '((a 1 b 2) (a c) patsub) '((1 c)))
+;;(joy-test nil '(((a) (b) (c)) (1 2) (a b c) patmat) '((c nil b 2 a 1)))
 (joy-test nil '(nil 5 or) '(5))
 (joy-test nil '(nil nil or) '(nil))
 (joy-test nil '(5 4 pop) '(5))
@@ -324,7 +349,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
     (floating-point-overflow () 'error)))
 
 (defparameter *joy-ops* 
-  '(+ and branch concat cons dip / dup equal i ifte list * nill not or pop pred quote rem < stack step - succ swap times true uncons unstack while define))
+  '(+ and branch concat cons dip / dup equal i ifte list * nill not or patmat patsub pop pred quote rem < stack step - succ swap times true uncons unstack while define))
 
 (defun mutate (exp debranch-p p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 
 	       q1 q2 q3 q4 q5 q6 q7 q8 q9 q10
@@ -522,6 +547,8 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
     (nill    () (list))
     (not     (t) (boolean))
     (or      (t t) (boolean))
+    (patmat  (list list list) (list))
+    (patsub  (list list) (list))
     (pop     (t) nil)
     (pred    (number) (number))
     (quote   (t) (list))

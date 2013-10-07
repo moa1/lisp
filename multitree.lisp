@@ -209,6 +209,53 @@ Bring the key-value-pair to the front of the mru-cache."
     (funcall cadd 5 6)
     (funcall cadd 3 4)))
 
+;;;; Property lists, i.e. a list of alternating SYMBOL and VALUE.
+;;;; Example '(a 1 b 2 c (a list))
+
+(defun plist-cdr (symbol plist)
+  "Return the cdr of plist PLIST whose car is SYMBOL and whose cadr is the value of SYMBOL.
+Return values NIL if SYMBOL is not found in plist PLIST, or if PLIST has an odd length."
+  (labels ((rec (plist)
+	     (if (null plist)
+		 nil
+		 (if (eq symbol (car plist))
+		     plist
+		     (rec (cddr plist))))))
+    (rec plist)))
+
+(defun plist-get (symbol plist)
+  "Return the value associated with symbol SYMBOL in plist PLIST, or NIL if SYMBOL is not in PLIST.
+Returns NIL if plist has an odd length."
+  (cadr (plist-cdr symbol plist)))
+
+(defun plist-has (symbol plist)
+  "Return whether plist PLIST has symbol SYMBOL."
+  (not (null (plist-cdr symbol plist))))
+
+(defun plist-set (symbol val plist)
+  "Return the plist PLIST that results from setting the symbol SYMBOL in PLIST to value VAL (or extending PLIST with the symbol SYMBOL and value VAL if SYMBOL didn't exist in PLIST before)."
+  (let ((old-cdr (plist-cdr symbol plist)))
+    (if (null old-cdr)
+	(cons symbol (cons val plist))	
+	(progn
+	  (setf (cadr old-cdr) val)
+	  plist))))
+
+(defun alist-to-plist (alist)
+  "Return the plist that is equivalent to alist ALIST."
+  ;; NOTE: could return an plist that has multiple entries with the same symbol. (maybe FIXME: raise an error in that case.)
+  (let ((plist nil))
+    (loop for (a . b) in alist do
+	 (setf plist (cons b (cons a plist))))
+    (nreverse plist)))
+
+(defun plist-to-alist (plist)
+  "Return the alist that is equivalent to plist PLIST."
+  (let ((alist nil))
+    (loop for a on plist by #'cddr do
+	 (setf alist (cons (cons (car a) (cadr a)) alist)))
+    (nreverse alist)))
+
 ;;;; A doubly linked list
 
 ;;(deftype dllist ()
