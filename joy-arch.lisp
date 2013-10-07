@@ -346,48 +346,45 @@ This function must not modify stk, only copy it (otherwise test values might be 
     (type-error () 'error)
     (division-by-zero () 'error)
     (floating-point-invalid-operation () 'error)
-    (floating-point-overflow () 'error)))
+    (floating-point-overflow () 'error)
+    #+SBCL (SB-KERNEL::ARG-COUNT-ERROR () 'error)))
 
 (defparameter *joy-ops* 
   '(+ and branch concat cons dip / dup equal i ifte list * nill not or patmat patsub pop pred quote rem < stack step - succ swap times true uncons unstack while define))
 
-(defun mutate (exp debranch-p p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 
-	       q1 q2 q3 q4 q5 q6 q7 q8 q9 q10
+(defun mutate (joy-ops exp debranch-p p1 p2 p3 p4 p5 p6
 	       &rest ops-p)
-;;  (print (list "exp" exp))
-  (flet ((random-final (p)
-	   (if (< (random 1.0) p)
-	       (weighted-sample (list q1 q2 q3 q4 q5 q6 q7 q8 q9 q10)
-				'(a b c d e 1 2 4 8 16))
-	       (weighted-sample ops-p *joy-ops*))))
+  (assert (= (length joy-ops) (length ops-p)))
+  (flet ((random-final ()
+	   (weighted-sample ops-p joy-ops)))
     (cond
       ((null exp) (if (< (random 1.0) p1) ;extend
-		      (cons (random-final p2)
+		      (cons (random-final)
 			    nil)))
-      ((listp exp) (if (and debranch-p (< (random 1.0) p3))
-		       (random-final p4) ; de-branch
-		       (cons (apply #'mutate (car exp) t p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 q1 q2 q3 q4 q5 q6 q7 q8 q9 q10 ops-p)
+      ((listp exp) (if (and debranch-p (< (random 1.0) p2))
+		       (random-final) ; de-branch
+		       (cons (apply #'mutate joy-ops (car exp) t p1 p2 p3 p4 p5 p6 ops-p)
 			     (if (and (= 1 (length (cdr exp)))
-				      (< (random 1.0) p5))
+				      (< (random 1.0) p3))
 				 nil ; shorten
-				 (apply #'mutate (cdr exp) nil p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 q1 q2 q3 q4 q5 q6 q7 q8 q9 q10 ops-p)))))
-      (t (if (< (random 1.0) p6)
-	     (if (< (random 1.0) p7)
-		 (cons (if (< (random 1.0) p8)
-			   (random-final p9) ; branch
+				 (apply #'mutate joy-ops (cdr exp) nil p1 p2 p3 p4 p5 p6 ops-p)))))
+      (t (if (< (random 1.0) p4)
+	     (if (< (random 1.0) p5)
+		 (cons (if (< (random 1.0) p6)
+			   (random-final) ; branch
 			   exp)
 		       nil)	
-		 (random-final p10)) ; substitute
+		 (random-final)) ; substitute
 	     exp)))))
    
-(defun mutate-rec (exp &rest probs)
+(defun mutate-rec (joy-ops exp &rest probs)
 ;;  (print (list "exp" exp "p0" p0))
   (let ((p0 (car probs))
 	(prest (cdr probs)))
     (assert (< p0 .9))
     (if (< (random 1.0) p0)
-	(apply #'mutate-rec (apply #'mutate exp t prest) probs)
-	(apply #'mutate exp t prest))))
+	(apply #'mutate-rec joy-ops (apply #'mutate joy-ops exp t prest) probs)
+	(apply #'mutate joy-ops exp t prest))))
 
 (defun mutate-mutate (p0 probs)
   (labels ((rec (probs mut-probs)
@@ -469,12 +466,12 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
 		       x)))
 	     exp1)))
 
-(defun crossover-and-mutate (exp1 exp2 &rest probs)
+(defun crossover-and-mutate (joy-ops exp1 exp2 &rest probs)
   (let* ((p1 (elt probs 1))
 	 (p2 (elt probs 2))
 	 (prest (cons (car probs) (cdddr probs)))
 	 (cross (crossover exp1 exp2 p1 p2))
-	 (new (apply #'mutate-rec cross prest)))
+	 (new (apply #'mutate-rec joy-ops cross prest)))
     new))
 
 ;; (defun align (exp1 exp2 &optional r)
@@ -856,8 +853,8 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 (def-test-cases-one-value *test-cases-golden-ratio-value* (float (golden-ratio 20)))
 ;;(systematicmapping 6 '() *test-cases-golden-ratio-value* (cons 1 *joy-ops*) 1000 .01 nil)
 ;; yields ((1 DUP SUCC / SUCC) (1 1 SUCC / SUCC)) -0.118034005 14430760
-;; (tournament-new '(1 dup succ / succ) 200 1000000 *test-cases-golden-ratio-value* 1000 .01) yields a joy expression with many nested I's and -2.1576881e-5 as error,
-;; but (tournament-new '() 200 1000000 *test-cases-golden-ratio-value* 1000 .01) yields '(2) as joy expression and consequently -0.381966 as error.
+;; (tournament-new '(1 dup succ / succ) 200 1000000 *test-cases-golden-ratio-value* *joy-ops* 1000 .01) yields a joy expression with many nested I's and -2.1576881e-5 as error,
+;; but (tournament-new '() 200 1000000 *test-cases-golden-ratio-value* *joy-ops* 1000 .01) yields '(2) as joy expression and consequently -0.381966 as error.
 
 (def-test-cases-one-value *test-cases-pi-value* pi)
 
@@ -913,28 +910,50 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 					(if (car r) -1 0))))))))
 
 ;(let ((tc (generate-test-cases-check-valid-joy-exps 2 '(0) *joy-ops* 1000 .01))
-;	       (i '(dup (+) equal (pop nill) (dup (-) equal (pop nill) (pop t) branch) branch)))
-;	   (tournament-new i 20 10000 tc 1000 .01)
-;	   ;(joy-show-fitness i tc)
-;	   )
+;      (i '(pop t))
+;      (i '(dup (+) equal (pop nill) (pop t) branch))
+;      (i '(dup (+) equal (pop nill)      (dup (-)    equal (pop nill) (pop t) branch) branch))
+;      (i '(DUP (+) EQUAL (POP NILL SWAP) (DUP (CONS) EQUAL (POP NILL) (DUP (-) EQUAL (UNCONS) NILL BRANCH) BRANCH) BRANCH))
+;      )
+;(tournament-new i 20 10000 tc *joy-ops* 1000 .01)
+;;;(joy-show-fitness i tc)
+;)
+
+;; Add a test-cases that scores joy programs by the value they return.
+;; The length of the joy programs is also scored, programs of length larger than a predefined number receive a very low fitness.
+;; Maybe this evolves joy programs that implement new creative higher-level (control) structures.
+
+(defun generate-test-cases-maxvalue-maxprognodes (maxnodes)
+  (let ((log2 (log 2)))
+    (make-test-cases :values '((0))
+		     :generate (lambda (vs) vs)
+		     :goal (constantly nil)
+		     :score (lambda (r goal exp)
+			      (declare (ignore goal))
+			      (if (or (not (listp r)) (not (numberp (car r))) (not (eq (cdr r) nil)) (> (count-tree-nodes exp) maxnodes))
+				  *fitness-invalid*
+				  (let ((v (car r)))
+				    (if (<= v 0)
+					-1
+					(/ (log v) log2))))))))
 
 ;;;; tournament selection
 
-(defparameter *mut-length* (+ 11 10 (length *joy-ops*)))
+(defparameter *mut-length-const* (+ 6 3))
 
-(defun tournament-new (o size cycles fitness max-ticks max-seconds)
+(defun tournament-new (o size cycles fitness joy-ops max-ticks max-seconds)
   (let* ((pop (make-array size :initial-element o))
-	 (mut (make-array size :initial-element (loop for i below *mut-length* collect .1))))
+	 (mut (make-array size :initial-element (loop for i below (+ *mut-length-const* (length joy-ops)) collect .1))))
 ;;    (dotimes (s size) (setf (aref mut s) (loop for i below 11 collect (random .9))))
-    (tournament pop mut cycles fitness max-ticks max-seconds)))
+    (tournament pop mut cycles fitness joy-ops max-ticks max-seconds)))
 
-(defun tournament-res (res cycles fitness max-ticks max-seconds)
+(defun tournament-res (res cycles fitness joy-ops max-ticks max-seconds)
   (let* ((size (length res))
 	 (pop (make-array size :initial-contents (loop for i in res collect (car i))))
 	 (mut (make-array size :initial-contents (loop for i in res collect (caddr i)))))
-    (tournament pop mut cycles fitness max-ticks max-seconds)))
+    (tournament pop mut cycles fitness joy-ops max-ticks max-seconds)))
 
-(defun tournament (pop mut cycles fitness max-ticks max-seconds)
+(defun tournament (pop mut cycles fitness joy-ops max-ticks max-seconds)
   (assert (= (length pop) (length mut)))
   (let* ((size (length pop))
 	 (n (make-array size :element-type 'fixnum :initial-contents (loop for i below size collect i)))
@@ -952,9 +971,10 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 	     (c2-mut (elt mut c2))
 	     (new-mut (mutate-mutate .1 (mutate-crossover c1-mut c2-mut)))
 ;;	     (new-mut c2-mut)
-	     (new (apply #'crossover-and-mutate (elt pop c1) (elt pop c2)
+	     (new (apply #'crossover-and-mutate joy-ops (elt pop c1) (elt pop c2)
 			 new-mut)))
 	(when (and (listp new) (valid-joy-exp new '(:any)))
+	  ;;(print (list "new" new))
 	  (let ((new-fit (fitness-score-test-values fitness test-goal-values new max-ticks max-seconds)))
 	    ;;(print (list "c1" c1 "c2" c2 "c2-fit" c2-fit "new-fit" new-fit))
 	    (when (or (> new-fit c2-fit) (and (= new-fit c2-fit) (chance .5)))
@@ -974,8 +994,9 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
     (sort (zip-array 'list pop fit mut) #'< :key #'second)))
 
 (defun mut-stats (res)
-  (let ((mut (mapcar #'caddr res)))
-    (loop for i below *mut-length* collect
+  (let* ((mut (mapcar #'caddr res))
+	 (mut-length (length (car mut))))
+    (loop for i below mut-length collect
 	 (let ((pn (mapcar (lambda (x) (nth i x)) mut)))
 ;;	   (print (list "pn" pn))
 	   (list (mean pn) (stddev-corr pn))))))
