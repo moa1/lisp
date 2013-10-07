@@ -1086,7 +1086,7 @@ l-1-fits must be a list of fitnesses which must be nil if the previous calls yie
   "Extend l-1-exp with an arbitrary tree of at most max-ext-nodes nodes.
 Test with all fitness-test-cases and extend those expressions whose result had no error.
 l-1-fits must be a list of fitnesses which must be nil if the previous level yielded no error."
-  (when (> max-ext-nodes 0)
+  (when (> max-ext-nodes 1)
     (let* ((ext-structs (unique (mapcar #'car (enumerate-tree-structures max-ext-nodes))
 				#'equal)) ;extension tree structures
 	   (score-fn (test-cases-score fitness-test-case)))
