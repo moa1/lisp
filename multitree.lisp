@@ -88,7 +88,7 @@ X, (car X), and (cdr X) may be a list, a symbol, or a number."
     ;; equalp required when hashing hash tables
     :test equal :hash-function lsxhash)
 
-;;;; A deterministic function cacher
+;;;; A deterministic function cacher (mru: most recently used)
 
 (defclass mru-cache ()
   ((slots :initarg :slots :type (and fixnum unsigned-byte))
@@ -181,7 +181,7 @@ Bring the key-value-pair to the front of the mru-cache."
 		(destructuring-bind (key . value) (data (dlist-last mru))
 		  (declare (ignorable value))
 		  ;;(print "mru full") (describe-object mru t)
-		  (dlist-pop mru :from-end t) ;after this, mru can't point to nil, because it was a dlit with at least two members.
+		  (dlist-pop mru :from-end t) ;after this, mru can't point to nil, because it was a dlist with at least two members.
 		  (remhash key ht)
 		  ;;(describe-object mru t)
 		  ))

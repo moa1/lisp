@@ -125,18 +125,26 @@ Repeatedly calls F with each possible tree as parameter."
   "Returns the number of nodes in tree.
 The root node counts as one node, i.e. (count-tree-nodes 'A) == 1 and (count-tree-nodes '(A)) == 2.
 I.e. each open bracket and each symbol counts as 1 node."
-  (labels ((rec (tree c)
-	     ;;(format t "rec tree:~A c:~A~%" tree c)
-	     (if (null tree)
-		 c
-		 (if (listp tree)
-		     (if (listp (car tree))
-			 (rec (cdr tree) (rec (car tree) (1+ c)))
-			 (rec (cdr tree) (rec (car tree) c)))
-		     (1+ c)))))
-    (if (listp tree)
-	(rec tree 1)
-	(rec tree 0))))
+  (let ((ht (make-hash-table :test #'eq)))
+    (labels ((rec-cached (tree c)
+	       (multiple-value-bind (val present-p) (gethash tree ht)
+		 (if present-p
+		     (+ val c)
+		     (let ((res (rec tree 0)))
+		       (setf (gethash tree ht) res)
+		       (+ res c)))))
+	     (rec (tree c)
+	       ;;(format t "rec tree:~A c:~A~%" tree c)
+	       (if (null tree)
+		   c
+		   (if (listp tree)
+		       (if (listp (car tree))
+			   (rec-cached (cdr tree) (rec-cached (car tree) (1+ c)))
+			   (rec-cached (cdr tree) (rec-cached (car tree) c)))
+		       (1+ c)))))
+      (if (listp tree)
+	  (rec-cached tree 1)
+	  (rec-cached tree 0)))))
 
 (assert (= 1 (count-tree-nodes '())))
 (assert (= 3 (count-tree-nodes '((A)))))
