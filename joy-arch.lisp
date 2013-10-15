@@ -1002,6 +1002,21 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 ;;	(systematicmapping 6 nil tc joy-ops 1000 .01 nil)))
 ;; == (((CONS) UNCONS POP DUP))
 
+(defun score-tree-equal-prefix (l1 l2 &optional (score 0))
+  ;;(format t "l1:~A l2:~A score:~A~%" l1 l2 score)
+  (if (null l1)
+      (if (null l2)
+	  score
+	  (- score (* 1 (1- (count-tree-nodes l2)))))
+      (if (null l2)
+	  (- score (* 1 (1- (count-tree-nodes l1))))
+	  (if (or (not (consp l1)) (not (consp l2)))
+	      (if (equal l1 l2)
+		  score
+		  -1)
+	      (score-tree-equal-prefix (cdr l1) (cdr l2)
+				       (score-tree-equal-prefix (car l1) (car l2) score))))))
+
 ;; this test-cases should compress a list of 200 "+".
 (defun generate-test-cases-compress-list (decoder-maxticks decoder-max-seconds)
   ;; generalize this: compute all possible different outputs from joy-programs of length up to N nodes, and let them be learned.
@@ -1009,28 +1024,15 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
       ((lists1 (loop for symbol in '(1) collect (loop for i below 200 collect symbol))))
     (flet ((score-list-prefix (r goal exp)
 	     (declare (ignorable exp))
-	     (labels ((rec (l1 l2 score)
-			;;(format t "l1:~A l2:~A score:~A~%" l1 l2 score)
-			(if (null l1)
-			    (if (null l2)
-				score
-				(- score (* 1 (1- (count-tree-nodes l2)))))
-			    (if (null l2)
-				(- score (* 1 (1- (count-tree-nodes l1))))
-				(if (or (not (consp l1)) (not (consp l2)))
-				    *fitness-invalid*
-				    (if (eq (car l1) (car l2))
-					(rec (cdr l1) (cdr l2) score)
-					(rec (cdr l1) (cdr l2) (- score 1))))))))
-	       (if (or (not (listp r)) (not (proper-list-p r)) (not (listp (car r))) (not (eq nil (cdr r))))
-		   *fitness-invalid*
-		   (let ((decoded (joy-eval-handler nil (car r) :c (make-counter decoder-maxticks) :cd (make-countdown decoder-max-seconds))))
-		     (if (or (not (listp decoded)) (not (proper-list-p decoded)) (not (eq (cdr r) nil)) (not (listp (car decoded))))
-			 *fitness-invalid*
-			 (let ((diff (rec (car decoded) (car goal) 0))
-			       (code-length (count-tree-nodes r)))
-			   ;;(print (list "r" r "goal" goal "exp" exp "decoded" decoded "diff" diff "code-length" code-length))
-			   (- (* 2 diff) (* 1 code-length)))))))))
+	     (if (or (not (listp r)) (not (proper-list-p r)) (not (listp (car r))) (not (eq nil (cdr r))))
+		 *fitness-invalid*
+		 (let ((decoded (joy-eval-handler nil (car r) :c (make-counter decoder-maxticks) :cd (make-countdown decoder-max-seconds))))
+		   (if (or (not (listp decoded)) (not (proper-list-p decoded)) (not (eq (cdr r) nil)) (not (listp (car decoded))))
+		       *fitness-invalid*
+		       (let ((diff (score-tree-equal-prefix (car decoded) (car goal) 0))
+			     (code-length (count-tree-nodes r)))
+			 ;;(print (list "r" r "goal" goal "exp" exp "decoded" decoded "diff" diff "code-length" code-length))
+			 (- (* 2 diff) (* 1 code-length))))))))
       (make-test-cases :values (mapcar (lambda (x) (list x)) (append lists1))
 		       :generate (lambda (vs) vs)
 		       :goal (lambda (v) v)
