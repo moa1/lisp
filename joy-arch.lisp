@@ -50,7 +50,7 @@
 	(check-type c fixnum)
 	(lambda () (decf c)))))
 
-(defun make-countdown (&optional (seconds .01))
+(defun make-countdown (&optional (seconds 0.0))
   "Returns a function that, when called, yields the number of internal run time units remaining until the timer expires."
   (declare (type single-float seconds))
   (if (<= seconds 0)
@@ -123,6 +123,47 @@ The sum of w must not be 0."
 (defun identity-1 (values)
   values)
 
+(defmacro time2 (&body body)
+  "Execute BODY and return the number of seconds passed.
+The first return value is the number of seconds passed as measured by get-internal-run-time, the second as measured by get-internal-real-time."
+  (let ((run (gensym)) (real (gensym)))
+    `(let ((,run (get-internal-run-time))
+	   (,real (get-internal-real-time)))
+       ,@body
+       (let ((,run (- (get-internal-run-time) ,run))
+	     (,real (- (get-internal-real-time) ,real)))
+	 (values (float (/ ,run internal-time-units-per-second))
+		 (float (/ ,real internal-time-units-per-second)))))))
+
+(defun seconds-per-call (function &key (mintime 0.01) (next-loops-measurable (lambda (x) (* 2 x))) (next-loops-measure next-loops-measurable))
+  "Return the average number of seconds per call of function FUNCTION.
+First find out how often the nullary FUNCTION has to be run in a loop until its run-time becomes measurable.
+This works by running it once, and, unless its run-time is measurable (i.e. greater than 0.0 seconds), running it (funcall NEXT-LOOPS-MEASURABLE 1) times.
+It is then run this number of times in a loop, and this is repeated until the run-time of the loop is measurable.
+Let the number of calls that were measurable be minloop.
+Then, FUNCTION is run minloop times in a loop, and its run-time is measured.
+If the run-time is at least MINTIME, the number of calls per second is returned, otherwise MINTIME is set to (funcall NEXT-LOOPS-MEASURE minloop), and the measuring is repeated."
+  (flet ((measure-loop (iterations)
+	   (let ((start (get-internal-run-time)))
+	     (loop for i below iterations do (funcall function))
+	     (/ (- (get-internal-run-time) start) internal-time-units-per-second))))
+    (let* ((loops 0)
+	   (elapsed 0.0))
+      ;;; increase loops until run-time is measurable.
+      (do () ((> elapsed 0.0) loops)
+	(setf loops (if (zerop loops)
+			1
+			(funcall next-loops-measurable loops)))
+	(setf elapsed (measure-loop loops)))
+      ;;(print (list "loops" loops "elapsed" elapsed))
+      ;;; increase loops until run-time is at least MINTIME.
+      (do () ((> elapsed mintime) (float (/ elapsed loops)))
+	(setf loops (funcall next-loops-measure loops))
+	(setf elapsed (measure-loop loops))))))
+
+(defvar +patmat-seconds-per-node+ (let ((stk '(((NIL) NIL) ((NIL) NIL))))
+					 (/ (seconds-per-call (lambda () (patmat nil stk stk)) :mintime 0.5) (count-tree-nodes stk))))
+
 (defun list-replace-symbols (list plist)
   "Recursively replace (non-destructively) all occurrences of the symbols in PLIST in LIST with the values stored in PLIST.
 Example: (list-replace-symbols '(a b (c a (d)) e) '(a 1 e nil)) == '(1 B (C 1 (D)) NIL)."
@@ -139,6 +180,9 @@ Example: (list-replace-symbols '(a b (c a (d)) e) '(a 1 e nil)) == '(1 B (C 1 (D
 		       (rec (cdr list) (cons (rec el nil) accum))
 		       (rec (cdr list) (cons (replace-symbol el) accum)))))))
     (rec list nil)))
+
+(defvar +list-replace-symbols-seconds-per-node+ (let ((l '(a b (c a (d)) e)) (bind '(a 1 e nil)))
+						  (/ (seconds-per-call (lambda () (list-replace-symbols l bind)) :mintime 0.5) (+ (count-tree-nodes l) (count-tree-nodes bind)))))
 
 ;; '((1) 1 DEFINE 1)
 (defun joy-eval (stk exp &key (heap (make-hash-table)) (c (make-counter 0)) (cd (make-countdown 0.0)))
@@ -185,10 +229,17 @@ This function must not modify stk, only copy it (otherwise test values might be 
 	 (not     (cons (not (car stk)) (cdr stk))) ; can be emulated by branch
 	 (or      (cons (or (car stk) (cadr stk)) (cddr stk)))
 	 (patmat  (let ((vars (caddr stk)) (exp (cadr stk)) (pat (car stk)))
-		    (cons
-		     (alist-to-plist (patmat vars exp pat))
-		     (cdddr stk))))
-	 (patsub  (cons (list-replace-symbols (car stk) (cadr stk)) (cddr stk)))
+		    (if (> (* +patmat-seconds-per-node+ (+ (count-tree-nodes exp) (count-tree-nodes pat)))
+			   (funcall cd))
+			'timeout
+			(cons
+			 (alist-to-plist (patmat vars exp pat))
+			 (cdddr stk)))))
+	 (patsub  (let ((l (car stk)) (bind (cadr stk)))
+		    (if (> (* +list-replace-symbols-seconds-per-node+ (+ (count-tree-nodes l) (count-tree-nodes bind)))
+			   (funcall cd))
+			'timeout
+			(cons (list-replace-symbols l bind) (cddr stk)))))
 	 (pop     (cdr stk))
 	 (pred    (cons (1- (car stk)) (cdr stk)))
 	 (quote   (cons (list (car stk)) (cdr stk)))
@@ -951,6 +1002,46 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 ;;	(systematicmapping 6 nil tc joy-ops 1000 .01 nil)))
 ;; == (((CONS) UNCONS POP DUP))
 
+;; this test-cases should compress a list of 200 "+".
+(defun generate-test-cases-compress-list (decoder-maxticks decoder-max-seconds)
+  ;; generalize this: compute all possible different outputs from joy-programs of length up to N nodes, and let them be learned.
+  (let ;;((lists1 (loop for symbol in '(+ - * /) collect (loop for i below 200 collect symbol))))
+      ((lists1 (loop for symbol in '(1) collect (loop for i below 200 collect symbol))))
+    (flet ((score-list-prefix (r goal exp)
+	     (declare (ignorable exp))
+	     (labels ((rec (l1 l2 score)
+			;;(format t "l1:~A l2:~A score:~A~%" l1 l2 score)
+			(if (null l1)
+			    (if (null l2)
+				score
+				(- score (* 1 (1- (count-tree-nodes l2)))))
+			    (if (null l2)
+				(- score (* 1 (1- (count-tree-nodes l1))))
+				(if (or (not (consp l1)) (not (consp l2)))
+				    *fitness-invalid*
+				    (if (eq (car l1) (car l2))
+					(rec (cdr l1) (cdr l2) score)
+					(rec (cdr l1) (cdr l2) (- score 1))))))))
+	       (if (or (not (listp r)) (not (proper-list-p r)) (not (listp (car r))) (not (eq nil (cdr r))))
+		   *fitness-invalid*
+		   (let ((decoded (joy-eval-handler nil (car r) :c (make-counter decoder-maxticks) :cd (make-countdown decoder-max-seconds))))
+		     (if (or (not (listp decoded)) (not (proper-list-p decoded)) (not (eq (cdr r) nil)) (not (listp (car decoded))))
+			 *fitness-invalid*
+			 (let ((diff (rec (car decoded) (car goal) 0))
+			       (code-length (count-tree-nodes r)))
+			   ;;(print (list "r" r "goal" goal "exp" exp "decoded" decoded "diff" diff "code-length" code-length))
+			   (- (* 2 diff) (* 1 code-length)))))))))
+      (make-test-cases :values (mapcar (lambda (x) (list x)) (append lists1))
+		       :generate (lambda (vs) vs)
+		       :goal (lambda (v) v)
+		       :score #'score-list-prefix))))
+;;(let ((tc (generate-test-cases-compress-list 1000 .01)))
+;;  (joy-show-fitness '(pop (nill 200 (1 swap cons) times)) tc))
+;; the following was a problem, because some joy operations worked on the deeply nested list generated by (200 (cons dup) times):
+;;(let ((tc (generate-test-cases-compress-list 1000 .01))
+;;      (joy-ops (append '(1 200) (remove 'stack *joy-ops*))))
+;;  (systematicmapping 2 '(200 (cons dup) times) tc joy-ops 1000 .01 30000))
+;; it was solved by allowing count-tree-nodes to efficiently count self-similar trees, and estimating the run time of the operations.
 
 ;;;; tournament selection
 
