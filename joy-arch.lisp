@@ -891,23 +891,20 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
       initial
       (golden-ratio (1- n) (1+ (/ 1 initial)))))
 
-(defmacro def-test-cases-one-value (test-cases-name value)
-  "Define a test-cases named TEST-CASES-NAME whose goal is it to obtain the value VALUE."
-  (let ((s (gensym)))
-    `(defparameter ,test-cases-name
-       (let ((,s ,value))
-	 (make-test-cases :values '(nil)
-			  :generate (lambda (vs) vs)
-			  :goal (lambda (x) (declare (ignore x)) ,s)
-			  :score #'score-one-value)))))
+(defun generate-test-cases-one-value (value)
+  "Return a test-cases whose goal it is to obtain the value VALUE."
+  (make-test-cases :values '(nil)
+		   :generate (lambda (vs) vs)
+		   :goal (lambda (x) (declare (ignore x)) value)
+		   :score #'score-one-value))
 
-(def-test-cases-one-value *test-cases-golden-ratio-value* (float (golden-ratio 20)))
+(defparameter *test-cases-golden-ratio-value* (generate-test-cases-one-value (float (golden-ratio 20))))
 ;;(systematicmapping 6 '() *test-cases-golden-ratio-value* (cons 1 *joy-ops*) 1000 .01 nil)
 ;; yields ((1 DUP SUCC / SUCC) (1 1 SUCC / SUCC)) -0.118034005 14430760
 ;; (tournament-new '(1 dup succ / succ) 200 1000000 *test-cases-golden-ratio-value* *joy-ops* 1000 .01) yields a joy expression with many nested I's and -2.1576881e-5 as error,
 ;; but (tournament-new '() 200 1000000 *test-cases-golden-ratio-value* *joy-ops* 1000 .01) yields '(2) as joy expression and consequently -0.381966 as error.
 
-(def-test-cases-one-value *test-cases-pi-value* pi)
+(defparameter *test-cases-pi-value* (generate-test-cases-one-value pi))
 
 (defparameter *test-cases-golden-ratio-sequence*
   (make-test-cases :values '((0 1.0) (1 1.0) (2 1.0) (3 1.0) (6 1.0) (12 1.0))
@@ -1003,19 +1000,34 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 ;; == (((CONS) UNCONS POP DUP))
 
 (defun score-tree-equal-prefix (l1 l2 &optional (score 0))
+  "Example: (score-tree-equal-prefix '(1 2 (3 4) 5) '(1 2 (3) 5)) == -1."
   ;;(format t "l1:~A l2:~A score:~A~%" l1 l2 score)
   (if (null l1)
       (if (null l2)
 	  score
-	  (- score (* 1 (1- (count-tree-nodes l2)))))
+	  (- score (* 1 (count-tree-nodes l2))))
       (if (null l2)
-	  (- score (* 1 (1- (count-tree-nodes l1))))
+	  (- score (* 1 (count-tree-nodes l1)))
 	  (if (or (not (consp l1)) (not (consp l2)))
 	      (if (equal l1 l2)
 		  score
-		  -1)
+		  (1- score))
 	      (score-tree-equal-prefix (cdr l1) (cdr l2)
 				       (score-tree-equal-prefix (car l1) (car l2) score))))))
+
+(defun generate-test-cases-stack (stack)
+  "Return a test-cases whose goal it is to obtain the tree TREE."
+  (make-test-cases :values '(nil)
+		   :generate (lambda (vs) vs)
+		   :goal (lambda (x) (declare (ignore x)) stack)
+		   :score (lambda (r goal exp)
+			    (declare (ignore exp))
+			    (if (or (not (listp r)) (not (proper-list-p r)))
+				*fitness-invalid*
+				(score-tree-equal-prefix r goal)))))
+
+(defparameter *test-cases-10-stack* (generate-test-cases-stack (loop for i below 10 collect '+)))
+(defparameter *test-cases-200-stack* (generate-test-cases-stack (loop for i below 200 collect '+)))
 
 ;; this test-cases should compress a list of 200 "+".
 (defun generate-test-cases-compress-list (decoder-maxticks decoder-max-seconds)
@@ -1024,10 +1036,10 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
       ((lists1 (loop for symbol in '(1) collect (loop for i below 200 collect symbol))))
     (flet ((score-list-prefix (r goal exp)
 	     (declare (ignorable exp))
-	     (if (or (not (listp r)) (not (proper-list-p r)) (not (listp (car r))) (not (eq nil (cdr r))))
+	     (if (or (not (listp r)) (not (proper-list-p r)) (not (listp (car r))) (not (proper-list-p (car r))) (not (eq nil (cdr r))))
 		 *fitness-invalid*
 		 (let ((decoded (joy-eval-handler nil (car r) :c (make-counter decoder-maxticks) :cd (make-countdown decoder-max-seconds))))
-		   (if (or (not (listp decoded)) (not (proper-list-p decoded)) (not (eq (cdr r) nil)) (not (listp (car decoded))))
+		   (if (or (not (listp decoded)) (not (proper-list-p decoded)) (not (eq (cdr decoded) nil)) (not (listp (car decoded))) (not (proper-list-p (car decoded))))
 		       *fitness-invalid*
 		       (let ((diff (score-tree-equal-prefix (car decoded) (car goal) 0))
 			     (code-length (count-tree-nodes r)))
