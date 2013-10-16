@@ -1,18 +1,28 @@
 t <- read.table("/tmp/log.txt")
 #t <- read.table("/tmp/log2.txt")
+# 3 columns for fitness parameters
+fits <- 3
+# mut_length_const is the number of parameters after the fitness parameters and before the joy-ops frequencies (see *mut-length-const*)
+mut_length_const <- 6+3
 
 postscript("/tmp/log.ps")
 par(mfrow=c(3,2))
-if (all(t$V1 <= 0)) {
-	plot(-t$V1, type="b", log="y")
-} else if (all(t$V1 >= 0)) {
-	plot(t$V1, type="b", log="y")
+if (all(t$V2 <= 0)) {
+  plot(-t$V2, type="b", log="y", ylim=range(c(-t$V1,-t$V2)))
+  lines(-t$V1, type="b")
+} else if (all(t$V2 >= 0)) {
+  plot(t$V2, type="b", log="y", ylim=range(c(t$V1,t$V2)))
+  lines(t$V1, type="b")
 } else {
-	plot(t$V1, type="b")
+  plot(t$V2, type="b")
+  lines(t$V1, type="b")
 }
-plot(t$V2, type="b", log="y")
-matplot(t[,seq(3,28,2)], type="b", cex=0.5)
-matplot(t[,seq(4,28,2)], type="b", cex=0.5)
-matplot(t[,seq(29,108,2)], type="b", cex=0.5)
-matplot(t[,seq(30,108,2)], type="b", cex=0.5)
+plot(t$V3, type="b", log="y")
+
+# plot mutate parameters
+matplot(t[,seq(fits+1,fits+mut_length_const*2,2)], type="b", cex=0.5)
+matplot(t[,seq(fits+2,fits+mut_length_const*2,2)], type="b", cex=0.5)
+# plot joy-ops frequencies
+matplot(t[,seq(fits+mut_length_const*2+1,length(t),2)], type="b", cex=0.5)
+matplot(t[,seq(fits+mut_length_const*2+2,length(t),2)], type="b", cex=0.5)
 dev.off()
