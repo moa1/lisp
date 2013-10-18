@@ -458,7 +458,8 @@ This function must not modify stk, only copy it (otherwise test values might be 
 		   (assert (null probs2))
 		   (nreverse acc))
 		 (rec (cdr probs1) (cdr probs2)
-		      (cons (/ (+ (car probs1) (car probs2)) 2) acc)))))
+		      ;;(cons (/ (+ (car probs1) (car probs2)) 2) acc)))))
+		      (cons (if (chance .5) (car probs1) (car probs2)) acc)))))
     (rec probs1 probs2 nil)))
 
 ;; I commented out the two lines starting with (sb-kernel::
@@ -1080,9 +1081,14 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 
 (defun tournament-new (o size cycles fitness joy-ops max-ticks max-seconds)
   (let* ((pop (make-array size :initial-element o))
-	 (mut (make-array size :initial-element (loop for i below (+ *mut-length-const* (length joy-ops)) collect .1))))
-;;    (dotimes (s size) (setf (aref mut s) (loop for i below 11 collect (random .9))))
-    (tournament pop mut cycles fitness joy-ops max-ticks max-seconds)))
+	 (mut (make-array size)))
+    (flet ((generate-mut ()
+	     (append
+	      (list (random .9))
+	      (loop for i below (1- *mut-length-const*) collect (random 1.0))
+	      (loop for i below (length joy-ops) collect (random 1.0)))))
+      (dotimes (s size) (setf (aref mut s) (generate-mut)))
+      (tournament pop mut cycles fitness joy-ops max-ticks max-seconds))))
 
 (defun tournament-res (res cycles fitness joy-ops max-ticks max-seconds)
   (let* ((size (length res))
@@ -1122,7 +1128,8 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 	      (setf (elt fit c2) new-fit)
 	      (setf (elt mut c2) new-mut)
 	      (when (> new-fit c2-fit)
-		(print (list "new" new "new-fit" new-fit "new-mut" new-mut "c2-fit" c2-fit))))))
+		(print (list "new" new "new-fit" new-fit "new-mut" new-mut "c2-fit" c2-fit)))
+	      )))
 	(when (= 0 (mod c 1000))
 	  (print (list "c" c "c2-fit" c2-fit)))
 	(when (= 0 (mod c 10000))
