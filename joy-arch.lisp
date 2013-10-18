@@ -96,13 +96,16 @@
   "Returns the index of the picked weight from w.
 Elements of w are numbers and represent the relative chance of picking that item.
 The sum of w must not be 0."
-  (let* ((s (reduce #'+ w :from-end T))) ;:from-end T is necessary because otherwise (weighted-sample-index '(0.99 0.989622 0.9895308 0.9893857 0.9898456 0.98966277 0.9894621 0.99 0.9889513 0.9896954)) fails with a high probability in 10.000.000 cases. probably a corner case of float arithmetic. with :from-end we add in the same order in that we are subtracting in rec.
+  (let* ((s (reduce #'+ w :from-end T)) ;:from-end T is necessary because otherwise (weighted-sample-index '(0.99 0.989622 0.9895308 0.9893857 0.9898456 0.98966277 0.9894621 0.99 0.9889513 0.9896954)) fails with a high probability in 10.000.000 cases. probably a corner case of float arithmetic. with :from-end we add in the same order in that we are subtracting in rec.
+	 (s2 (- s single-float-epsilon))) ;for some reason, sometimes s is too big, and REC fails trying to (- x nil).
     (labels ((rec (x v i)
 	       (let ((x0 (- x (car v))))
 		 (if (< x0 0)
 		     i
 		     (rec x0 (cdr v) (1+ i))))))
-      (rec (random s) w 0)))) ; will (correctly) give an error if s = 0
+      (if (<= s2 0)
+	  (random (length w))
+	  (rec (random s2) w 0))))) ; will (correctly) give an error if s = 0
 
 (defun weighted-sample (w seq)
   (elt seq (weighted-sample-index w)))
@@ -167,6 +170,8 @@ If the run-time is at least MINTIME, the number of calls per second is returned,
 (defun list-replace-symbols (list plist)
   "Recursively replace (non-destructively) all occurrences of the symbols in PLIST in LIST with the values stored in PLIST.
 Example: (list-replace-symbols '(a b (c a (d)) e) '(a 1 e nil)) == '(1 B (C 1 (D)) NIL)."
+  ;; FIXME: I think this function caused a heap overflow, at least when backtracing in LDB the function REC of this function showed up.
+  ;;(print (list "list" list "plist" plist))
   (labels ((replace-symbol (symbol)
 	     (let ((cdr (plist-cdr symbol plist)))
 	       (if (null cdr)
@@ -741,7 +746,7 @@ As a second value, the remainder of stk is returned, or :error if the stack didn
 					      (mapcar (lambda (x) (cons x (funcall (test-cases-goal fitness) x)))
 						      (test-cases-values fitness)) o 0 0.0)))
       (mapcar (lambda (p) (destructuring-bind (v goal score res) p
-			    (format t "v(exp):~A goal:~A score:~A res:~A~%" v goal score res) score))
+			    (format t "v(exp):~A~%goal:~A~%score:~A~%res:~A~%" v goal score res) score))
 	      (mapcar (lambda (v) (eval-test v)) (test-cases-values fitness)))
       (format t "fitsum:~A~%" fitsum)
       fitsum)))
@@ -1029,6 +1034,18 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 (defparameter *test-cases-10-stack* (generate-test-cases-stack (loop for i below 10 collect '+)))
 (defparameter *test-cases-200-stack* (generate-test-cases-stack (loop for i below 200 collect '+)))
 
+(defun generate-test-cases-stack-small (stack node-cost)
+  "Return a test-cases whose goal it is to obtain the tree TREE and small programs are better."
+  (make-test-cases :values '(nil)
+		   :generate (lambda (vs) vs)
+		   :goal (lambda (x) (declare (ignore x)) stack)
+		   :score (lambda (r goal exp)
+			    (if (or (not (listp r)) (not (proper-list-p r)))
+				*fitness-invalid*
+				(- (score-tree-equal-prefix r goal) (* node-cost (count-tree-nodes exp)))))))
+
+(defparameter *test-cases-200-stack-small* (generate-test-cases-stack-small (loop for i below 200 collect '+) 1))
+
 ;; this test-cases should compress a list of 200 "+".
 (defun generate-test-cases-compress-list (decoder-maxticks decoder-max-seconds)
   ;; generalize this: compute all possible different outputs from joy-programs of length up to N nodes, and let them be learned.
@@ -1107,7 +1124,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 	      (when (> new-fit c2-fit)
 		(print (list "new" new "new-fit" new-fit "new-mut" new-mut "c2-fit" c2-fit))))))
 	(when (= 0 (mod c 1000))
-	  (print (list c c2-fit)))
+	  (print (list "c" c "c2-fit" c2-fit)))
 	(when (= 0 (mod c 10000))
 	  (log-mut-stats (sort (zip-array 'list pop fit mut) #'< :key #'second) logstream))))
     (close logstream)
@@ -1123,10 +1140,11 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 
 (defun log-mut-stats (res logstream)
   (let* ((fits (mapcar #'cadr res))
+	 (fit-max (apply #'max fits))
 	 (fit-mean (mean fits))
 	 (fit-stddev (stddev-corr fits))
 	 (ms (mut-stats res)))
-    (format logstream "~A ~A" (float fit-mean) fit-stddev)
+    (format logstream "~A ~A ~A" (float fit-max) (float fit-mean) fit-stddev)
     (loop for i in ms do (format logstream " ~A ~A" (car i) (cadr i)))
     (format logstream "~%"))
   (finish-output logstream))
