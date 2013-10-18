@@ -96,16 +96,15 @@
   "Returns the index of the picked weight from w.
 Elements of w are numbers and represent the relative chance of picking that item.
 The sum of w must not be 0."
-  (let* ((s (reduce #'+ w :from-end T)) ;:from-end T is necessary because otherwise (weighted-sample-index '(0.99 0.989622 0.9895308 0.9893857 0.9898456 0.98966277 0.9894621 0.99 0.9889513 0.9896954)) fails with a high probability in 10.000.000 cases. probably a corner case of float arithmetic. with :from-end we add in the same order in that we are subtracting in rec.
-	 (s2 (- s single-float-epsilon))) ;for some reason, sometimes s is too big, and REC fails trying to (- x nil).
+  (let* ((s (reduce #'+ w))) ;:from-end T was here for the following reason: is necessary because otherwise (weighted-sample-index '(0.99 0.989622 0.9895308 0.9893857 0.9898456 0.98966277 0.9894621 0.99 0.9889513 0.9896954)) fails with a high probability in 10.000.000 cases. probably a corner case of float arithmetic. with :from-end we add in the same order in that we are subtracting in rec. However, it doesn't help in all cases. Therefore, s is artificially reduced to be smaller than the sum.
     (labels ((rec (x v i)
-	       (let ((x0 (- x (car v))))
-		 (if (< x0 0)
-		     i
-		     (rec x0 (cdr v) (1+ i))))))
-      (if (<= s2 0)
-	  (random (length w))
-	  (rec (random s2) w 0))))) ; will (correctly) give an error if s = 0
+	       (if (null v) ;this should never happen, but due to floating-point inaccuracies, it does.
+		   (random (length w))
+		   (let ((x0 (- x (car v))))
+		     (if (< x0 0)
+			 i
+			 (rec x0 (cdr v) (1+ i)))))))
+      (rec (random s) w 0)))) ; will (correctly) give an error if s = 0
 
 (defun weighted-sample (w seq)
   (elt seq (weighted-sample-index w)))
@@ -408,6 +407,8 @@ This function must not modify stk, only copy it (otherwise test values might be 
 (defparameter *joy-ops* 
   '(+ and branch concat cons dip / dup equal i ifte list * nill not or patmat patsub pop pred quote rem < stack step - succ swap times true uncons unstack while define))
 
+(defparameter *mut0-max* 0.8)
+
 (defun mutate (joy-ops exp debranch-p p1 p2 p3 p4 p5 p6
 	       &rest ops-p)
   (assert (= (length joy-ops) (length ops-p)))
@@ -432,12 +433,12 @@ This function must not modify stk, only copy it (otherwise test values might be 
 		       nil)	
 		 (random-final)) ; substitute
 	     exp)))))
-   
+
 (defun mutate-rec (joy-ops exp &rest probs)
 ;;  (print (list "exp" exp "p0" p0))
   (let ((p0 (car probs))
 	(prest (cdr probs)))
-    (assert (< p0 .9))
+    (assert (< p0 *mut0-max*))
     (if (chance p0)
 	(apply #'mutate-rec joy-ops (apply #'mutate joy-ops exp t prest) probs)
 	(apply #'mutate joy-ops exp t prest))))
@@ -449,7 +450,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 		 (if (chance p0)
 		     (rec (cdr probs) (cons (random .99) mut-probs)) ;previously, (random .99) was a random walk +- 0.1. I think mutation parameter smoothness should be provided by mutate-crossover.
 		     (rec (cdr probs) (cons (car probs) mut-probs))))))
-    (rec (cdr probs) (cons (random .9) nil)))) ; recursion prob < 0.9
+    (rec (cdr probs) (cons (random *mut0-max*) nil)))) ; recursion prob < *mut0-max*
 
 (defun mutate-crossover (probs1 probs2)
   (labels ((rec (probs1 probs2 acc)
@@ -1084,7 +1085,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 	 (mut (make-array size)))
     (flet ((generate-mut ()
 	     (append
-	      (list (random .9))
+	      (list (random *mut0-max*))
 	      (loop for i below (1- *mut-length-const*) collect (random 1.0))
 	      (loop for i below (length joy-ops) collect (random 1.0)))))
       (dotimes (s size) (setf (aref mut s) (generate-mut)))
@@ -1127,13 +1128,15 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 	      (setf (elt pop c2) new)
 	      (setf (elt fit c2) new-fit)
 	      (setf (elt mut c2) new-mut)
-	      (when (> new-fit c2-fit)
-		(print (list "new" new "new-fit" new-fit "new-mut" new-mut "c2-fit" c2-fit)))
+	      ;;(when (> new-fit c2-fit)
+		;;(print (list "new" new "new-fit" new-fit "new-mut" new-mut "c2-fit" c2-fit)))
 	      )))
 	(when (= 0 (mod c 1000))
 	  (print (list "c" c "c2-fit" c2-fit)))
 	(when (= 0 (mod c 10000))
-	  (log-mut-stats (sort (zip-array 'list pop fit mut) #'< :key #'second) logstream))))
+	  (let ((res (sort (zip-array 'list pop fit mut) #'< :key #'second)))
+	    (log-mut-stats res logstream)
+	    (print (list "best-pop" (car (car (last res))) "best-fit" (cadr (car (last res)))))))))
     (close logstream)
     (sort (zip-array 'list pop fit mut) #'< :key #'second)))
 
