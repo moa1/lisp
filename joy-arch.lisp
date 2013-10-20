@@ -757,7 +757,8 @@ As a second value, the remainder of stk is returned, or :error if the stack didn
   (abs (- a b)))
 
 (defun generate-randomized-tests (values)
-  "Generate (LENGTH VALUES) test cases."
+  "Generate (LENGTH VALUES) test cases.
+The test-cases' test values must be ordered increasingly."
   (cons (let ((a (car (elt values 0)))
 	      (b (car (elt values (1- (length values))))))
 	  (list (+ a (random (- b a)))))
@@ -852,7 +853,14 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 		   :goal (lambda (v) (elt (car v) (cadr v)))
 		   :score #'score-one-symbol-equal))
 
-;;(defparameter *test-cases-abs* ;;trains to be able to compute (abs x) for every x
+(defparameter *test-cases-abs*
+  (make-test-cases :values '((-8) (-3) (0) (7))
+		   :generate #'generate-randomized-tests
+		   :goal (lambda (v) (abs (car v)))
+		   :score #'score-one-value))
+(assert (eq 0 (joy-show-fitness '((0 <) (0 swap -) () ifte) *test-cases-abs*)))
+(assert (eq 0 (joy-show-fitness '(dup 0 < (0 swap -) () branch) *test-cases-abs*)))
+;; TODO: run (systematicmapping 10 '() *test-cases-abs* '(0 < swap - ifte) 1000 .01 nil)
 
 (defparameter *test-cases-list-positive0*
   (make-test-cases :values '((4 2 0 -1 -2) (6 4 3 1 0 -3) (1 -4 -7 -9))
@@ -1326,7 +1334,7 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
 	 (trees-evaluated 0))
     (flet ((collectfit (stks heaps exp fit)
 	     (incf trees-evaluated)
-	     (when (= 0 (mod trees-evaluated 1000))
+	     (when (= 0 (mod trees-evaluated 10000))
 	       (format t "percent visited (of total possible):~A~%" (float (/ trees-evaluated number-trees))))
 	     (if (> fit best-fit)
 		 (progn (setf best-fit fit) (setf best-exp (list (append exp0 exp))))

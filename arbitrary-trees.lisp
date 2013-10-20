@@ -37,25 +37,25 @@ Returns a list of possibilities, where a possibility is a tree."
 (defun enumerate-tree-structures-1based (n)
   "Enumerates all arbitrary trees with N nodes, where '(A) counts as a tree with one node.
 Returns a list of possibilities, where a possibility is a tree."
-  ;;  (format t "enumerate-tree-structures n=~A~%" n)
+  ;;(format t "enumerate-tree-structures n=~A~%" n)
   (assert (> n 0))
-  (if (= n 1) ; tree with 1 node
-      (list (list 'a)) ; 1 possibility
-      (let ((trees nil)) ; contains all possible trees
-	(loop for i from 1 upto n do ; i is the number of subtrees in this layer
-	   ;;	     (format t "subtrees:~A~%" i)
-	     (loop for k in (enumerate-objects-to-bins (- n i) i) do ; k is one possibility of distributing n-i objects to i bins
-		;;		  (format t "k:~A~%" k)
-		  (let ((tr (loop for l below (length k) for m in k collect ; l is the bin (or subtree) number that holds m nodes. this loop builds up the tree
+  (if (= n 1) ;tree with 1 node
+      (list '(a) '(())) ;1 possibility
+      (let ((trees nil)) ;contains all possible trees
+	(loop for i from 1 upto n do ;i is the number of subtrees in this layer == i is the number of parallel nodes in this layer (i.e. for a tree with max. 3 nodes, there can be 1, 2, or 3 nodes below the top node.)
+	     ;;(format t "subtrees:~A~%" i)
+	     (loop for k in (enumerate-objects-to-bins (- n i) i) do ;k is one possibility of distributing n-i objects to i bins
+		  ;;(format t "k:~A~%" k)
+		  (let ((tr (loop for l below (length k) for m in k collect ;l is the bin (or subtree) number that holds m nodes. this loop builds up the tree
 				 (progn
-				   ;;				   (format t "subtree ~A has ~A nodes~%" l m)
+				   ;;(format t "subtree ~A has ~A nodes~%" l m)
 				   (if (= m 0)
-				       (list 'a) ; leaf
+				       (list 'a '()) ;leaf
 				       (enumerate-tree-structures-1based m)))))
 			(comb nil))
-		    ;;		    (format t "new trees:~A~%" tr)
+		    ;;(format t "new trees:~A~%" tr)
 		    (enumerate-set-combinations tr (lambda (x) (setf comb (cons x comb))))
-		    ;;			(format t "combinations:~A~%" comb)
+		    ;;(format t "combinations:~A~%" comb)
 		    (setf trees (nconc comb trees)))))
 	trees)))
 
@@ -150,3 +150,6 @@ I.e. each open bracket and each symbol counts as 1 node."
 (assert (= 3 (count-tree-nodes '((A)))))
 (assert (= 3 (count-tree-nodes '(A ()))))
 (assert (= 4 (count-tree-nodes '(A (A)))))
+
+;; (count-labelled-trees (count-tree-nodes '((0 <) (0 swap -) () ifte)) 5) == 234784662 (5 different symbols)
+;; (expt 12 7) == 35831808 (there are 12 symbols or inside brackets in '((0 <) (0 swap -) () ifte), and 7==5+2 (2 stands for opening/closing bracket symbols))
