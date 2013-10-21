@@ -858,9 +858,14 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 		   :generate #'generate-randomized-tests
 		   :goal (lambda (v) (abs (car v)))
 		   :score #'score-one-value))
-(assert (eq 0 (joy-show-fitness '((0 <) (0 swap -) () ifte) *test-cases-abs*)))
 (assert (eq 0 (joy-show-fitness '(dup 0 < (0 swap -) () branch) *test-cases-abs*)))
-;; TODO: run (systematicmapping 10 '() *test-cases-abs* '(0 < swap - ifte) 1000 .01 nil)
+;; (systematicmapping 10 '() *test-cases-abs* '(0 < swap - ifte) 1000 .01 nil) ==
+;;((0 SWAP (<) (SWAP) NIL IFTE -) (0 (SWAP) (<) SWAP NIL IFTE -)
+;; (0 (<) NIL (SWAP) IFTE SWAP -) (0 (<) NIL (SWAP) SWAP IFTE -)
+;; (0 (<) (SWAP) NIL IFTE -) (0 (<) (SWAP -) (-) IFTE)
+;; (0 (SWAP <) NIL (SWAP) IFTE -) ((<) 0 SWAP (SWAP) NIL IFTE -)
+;; ((0 <) (0 SWAP -) NIL IFTE))
+;;0 37344379 (percent visited of total possible: 0.15903935)
 
 (defparameter *test-cases-list-positive0*
   (make-test-cases :values '((4 2 0 -1 -2) (6 4 3 1 0 -3) (1 -4 -7 -9))
