@@ -1035,6 +1035,30 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 	      (score-tree-equal-prefix (cdr l1) (cdr l2)
 				       (score-tree-equal-prefix (car l1) (car l2) score))))))
 
+(defparameter *test-cases-ifte*
+  (make-test-cases :values '((true) (nill))
+		   :generate (lambda (vs) vs)
+		   :goal (lambda (v) (if (eq (car v) 'true) '(1 t) '(0 nil)))
+		   :score (lambda (r goal exp)
+			    (declare (ignore exp))
+			    (if (or (not (listp r)) (not (proper-list-p r)))
+				*fitness-invalid*
+				(score-tree-equal-prefix r goal)))))
+;; (systematicmapping 7 '() *test-cases-ifte* *joy-ops* 1000 .01 nil) exhausts heap, because the best exps are collected.
+(assert (eq 0 (joy-show-fitness '(() (1) (0) ifte) *test-cases-ifte*)))
+
+(defparameter *test-cases-branch*
+  (make-test-cases :values '((true) (nill))
+		   :generate (lambda (vs) vs)
+		   :goal (lambda (v) (if (eq (car v) 'true) '(1) '(0)))
+		   :score (lambda (r goal exp)
+			    (declare (ignore exp))
+			    (if (or (not (listp r)) (not (proper-list-p r)))
+				*fitness-invalid*
+				(score-tree-equal-prefix r goal)))))
+;; does (systematicmapping 6 '() *test-cases-branch* *joy-ops* 1000 .01 nil) exhaust heap?
+(assert (eq 0 (joy-show-fitness '((1) (0) branch) *test-cases-branch*)))
+
 (defun generate-test-cases-stack (stack)
   "Return a test-cases whose goal it is to obtain the tree TREE."
   (make-test-cases :values '(nil)
@@ -1340,7 +1364,9 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
     (flet ((collectfit (stks heaps exp fit)
 	     (incf trees-evaluated)
 	     (when (= 0 (mod trees-evaluated 10000))
-	       (format t "percent visited (of total possible):~A~%" (float (/ trees-evaluated number-trees))))
+	       (format t "trees:~A/~A exp:~A best-fit:~A #best-exp:~A~%" trees-evaluated number-trees exp best-fit (length best-exp)))
+	     (with-open-file (stream "/tmp/systematicmapping-last.txt" :direction :output :if-exists :overwrite :if-does-not-exist :create)
+	       (print exp stream))
 	     (if (> fit best-fit)
 		 (progn (setf best-fit fit) (setf best-exp (list (append exp0 exp))))
 		 (when (= fit best-fit)
