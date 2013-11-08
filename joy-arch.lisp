@@ -255,6 +255,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 	 ;; #-sbcl
 	 ;; (cons (mod (cadr stk) (car stk)) (cddr stk))
 	 ;; )
+	 (sample  (cons (sample (car stk)) (cdr stk)))
 	 (<       (cons (< (cadr stk) (car stk)) (cddr stk))) ;smaller
 	 (stack   (cons stk stk))
 	 (step    (let ((res (cddr stk)))
@@ -405,7 +406,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
     #+SBCL (SB-KERNEL::ARG-COUNT-ERROR () 'error)))
 
 (defparameter *joy-ops* 
-  '(+ and branch concat cons dip / dup equal i ifte list * nill not or patmat patsub pop pred quote rem < stack step - succ swap times true uncons unstack while define))
+  '(+ and branch concat cons dip / dup equal i ifte list * nill not or patmat patsub pop pred quote rem sample < stack step - succ swap times true uncons unstack while define))
 
 (defparameter *mut0-max* 0.8)
 
@@ -608,6 +609,7 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
     (pred    (number) (number))
     (quote   (t) (list))
     (rem     (number number) (number))
+    (sample  (list) (t))
     (<       (number number) (boolean))
     (stack   nil (list))
     (step    (list list) (:any))
@@ -1083,6 +1085,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 				*fitness-invalid*
 				(- (score-tree-equal-prefix r goal) (* node-cost (count-tree-nodes exp)))))))
 
+(defparameter *test-cases-10-stack-small* (generate-test-cases-stack-small (loop for i below 10 collect '+) .1))
 (defparameter *test-cases-200-stack-small* (generate-test-cases-stack-small (loop for i below 200 collect '+) 1))
 
 ;; this test-cases should compress a list of 200 "+".
