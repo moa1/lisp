@@ -223,6 +223,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 	 ;; )
 	 (dup     (cons (car stk) stk))
 	 (equal   (cons (equal (cadr stk) (car stk)) (cddr stk)))
+	 (gensym  (cons (gensym) stk))
 	 (i       (joy-eval (cdr stk) (car stk) :heap heap :c c :cd cd)) ;same as apply
 	 (ifte    (if (car (joy-eval (cdddr stk) (caddr stk) :heap heap :c c :cd cd)) ; similar to branch
 		      (joy-eval (cdddr stk) (cadr stk) :heap heap :c c :cd cd)
@@ -277,12 +278,13 @@ This function must not modify stk, only copy it (otherwise test values might be 
 		    res))
 	 ;; define is special
 	 (define  (if (null heap) (error "define doesn't work for a nil heap")
-		      (if (or (null (cadr exp)) (not (symbolp (cadr exp))))
-			  (error (make-condition 'type-error :datum (cadr exp) :expected-type '(and (not null) symbolp)))
-			  (progn
-			    (setf (gethash (cadr exp) heap) (car stk))
-			    (setf exp (cdr exp))
-			    (cdr stk)))))
+		      (if (not (listp (car stk)))
+			  (error (make-condition 'type-error :datum (car stk) :expected-type 'list))
+			  (if (not (symbolp (caar stk)))
+			      (error (make-condition 'type-error :datum (caar stk) :expected-type 'symbol))
+			      (progn
+				(setf (gethash (caar stk) heap) (cadr stk)) ;(cdar stk) is not used.
+				(cddr stk))))))
 	 ;; implement an "undefine", which ends the scope of a "define"d program, but leaves defined programs (and programs on the stack) using the to be "undefine"d program running intact. this would require replacing the "define"d name with an anonymous name.
 	 (t
 	  (if (or (not (symbolp (car exp))) (null heap))
@@ -365,7 +367,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 (joy-test nil '(1 2 <) '(t))
 (joy-test nil '(2 1 <) '(nil))
 (joy-test nil '(1 2 stack) '((2 1) 2 1))
-(joy-test nil '((swap cons) define swons 0 nil (1 2 3) (swons) step) '((3 2 1) 0))
+(joy-test nil '((swap cons) (swons) define 0 nil (1 2 3) (swons) step) '((3 2 1) 0))
 (joy-test nil '(4 5 -) '(-1))
 (joy-test nil '(3 succ) '(4))
 (joy-test nil '(1 2 swap) '(1 2))
@@ -376,21 +378,22 @@ This function must not modify stk, only copy it (otherwise test values might be 
 (joy-test nil '(0 (1 2) unstack) '(1 2))
 (joy-test nil '(1 2 3 4 5 6 7 (pop pop stack (1) equal not) (pop) while) '(3 2 1))
 ;; 5 [0 < not] [[1] dip pred] while stack . ;; puts -1 and 6 ones on the stack
-;; (joy-eval '(5) '((pred dup 0 < () ((1) dip a) branch) define a a))
+;; (joy-eval '(5) '((pred dup 0 < () ((1) dip a) branch) (a) define a))
 ;; define is special
-(joy-test nil '(2 (dup +) define superman) '(2))
-(joy-test nil '(2 (1) define superman superman) '(1 2))
-(joy-test nil '((1) define a a (2) define a a 1) '(1 2 1))
+(joy-test nil '(2 (dup +) (superman) define) '(2))
+(joy-test nil '(2 (1) (superman) define superman) '(1 2))
+(joy-test nil '((1) (a) define a (2) (a) define a 1) '(1 2 1))
 (joy-test nil '(1 a) '(a 1))
+(joy-test nil '(gensym quote dup (5) swap define i) '(5))
 ;; own defines. maybe write fitness tests for letting them find
-(joy-test nil '((0 equal) define null 0 null) '(t))
-(joy-test nil '((0 equal) define null 1 null) '(nil))
-(joy-test nil '((pred) define dec 5 dec) '(4))
-(joy-test nil '((succ) define inc 5 inc) '(6))
-(joy-test nil '((swap cons) define swons (2) 1 swons) '((1 2)))
+(joy-test nil '((0 equal) (null) define 0 null) '(t))
+(joy-test nil '((0 equal) (null) define 1 null) '(nil))
+(joy-test nil '((pred) (dec) define 5 dec) '(4))
+(joy-test nil '((succ) (inc) define 5 inc) '(6))
+(joy-test nil '((swap cons) (swons) define (2) 1 swons) '((1 2)))
 (joy-eval nil
-	  '(((dup cons) swap concat dup cons i) define y
-	    (((pop null) (pop succ) ((dup pred) dip i *) ifte) y) define fac
+	  '(((dup cons) swap concat dup cons i) (y) define
+	    (((pop null) (pop succ) ((dup pred) dip i *) ifte) y) (fac) define
 	    1 fac) :heap (make-hash-table))
 
 
@@ -406,7 +409,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
     #+SBCL (SB-KERNEL::ARG-COUNT-ERROR () 'error)))
 
 (defparameter *joy-ops* 
-  '(+ and branch concat cons dip / dup equal i ifte list * nill not or patmat patsub pop pred quote rem sample < stack step - succ swap times true uncons unstack while define))
+  '(+ and branch concat cons dip / dup equal gensym i ifte list * nill not or patmat patsub pop pred quote rem sample < stack step - succ swap times true uncons unstack while define))
 
 (defparameter *mut0-max* 0.8)
 
@@ -596,6 +599,7 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
     (/       (number number) (number))
     (dup     (t) (t t))
     (equal   (t t) (boolean))
+    (gensym  () (symbol))
     (i       (list) (:any))
     (ifte    (list list list) (:any))
     (list    (t) (boolean))
@@ -621,7 +625,7 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
     (uncons  (list) (t list)) ;t is top of stack, list is 2nd of stack
     (unstack (list) (:any))
     (while   (list list) (:any))
-    (define  (list) nil)))
+    (define  (list list) nil)))
 
 (defun make-expected-remaining-mappings ()
   (let ((ht-ex (make-hash-table :test 'eq :size (length *joy-ops-types*)))
@@ -650,6 +654,7 @@ Maybe this function should be replaced with calls to the function subtypep."
 	(number nil) ;there is no type more general than number, except t, which was tested above
 	(list nil)
 	(boolean nil)
+	(symbol nil)
 	;;more types to be implemented as necessary
 	)))
 
@@ -696,6 +701,7 @@ As a second value, the remainder of stk is returned, or :error if the stack didn
 (assert (eq t (valid-joy-exp nil))) ;test nil
 (assert (eq t (valid-joy-exp '(1 2 +)))) ;test number matching
 (assert (eq nil (valid-joy-exp '(true 2 +))))
+(assert (eq nil (valid-joy-exp '(gensym 2 +))))
 (assert (eq nil (valid-joy-exp '(1 i)))) ;test list matching
 (assert (eq t (valid-joy-exp '(() i))))
 (assert (eq t (valid-joy-exp '(1 2 true pop +)))) ;test pop
@@ -706,9 +712,10 @@ As a second value, the remainder of stk is returned, or :error if the stack didn
 (assert (eq t (valid-joy-exp '(true (1) (2) branch)))) ;test single operation type order matching
 (assert (eq t (valid-joy-exp '(() uncons cons uncons)))) ;test multiple type order matching
 (assert (eq nil (valid-joy-exp '(() cons uncons))))
-(assert (eq t (valid-joy-exp '((1) define a a (2) define a a 1)))) ;test define
-(assert (eq t (valid-joy-exp '((1) define (2)))))
-(assert (eq nil (valid-joy-exp '(1 define (2)))))
+(assert (eq t (valid-joy-exp '((1) (a) define a (2) (a) define a 1)))) ;test define
+(assert (eq t (valid-joy-exp '((1) ((2)) define))))
+(assert (eq nil (valid-joy-exp '(1 ((2)) define))))
+(assert (eq nil (valid-joy-exp '((1) (a nill +) define)))) ;should be valid, but isn't (define looks only at a in 2nd list)
 
 ;; I'll have another go at a type predictor.
 ;; This one uses a function which receives the current stk and exp (and heap?) and computes the types on the stack.
