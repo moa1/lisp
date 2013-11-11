@@ -188,6 +188,20 @@ Example: (list-replace-symbols '(a b (c a (d)) e) '(a 1 e nil)) == '(1 B (C 1 (D
 (defvar +list-replace-symbols-seconds-per-node+ (let ((l '(a b (c a (d)) e)) (bind '(a 1 e nil)))
 						  (/ (seconds-per-call (lambda () (list-replace-symbols l bind)) :mintime 0.5) (+ (count-tree-nodes l) (count-tree-nodes bind)))))
 
+(define-condition joy-time-error (error)
+  ((stk :initarg :stk :reader joy-time-error-stk) ;the joy stack before the operation causing the error.
+   (exp :initarg :exp :reader joy-time-error-exp) ;the joy expressions before the operation causing the error. (this means (car exp) is the operation in question.)
+   (heap :initarg :heap :reader joy-time-error-heap)) ;the joy heap before the operation causing the error.
+  (:documentation "An error signaling a too long runtime of a joy program."))
+
+(define-condition joy-overrun-error (joy-time-error)
+  ((c-value :initarg :c-value :reader joy-overrun-error-c-value)) ;the value of the counter at the time when the overrun was detected
+  (:documentation "An error signaling too many computation steps of a joy program."))
+
+(define-condition joy-timeout-error (joy-time-error)
+  ((cd-value :initarg :cd-value :reader joy-timeout-error-cd-value)) ;the value of the countdown at the time when the timeout was detected (<= 0.0)
+  (:documentation "An error signaling a too long runtime of a joy program."))
+
 ;; '((1) 1 DEFINE 1)
 (defun joy-eval (stk exp &key (heap (make-hash-table)) (c (make-counter 0)) (cd (make-countdown 0.0)))
   (declare (optimize (debug 0) (compilation-speed 0) (speed 3) (space 0))
@@ -195,12 +209,20 @@ Example: (list-replace-symbols '(a b (c a (d)) e) '(a 1 e nil)) == '(1 B (C 1 (D
   "Note that this function does not fail for the same inputs as the joy implementation by Manfred von Thun, e.g. '(branch) returns nil, but would fail for the real implementation.
 However, it should raise an error for cases when the stack becomes a non-list.
 This function must not modify stk, only copy it (otherwise test values might be modified)."
-  (let ((c (funcall c)) (cd (funcall cd)))
+  (let ((c-value (funcall c)) (cd-value (funcall cd)))
     ;;(print (list "stk" stk "exp" exp "c" c "cd" cd))
-    (when (<= c 0)
-      (return-from joy-eval 'overrun))
-    (when (<= cd 0) ;if this check doesn't do what it is supposed to, check the output type of (funcall cd) and whether it is identical to the cd type declaration of joy-eval!
-      (return-from joy-eval 'timeout)))
+    (when (<= c-value 0)
+      (restart-case
+	  (error (make-condition 'joy-overrun-error :stk stk :exp exp :heap heap :c-value c-value))
+	(proceed-using-new-c (new-c)
+	  :report "Proceed using a new counter."
+	  (setq c new-c))))
+    (when (<= cd-value 0.0) ;if this check doesn't do what it is supposed to, check the output type of (funcall cd) and whether it is identical to the cd type declaration of joy-eval!
+      (restart-case
+	  (error (make-condition 'joy-timeout-error :stk stk :exp exp :heap heap :cd-value cd-value))
+	(proceed-using-new-cd (new-cd)
+	  :report "Proceed using a new countdown."
+	  (setq cd new-cd)))))
   (if (null exp)
       stk
       (joy-eval
@@ -233,17 +255,17 @@ This function must not modify stk, only copy it (otherwise test values might be 
 	 (nill    (cons nil stk)) ;same as false
 	 (not     (cons (not (car stk)) (cdr stk))) ; can be emulated by branch
 	 (or      (cons (or (car stk) (cadr stk)) (cddr stk)))
-	 (patmat  (let ((vars (caddr stk)) (exp (cadr stk)) (pat (car stk)))
+	 (patmat  (let ((vars (caddr stk)) (exp (cadr stk)) (pat (car stk)) (cd-value (funcall cd)))
 		    (if (> (* +patmat-seconds-per-node+ (+ (count-tree-nodes exp) (count-tree-nodes pat)))
-			   (funcall cd))
-			'timeout
+			   cd-value)
+			(error (make-condition 'joy-timeout-error :stk stk :exp exp :heap heap :cd-value cd-value))
 			(cons
 			 (alist-to-plist (patmat vars exp pat))
 			 (cdddr stk)))))
-	 (patsub  (let ((l (car stk)) (bind (cadr stk)))
+	 (patsub  (let ((l (car stk)) (bind (cadr stk)) (cd-value (funcall cd)))
 		    (if (> (* +list-replace-symbols-seconds-per-node+ (+ (count-tree-nodes l) (count-tree-nodes bind)))
-			   (funcall cd))
-			'timeout
+			   cd-value)
+			(error (make-condition 'joy-timeout-error :stk stk :exp exp :heap heap :cd-value cd-value))
 			(cons (list-replace-symbols l bind) (cddr stk)))))
 	 (pop     (cdr stk))
 	 (pred    (cons (1- (car stk)) (cdr stk)))
@@ -399,6 +421,8 @@ This function must not modify stk, only copy it (otherwise test values might be 
 
 (defun joy-eval-handler (stk exp &key (heap (make-hash-table)) (c (make-counter)) (cd (make-countdown)))
   (handler-case (joy-eval stk exp :heap heap :c c :cd cd)
+    (joy-overrun-error () 'overrun)
+    (joy-timeout-error () 'timeout)
     #+CMU (simple-error () 'error)
     #+CMU (arithmetic-error () 'error)
     (simple-type-error () 'error)
