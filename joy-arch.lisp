@@ -226,6 +226,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
   (if (null exp)
       stk
       (joy-eval
+       ;; A restart-case form which allows setting the result of the case statement below in case of error would be nice here. However, such a restart is much too slow. (see restart-vs-no-restart in speed.lisp.)
        (case (car exp)
 	 (+       (cons (+ (cadr stk) (car stk)) (cddr stk))) ;add
 	 (and     (cons (and (car stk) (cadr stk)) (cddr stk)))

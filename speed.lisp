@@ -24,3 +24,21 @@
 	      :showtimes t
 	      :disable-gc t
 	      :maxtime 2)))
+
+(defun recurse-normal (depth)
+  (if (= 0 depth)
+      'result
+      (recurse-normal (1- depth))))
+
+(defun recurse-restart (depth)
+  (restart-case
+      (if (= 0 depth)
+	  'result
+	  (recurse-restart (1- depth)))
+    (restart-name ())))
+
+(defun restart-vs-no-restart (depth)
+  (timediff ((recurse-normal depth))
+	    ((recurse-restart depth))
+	    :showtimes t
+	    :maxtime 2))
