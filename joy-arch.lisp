@@ -45,19 +45,25 @@
 (defun make-counter (&optional (counter 0))
   (declare (type fixnum counter))
   (if (<= counter 0)
-      (lambda () 1)
+      (values (lambda () 1)
+	      (lambda (counter-delta) (declare (ignore counter-delta))))
       (let ((c counter))
 	(check-type c fixnum)
-	(lambda () (decf c)))))
+	(values (lambda () (decf c))
+		(lambda (counter-delta) (incf c counter-delta))))))
 
 (defun make-countdown (&optional (seconds 0.0))
-  "Returns a function that, when called, yields the number of internal run time units remaining until the timer expires."
+  "Returns two functions.
+The first, when called, yields the number of internal run time units remaining until the timer expires.
+The second, called with a number of seconds, postpones the timer by the number of seconds."
   (declare (type single-float seconds))
   (if (<= seconds 0)
-      (lambda () 1)
+      (values (lambda () 1)
+	      (lambda (seconds-delta) (declare (ignore seconds-delta))))
       (let ((c (+ (get-internal-run-time) (ceiling (* seconds internal-time-units-per-second)))))
 	(check-type c fixnum)
-	(lambda () (- c (get-internal-run-time))))))
+	(values	(lambda () (- c (get-internal-run-time)))
+		(lambda (seconds-delta) (incf c (* seconds-delta internal-time-units-per-second)))))))
 
 (defun mean (seq)
   (/ (apply #'+ seq) (length seq)))
@@ -210,19 +216,17 @@ Example: (list-replace-symbols '(a b (c a (d)) e) '(a 1 e nil)) == '(1 B (C 1 (D
 However, it should raise an error for cases when the stack becomes a non-list.
 This function must not modify stk, only copy it (otherwise test values might be modified)."
   (let ((c-value (funcall c)) (cd-value (funcall cd)))
-    ;;(print (list "stk" stk "exp" exp "c" c "cd" cd))
+    ;;(print (list "stk" stk "exp" exp "c-value" c-value "cd-value" cd-value))
     (when (<= c-value 0)
       (restart-case
 	  (error (make-condition 'joy-overrun-error :stk stk :exp exp :heap heap :c-value c-value))
-	(proceed-using-new-c (new-c)
-	  :report "Proceed using a new counter."
-	  (setq c new-c))))
+	(proceed ()
+	  :report "Proceed using a new counter.")))
     (when (<= cd-value 0.0) ;if this check doesn't do what it is supposed to, check the output type of (funcall cd) and whether it is identical to the cd type declaration of joy-eval!
       (restart-case
 	  (error (make-condition 'joy-timeout-error :stk stk :exp exp :heap heap :cd-value cd-value))
-	(proceed-using-new-cd (new-cd)
-	  :report "Proceed using a new countdown."
-	  (setq cd new-cd)))))
+	(proceed ()
+	  :report "Proceed using a new countdown."))))
   (if (null exp)
       stk
       (joy-eval
@@ -418,7 +422,20 @@ This function must not modify stk, only copy it (otherwise test values might be 
 	  '(((dup cons) swap concat dup cons i) (y) define
 	    (((pop null) (pop succ) ((dup pred) dip i *) ifte) y) (fac) define
 	    1 fac) :heap (make-hash-table))
-
+;; compare (count-tree-nodes EXP) for the following EXPs:
+;;34: (joy-eval '() '((pred dup 0 < (dup 0 equal) dip or (pop) (dup (*) dip fak-1) branch) (fak-1) define
+;;		(succ 1 swap fak-1) (fak) define 4 fak))
+;; compare this to:
+;;25: (labels ((fak (x)
+;;	   (if (>= x 1)
+;;	       (* x (fak (1- x)))
+;;	       1)))
+;;  (fak 5))
+;; or
+;;22: (do ((x 5 (1- x)) (r 1 (* r x))) ((< x 1) r))
+;; compare this to:
+;;21: (fak (1 = 1)
+;;     (s.1 = < * s.1 < fak < - s.1 1 > > >))
 
 (defun joy-eval-handler (stk exp &key (heap (make-hash-table)) (c (make-counter)) (cd (make-countdown)))
   (handler-case (joy-eval stk exp :heap heap :c c :cd cd)
@@ -1470,3 +1487,24 @@ l-1-fits must be a list of fitnesses which must be nil if the previous level yie
 ;    (generate-test-cases-systematicmapping-oks 2)
 ;  (systematicmapping 2 '() test-cases *joy-ops* 1000 .01)
 ;  (funcall get-counts))
+
+(defun joy-eval-trace (stk exp &key (heap (make-hash-table)) (c (make-counter)) (cd (make-countdown)) (fun nil))
+  "Evaluate the joy expression EXP on joy stack STK and joy heap HEAP, and call function FUN with the current tick, STK, EXP, and HEAP before each tick.
+By default, FUN prints tick, stk and exp.
+Signal the same errors that JOY-EVAL would."
+  (when (null fun)
+    (setf fun (lambda (count stk exp heap)
+		(declare (ignore heap))
+		(format t "count:~A stk:~A exp:~A~%" count stk exp))))
+  (let ((count 0))
+    (funcall fun count stk exp heap)
+    (multiple-value-bind (counter counter-delta) (make-counter 1)
+      (handler-bind
+	  ((joy-overrun-error (lambda (condition)
+				(let ((c-value (funcall c)))
+				  (when (> c-value 0)
+				    (incf count)
+				    (funcall fun count (joy-time-error-stk condition) (joy-time-error-exp condition) (joy-time-error-heap condition))
+				    (funcall counter-delta 1)
+				    (invoke-restart 'proceed))))))
+	(joy-eval stk exp :heap heap :c counter :cd cd)))))
