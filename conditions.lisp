@@ -54,3 +54,42 @@
 ;; example: (case-a #'fun-a)
 ;; example: (bind-a #'fun-b)
 ;; example: (bind-handle-a #'fun-c)
+
+(defun tagbody-restart (n)
+  ;; NOTE: this function signals a simple-control-error, since the restart is not active anymore.
+  (labels ((rec-signal (a i)
+	     (restart-case
+		 (if (< i 0)
+		     (error 'simple-condition :format-control "simple-condition")
+		     (rec-signal a (1- i)))
+	       (continue ()
+		 a))))
+    (let ((restarts nil))
+      (tagbody
+	 (dotimes (i n)
+	   (handler-bind
+	       ((simple-condition (lambda (c)
+				    (push (find-restart 'continue c) restarts)
+				    (go after))))
+		  (rec-signal i 10))
+	   after
+	   (print (list "restarts" restarts))))
+      (print (list "HERE restarts" restarts))
+      (loop for restart in restarts collect
+	   (invoke-restart restart)))))
+
+(defun catcher (n)
+  ;; NOTE: this function signals a SIMPLE-CONTROL-ERROR due to attempting to throw a tag that does not exist.
+  (let ((tags (loop for i below n collect (gensym))))
+    (labels ((rec (i res)
+	       (let ((tag (elt tags i)))
+		 (catch tag
+		   (if (>= i (1- n))
+		       res
+		       (rec (1+ i) (cons tag res))))
+		 (list i))))
+      (let ((tags2 (rec 0 nil)))
+	(print (list "tags2" tags2))
+	(loop for tag in tags2 for i below n collect
+	     (when (= 0 (mod i 2))
+	       (throw tag i)))))))
