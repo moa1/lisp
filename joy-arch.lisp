@@ -220,13 +220,13 @@ This function must not modify stk, only copy it (otherwise test values might be 
     (when (<= c-value 0)
       (restart-case
 	  (error (make-condition 'joy-overrun-error :stk stk :exp exp :heap heap :c-value c-value))
-	(proceed ()
-	  :report "Proceed using a new counter.")))
+	(continue ()
+	  :report "Continue, ignoring the counter overrun this step.")))
     (when (<= cd-value 0.0) ;if this check doesn't do what it is supposed to, check the output type of (funcall cd) and whether it is identical to the cd type declaration of joy-eval!
       (restart-case
 	  (error (make-condition 'joy-timeout-error :stk stk :exp exp :heap heap :cd-value cd-value))
-	(proceed ()
-	  :report "Proceed using a new countdown."))))
+	(continue ()
+	  :report "Continue, ignoring the countdown timeout this step."))))
   (if (null exp)
       stk
       (joy-eval
@@ -284,6 +284,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 	 ;; (cons (mod (cadr stk) (car stk)) (cddr stk))
 	 ;; )
 	 (sample  (cons (sample (car stk)) (cdr stk)))
+	 (si      (cons (joy-eval (cadr stk) (car stk) :heap heap :c c :cd cd) (cddr stk)))
 	 (<       (cons (< (cadr stk) (car stk)) (cddr stk))) ;smaller
 	 (stack   (cons stk stk))
 	 (step    (let ((res (cddr stk)))
@@ -322,6 +323,143 @@ This function must not modify stk, only copy it (otherwise test values might be 
 		    (cons (car exp) stk))))))
        (cdr exp) :heap heap :c c :cd cd)))
 
+(defun joy-eval2 (stk exp stks exps &key (heap (make-hash-table)) (c (make-counter 0)) (cd (make-countdown 0.0)))
+  (declare (optimize (debug 3) (compilation-speed 0) (speed 0) (space 0) (safety 3))
+	   (type (function () fixnum) c cd))
+  "Note that this function does not fail for the same inputs as the joy implementation by Manfred von Thun, e.g. '(branch) returns nil, but would fail for the real implementation.
+However, it should raise an error for cases when the stack becomes a non-list.
+This function must not modify stk, only copy it (otherwise test values might be modified)."
+  ;; A restart-case form which allows setting the result of the case statements below in case of error would be nice here. However, such a restart is much too slow. (see restart-vs-no-restart in speed.lisp.)
+  ;;(print (list "stk" stk "exp" exp "stks" stks "exps" exps))
+  (let ((c-value (funcall c)) (cd-value (funcall cd)))
+    ;;(print (list "stk" stk "exp" exp "c-value" c-value "cd-value" cd-value))
+    (when (<= c-value 0)
+      (restart-case
+	  (error (make-condition 'joy-overrun-error :stk stk :exp exp :heap heap :c-value c-value))
+	(continue ()
+	  :report "Continue, ignoring the counter overrun this step.")))
+    (when (<= cd-value 0.0) ;if this check doesn't do what it is supposed to, check the output type of (funcall cd) and whether it is identical to the cd type declaration of joy-eval!
+      (restart-case
+	  (error (make-condition 'joy-timeout-error :stk stk :exp exp :heap heap :cd-value cd-value))
+	(continue ()
+	  :report "Continue, ignoring the countdown timeout this step."))))
+  (macrolet ((rec (stk exp stks exps)
+	       `(joy-eval2 ,stk ,exp ,stks ,exps :heap heap :c c :cd cd)))
+    (if (null exp)
+	(if (null exps)
+	    (progn
+	      (assert (null stks))
+	      stk)
+	    (ecase (car exps)
+	      ;;(branch) is completely handled below.
+	      (dip    (rec (cons (car stks) stk) (cadr exps) (cdr stks) (cddr exps)))
+	      (i      (rec stk (cadr exps) (cdr stks) (cddr exps)))
+	      (ifte   (if (car stk)
+			  (rec (cdddar stks) (cadar stks) (cdr stks) (cons 'i (cdr exps)))
+			  (rec (cdddar stks) (caar stks) (cdr stks) (cons 'i (cdr exps)))))
+	      (si     (rec (cons stk (car stks)) (cadr exps) (cdr stks) (cddr exps)))
+	      (step   (if (null (cdar stks))
+			  (rec stk (cadr exps) (cdr stks) (cddr exps))
+			  (rec (cons (cadar stks) stk) (caar stks)
+			       (cons (cons (caar stks) (cddar stks)) (cdr stks))
+			       exps)))
+	      (times  (if (> (cadar stks) 0)
+			  (rec stk (caar stks)
+			       (cons (cons (caar stks) (cons (1- (cadar stks)) (cddar stks))) (cdr stks))
+			       exps)
+			  (rec stk (cadr exps) (cdr stks) (cddr exps))))
+	      ;;(while  (let* ((con (cadar stks))
+	      ;;	     (step (caar stks))
+	      ;;	     (newstk (cons nil (cons step (cons con stk)))))
+	      ;;	(rec stk con
+	      ;;	     (cons newstk (cons nil (cons (car stks) (cdr stks))))
+	      ;;	     (cons 'ifte (cons nil (cons 'while (cdr exps)))))))
+	      ))
+	(case (car exp)
+	  (branch (if (caddr stk)
+		      (rec (cdddr stk) (cadr stk) stks exps)
+		      (rec (cdddr stk) (car stk) stks exps)))
+	  (dip    (rec (cddr stk) (car stk) (cons (cadr stk) stks) (cons 'dip (cons (cdr exp) exps))))
+	  (i      (rec (cdr stk) (car stk) (cons nil stks) (cons 'i (cons (cdr exp) exps))))
+	  (ifte   (rec (cdddr stk) (caddr stk) (cons stk stks) (cons 'ifte (cons (cdr exp) exps))))
+	  (si     (rec (cadr stk) (car stk) (cons (cddr stk) stks) (cons 'si (cons (cdr exp) exps))))
+	  (step   (rec (cddr stk) nil (cons (cons (car stk) (cadr stk)) stks) (cons 'step (cons (cdr exp) exps))))
+	  (times  (rec (cddr stk) nil (cons stk stks) (cons 'times (cons (cdr exp) exps))))
+	  ;;(while  (rec (cddr stk) (cadr stk) (cons (cons nil stk) (cons nil (cons stk stks))) (cons 'ifte (cons nil (cons 'while (cons (cdr exp) exps))))))
+	  (t (rec
+	      (case (car exp)
+		;;(1=      (cons (= (car stk) 1) (cdr stk)))
+		(+       (cons (+ (cadr stk) (car stk)) (cddr stk))) ;add
+		(and     (cons (and (car stk) (cadr stk)) (cddr stk)))
+		(concat  (cons (append (cadr stk) (car stk)) (cddr stk)))
+		(cons    (cons (cons (cadr stk) (let ((a (car stk))) (if (proper-list-p a) a (error (make-condition 'type-error :datum a :expected-type 'list))))) (cddr stk))) ; same as papply
+		(/       (cons (/ (cadr stk) (car stk)) (cddr stk)))
+		;; #+sbcl
+		;; (if (= 0.0 (car stk)) ;work around SBCL bug (/ 1.0 0.0)
+		;;     (error (make-condition 'divison-by-zero :operands (list (cadr stk) (car stk))))
+		;;     (cons (/ (cadr stk) (car stk)) (cddr stk))) ;divide
+		;; #-sbcl
+		;; (cons (/ (cadr stk) (car stk)) (cddr stk)) ;divide
+		;; )
+		(dup     (cons (car stk) stk))
+		(equal   (cons (equal (cadr stk) (car stk)) (cddr stk)))
+		(gensym  (cons (gensym) stk))
+		(list    (cons (listp (car stk)) (cdr stk)))
+		(*       (cons (* (car stk) (cadr stk)) (cddr stk))) ;multiply
+		(nill    (cons nil stk)) ;same as false
+		(not     (cons (not (car stk)) (cdr stk))) ; can be emulated by branch
+		(or      (cons (or (car stk) (cadr stk)) (cddr stk)))
+		(patmat  (let ((vars (caddr stk)) (exp (cadr stk)) (pat (car stk)) (cd-value (funcall cd)))
+			   (if (> (* +patmat-seconds-per-node+ (+ (count-tree-nodes exp) (count-tree-nodes pat)))
+				  cd-value)
+			       (error (make-condition 'joy-timeout-error :stk stk :exp exp :heap heap :cd-value cd-value))
+			       (cons
+				(alist-to-plist (patmat vars exp pat))
+				(cdddr stk)))))
+		(patsub  (let ((l (car stk)) (bind (cadr stk)) (cd-value (funcall cd)))
+			   (if (> (* +list-replace-symbols-seconds-per-node+ (+ (count-tree-nodes l) (count-tree-nodes bind)))
+				  cd-value)
+			       (error (make-condition 'joy-timeout-error :stk stk :exp exp :heap heap :cd-value cd-value))
+			       (cons (list-replace-symbols l bind) (cddr stk)))))
+		(pop     (cdr stk))
+		(pred    (cons (1- (car stk)) (cdr stk)))
+		(quote   (cons (list (car stk)) (cdr stk)))
+		(rem     (cons (mod (cadr stk) (car stk)) (cddr stk)))
+		;; #+sbcl
+		;; (if (= 0.0 (car stk)) ;work around SBCL bug (mod 1.0 0.0)
+		;;     (error (make-condition 'divison-by-zero :operands (list (cadr stk) (car stk))))
+		;;     (cons (mod (cadr stk) (car stk)) (cddr stk)))
+		;; #-sbcl
+		;; (cons (mod (cadr stk) (car stk)) (cddr stk))
+		;; )
+		(sample  (cons (sample (car stk)) (cdr stk)))
+		(<       (cons (< (cadr stk) (car stk)) (cddr stk))) ;smaller
+		(stack   (cons stk stk))
+		(-       (cons (- (cadr stk) (car stk)) (cddr stk))) ;subtract
+		(succ    (cons (1+ (car stk)) (cdr stk)))
+		(swap    (cons (cadr stk) (cons (car stk) (cddr stk))))
+		(true    (cons t stk))
+		(uncons  (cons (cdar stk) (cons (caar stk) (cdr stk))))
+		(unstack (let ((a (car stk))) (if (proper-list-p a) (car stk) (error (make-condition 'type-error :datum a :expected-type 'list)))))
+		;; define is special
+		(define  (if (null heap) (error "define doesn't work for a nil heap")
+			     (if (not (listp (car stk)))
+				 (error (make-condition 'type-error :datum (car stk) :expected-type 'list))
+				 (if (not (symbolp (caar stk)))
+				     (error (make-condition 'type-error :datum (caar stk) :expected-type 'symbol))
+				     (progn
+				       (setf (gethash (caar stk) heap) (cadr stk)) ;(cdar stk) is not used.
+				       (cddr stk))))))
+		;; implement an "undefine", which ends the scope of a "define"d program, but leaves defined programs (and programs on the stack) using the to be "undefine"d program running intact. this would require replacing the "define"d name with an anonymous name.
+		(t
+		 (if (or (not (symbolp (car exp))) (null heap))
+		     (cons (car exp) stk)
+		     (multiple-value-bind (value present-p) (gethash (car exp) heap)
+		       (if present-p
+			   (progn (setf exp (append '(1) value (cdr exp))) stk)
+			   (cons (car exp) stk))))))
+	      (cdr exp) stks exps))))))
+
 ;; For example, the step combinator can be used to access all elements of an aggregate in sequence. For strings and lists this means the order of their occurrence, for sets it means the underlying order. The following will step through the members of the second list and swons them into the initially empty first list. The effect is to reverse the non-empty list, yielding [5 6 3 8 2].  
 ;;        []  [2 8 3 6 5]  [swons]  step
 
@@ -357,7 +495,17 @@ This function must not modify stk, only copy it (otherwise test values might be 
   (let ((r (joy-eval stk exp :heap (make-hash-table))))
     (if (not (equal r res))
 	(error (format nil "joy-test failed for stk:~A exp:~A res:~A r:~A"
-		       stk exp res r)))))
+		       stk exp res r))))
+  (let* ((joy-while '(((stack) dip dup (si uncons pop) dip) dip
+		      dup (swap ((dup) dip swap) dip swap) dip swap
+		      (((nill branch) dip) dip) dip
+		      (while) (pop pop) branch))
+	 (heap (make-hash-table)))
+    (setf (gethash 'while heap) joy-while)
+    (let ((r (joy-eval2 stk exp nil nil :heap heap)))
+      (if (not (equal r res))
+	  (error (format nil "joy-test2 failed for stk:~A exp:~A res:~A r:~A"
+			 stk exp res r))))))
 
 (joy-test nil '(nil nil) '(nil nil))
 (joy-test nil '(5 4 +) '(9))
@@ -391,6 +539,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 (joy-test nil '(5 pred) '(4))
 (joy-test nil '(5 quote) '((5)))
 (joy-test nil '(9 4 rem) '(1))
+(joy-test nil '(1 2 (3 4 5 6) (+ -) si) '((-2 6) 2 1))
 (joy-test nil '(1 2 <) '(t))
 (joy-test nil '(2 1 <) '(nil))
 (joy-test nil '(1 2 stack) '((2 1) 2 1))
@@ -419,9 +568,32 @@ This function must not modify stk, only copy it (otherwise test values might be 
 (joy-test nil '((succ) (inc) define 5 inc) '(6))
 (joy-test nil '((swap cons) (swons) define (2) 1 swons) '((1 2)))
 (joy-eval nil
+	  ;;doesn't really calculate factorial, b/c the y-operator doesn't work.
 	  '(((dup cons) swap concat dup cons i) (y) define
 	    (((pop null) (pop succ) ((dup pred) dip i *) ifte) y) (fac) define
 	    1 fac) :heap (make-hash-table))
+;; development of while as a recursive program:
+(joy-eval2 '((pop) (pop pop stack (1) equal not) 7 6 5 4 3 2 1)
+	   '(((stack) dip dup (si uncons pop) dip) dip) ;apply the while-test.
+	   nil nil)
+(joy-eval2 '((pop) (pop pop stack (1) equal not) 7 6 5 4 3 2 1) 
+	   '(((stack) dip dup (si uncons pop) dip) dip
+	     dup (swap ((dup) dip swap) dip swap) dip swap) ;duplicate boolean and while-program and place them.
+	   nil nil)
+(joy-eval2 '((pop) (pop pop stack (1) equal not) 7 6 5 4 3 2 1) 
+	   '(((stack) dip dup (si uncons pop) dip) dip
+	     dup (swap ((dup) dip swap) dip swap) dip swap
+	     (((nill branch) dip) dip) dip ;apply while-program.
+	     (while) nill branch) ;prepare test for recursion and recursion.
+	   nil nil)
+(joy-eval2 '((pop) (pop pop stack (1) equal not) 7 6 5 4 3 2 1) 
+	   '((((stack) dip dup (si uncons pop) dip) dip ;finished version
+	      dup (swap ((dup) dip swap) dip swap) dip swap
+	      (((nill branch) dip) dip) dip
+	      (while) (pop pop) branch)
+	     (while) define while)
+	   nil nil)
+
 ;; compare (count-tree-nodes EXP) for the following EXPs:
 ;;34: (joy-eval '() '((pred dup 0 < (dup 0 equal) dip or (pop) (dup (*) dip fak-1) branch) (fak-1) define
 ;;		(succ 1 swap fak-1) (fak) define 4 fak))
@@ -451,7 +623,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
     #+SBCL (SB-KERNEL::ARG-COUNT-ERROR () 'error)))
 
 (defparameter *joy-ops* 
-  '(+ and branch concat cons dip / dup equal gensym i ifte list * nill not or patmat patsub pop pred quote rem sample < stack step - succ swap times true uncons unstack while define))
+  '(+ and branch concat cons dip / dup equal gensym i ifte list * nill not or patmat patsub pop pred quote rem si sample < stack step - succ swap times true uncons unstack while define))
 
 (defparameter *mut0-max* 0.8)
 
@@ -656,6 +828,7 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
     (quote   (t) (list))
     (rem     (number number) (number))
     (sample  (list) (t))
+    (si      (list list) (list))
     (<       (number number) (boolean))
     (stack   nil (list))
     (step    (list list) (:any))
@@ -1498,7 +1671,7 @@ Signal the same errors that JOY-EVAL would."
 		(format t "count:~A stk:~A exp:~A~%" count stk exp))))
   (let ((count 0))
     (funcall fun count stk exp heap)
-    (multiple-value-bind (counter counter-delta) (make-counter 1)
+    (multiple-value-bind (counter counter-delta) (make-counter 2) ;not 1 for some reason.
       (handler-bind
 	  ((joy-overrun-error (lambda (condition)
 				(let ((c-value (funcall c)))
@@ -1506,5 +1679,5 @@ Signal the same errors that JOY-EVAL would."
 				    (incf count)
 				    (funcall fun count (joy-time-error-stk condition) (joy-time-error-exp condition) (joy-time-error-heap condition))
 				    (funcall counter-delta 1)
-				    (invoke-restart 'proceed))))))
+				    (invoke-restart 'continue))))))
 	(joy-eval stk exp :heap heap :c counter :cd cd)))))
