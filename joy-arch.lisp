@@ -324,7 +324,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
        (cdr exp) :heap heap :c c :cd cd)))
 
 (defun joy-eval2 (stk exp stks exps &key (heap (make-hash-table)) (c (make-counter 0)) (cd (make-countdown 0.0)))
-  (declare (optimize (debug 3) (compilation-speed 0) (speed 0) (space 0) (safety 3))
+  (declare (optimize (debug 0) (compilation-speed 0) (speed 3) (space 0))
 	   (type (function () fixnum) c cd))
   "Note that this function does not fail for the same inputs as the joy implementation by Manfred von Thun, e.g. '(branch) returns nil, but would fail for the real implementation.
 However, it should raise an error for cases when the stack becomes a non-list.
@@ -353,10 +353,10 @@ This function must not modify stk, only copy it (otherwise test values might be 
 	    (ecase (car exps)
 	      ;;(branch) is completely handled below.
 	      (dip    (rec (cons (car stks) stk) (cadr exps) (cdr stks) (cddr exps)))
-	      (i      (rec stk (cadr exps) (cdr stks) (cddr exps)))
+	      (i      (rec stk (cadr exps) stks (cddr exps)))
 	      (ifte   (if (car stk)
-			  (rec (cdddar stks) (cadar stks) (cons nil (cdr stks)) (cons 'i (cdr exps)))
-			  (rec (cdddar stks) (caar stks) (cons nil (cdr stks)) (cons 'i (cdr exps)))))
+			  (rec (cdddar stks) (cadar stks) (cdr stks) (cons 'i (cdr exps)))
+			  (rec (cdddar stks) (caar stks) (cdr stks) (cons 'i (cdr exps)))))
 	      (si     (rec (cons stk (car stks)) (cadr exps) (cdr stks) (cddr exps)))
 	      (step   (if (null (cdar stks))
 			  (rec stk (cadr exps) (cdr stks) (cddr exps))
@@ -377,10 +377,10 @@ This function must not modify stk, only copy it (otherwise test values might be 
 	      ))
 	(case (car exp)
 	  (branch (if (caddr stk)
-		      (rec (cdddr stk) (cadr stk) (cons nil stks) (cons 'i (cons (cdr exp) exps)))
-		      (rec (cdddr stk) (car stk) (cons nil stks) (cons 'i (cons (cdr exp) exps)))))
+		      (rec (cdddr stk) (cadr stk) stks (cons 'i (cons (cdr exp) exps)))
+		      (rec (cdddr stk) (car stk) stks (cons 'i (cons (cdr exp) exps)))))
 	  (dip    (rec (cddr stk) (car stk) (cons (cadr stk) stks) (cons 'dip (cons (cdr exp) exps))))
-	  (i      (rec (cdr stk) (car stk) (cons nil stks) (cons 'i (cons (cdr exp) exps))))
+	  (i      (rec (cdr stk) (car stk) stks (cons 'i (cons (cdr exp) exps))))
 	  (ifte   (rec (cdddr stk) (caddr stk) (cons stk stks) (cons 'ifte (cons (cdr exp) exps))))
 	  (si     (rec (cadr stk) (car stk) (cons (cddr stk) stks) (cons 'si (cons (cdr exp) exps))))
 	  (step   (rec (cddr stk) nil (cons (cons (car stk) (cadr stk)) stks) (cons 'step (cons (cdr exp) exps))))
@@ -1211,7 +1211,6 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 ;;;(joy-show-fitness i tc)
 ;)
 
-;; A test-cases that tests joy-eval and joy-eval2 equivalence:
 (defparameter *test-cases-joy-eval-and-joy-eval2-equivalence*
   (make-test-cases :values '(())
 		   :generate (lambda (vs) vs)
@@ -1235,9 +1234,10 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 					  (floating-point-invalid-operation () 'error)
 					  (floating-point-overflow () 'error)
 					  #+SBCL (SB-KERNEL::ARG-COUNT-ERROR () 'error))))
-				(assert (equal r r2) (r r2 exp) "r:~A != r2:~A for exp:~A" r r2 exp)))
+				(assert (equal r r2) (r r2) "assertion failed. r:~A != r2:~A for exp:~A" r r2 exp)))
 			    0)))
 ;;(tournament-new '() 200 1000000 *test-cases-joy-eval-and-joy-eval2-equivalence* (remove 'sample (remove 'gensym *joy-ops*)) 1000 0.0)
+;; NOTE: joy-eval and joy-eval2 with DEFINEd WHILE differ, because it can be redefined, but the built-in WHILE cannot.
 
 ;; Add a test-cases that scores joy programs by the value they return.
 ;; The length of the joy programs is also scored, programs of length larger than a predefined number receive a very low fitness.
