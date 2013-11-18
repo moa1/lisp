@@ -355,8 +355,8 @@ This function must not modify stk, only copy it (otherwise test values might be 
 	      (dip    (rec (cons (car stks) stk) (cadr exps) (cdr stks) (cddr exps)))
 	      (i      (rec stk (cadr exps) (cdr stks) (cddr exps)))
 	      (ifte   (if (car stk)
-			  (rec (cdddar stks) (cadar stks) (cdr stks) (cons 'i (cdr exps)))
-			  (rec (cdddar stks) (caar stks) (cdr stks) (cons 'i (cdr exps)))))
+			  (rec (cdddar stks) (cadar stks) (cons nil (cdr stks)) (cons 'i (cdr exps)))
+			  (rec (cdddar stks) (caar stks) (cons nil (cdr stks)) (cons 'i (cdr exps)))))
 	      (si     (rec (cons stk (car stks)) (cadr exps) (cdr stks) (cddr exps)))
 	      (step   (if (null (cdar stks))
 			  (rec stk (cadr exps) (cdr stks) (cddr exps))
@@ -377,8 +377,8 @@ This function must not modify stk, only copy it (otherwise test values might be 
 	      ))
 	(case (car exp)
 	  (branch (if (caddr stk)
-		      (rec (cdddr stk) (cadr stk) stks exps)
-		      (rec (cdddr stk) (car stk) stks exps)))
+		      (rec (cdddr stk) (cadr stk) (cons nil stks) (cons 'i (cons (cdr exp) exps)))
+		      (rec (cdddr stk) (car stk) (cons nil stks) (cons 'i (cons (cdr exp) exps)))))
 	  (dip    (rec (cddr stk) (car stk) (cons (cadr stk) stks) (cons 'dip (cons (cdr exp) exps))))
 	  (i      (rec (cdr stk) (car stk) (cons nil stks) (cons 'i (cons (cdr exp) exps))))
 	  (ifte   (rec (cdddr stk) (caddr stk) (cons stk stks) (cons 'ifte (cons (cdr exp) exps))))
@@ -1210,6 +1210,34 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 ;(tournament-new i 20 10000 tc *joy-ops* 1000 .01)
 ;;;(joy-show-fitness i tc)
 ;)
+
+;; A test-cases that tests joy-eval and joy-eval2 equivalence:
+(defparameter *test-cases-joy-eval-and-joy-eval2-equivalence*
+  (make-test-cases :values '(())
+		   :generate (lambda (vs) vs)
+		   :goal (constantly nil)
+		   :score (lambda (r goal exp)
+			    (declare (ignore goal))
+			    (let* ((joy-while '(((stack) dip dup (si uncons pop) dip) dip
+						dup (swap ((dup) dip swap) dip swap) dip swap
+						(((nill branch) dip) dip) dip
+						(while) (pop pop) branch))
+				   (heap (make-hash-table)))
+			      (setf (gethash 'while heap) joy-while)
+			      (let ((r2 (handler-case (joy-eval2 nil exp nil nil :heap heap :c (make-counter 1000))
+					  (joy-overrun-error () 'overrun)
+					  (joy-timeout-error () 'timeout)
+					  #+CMU (simple-error () 'error)
+					  #+CMU (arithmetic-error () 'error)
+					  (simple-type-error () 'error)
+					  (type-error () 'error)
+					  (division-by-zero () 'error)
+					  (floating-point-invalid-operation () 'error)
+					  (floating-point-overflow () 'error)
+					  #+SBCL (SB-KERNEL::ARG-COUNT-ERROR () 'error))))
+				(assert (equal r r2) (r r2 exp) "r:~A != r2:~A for exp:~A" r r2 exp)))
+			    0)))
+;;(tournament-new '() 200 1000000 *test-cases-joy-eval-and-joy-eval2-equivalence* (remove 'sample (remove 'gensym *joy-ops*)) 1000 0.0)
 
 ;; Add a test-cases that scores joy programs by the value they return.
 ;; The length of the joy programs is also scored, programs of length larger than a predefined number receive a very low fitness.
