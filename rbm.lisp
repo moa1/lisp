@@ -1,7 +1,5 @@
 ;; Restricted Boltzmann Machine
 
-(load "numeric.lisp")
-
 (defun join (result-type s separator)
   "Concatenate the sequences given in the sequence S, with SEPARATOR between each pair of sequences.
 RESULT-TYPE is the resulting sequence type."
@@ -180,9 +178,10 @@ Example: (array-slice-valid '((0 2) nil (0 0 3 4)) '(2 3 4)) is invalid because 
 	    (return-from array-slice-valid (values nil 'null)))
 	  (let* ((slice-len (length slice)))
 	    (when (oddp slice-len)
-	      (return-from array-slice-valid (values nil 'oddp)))
-	    (when (not (apply #'<= 0 (append slice (list dim))))
-	      (return-from array-slice-valid (values nil 'order)))))
+	      (return-from array-slice-valid (values nil 'oddp))))
+	  (loop for pair on slice by #'cddr do
+	       (when (not (<= 0 (car pair) (cadr pair) dim))
+		 (return-from array-slice-valid (values nil 'order)))))
 	slice array-dimensions)
   (values t t))
 
@@ -307,6 +306,22 @@ Example: (array-dim-slice-iterate '((0 1 3 4) (6 8)) '(10 1) '(5 10) (lambda (i 
   (array-dim-slice-iterate '((0 1 3 4) (6 8)) '(1 2) '(5 10) (lambda (x y) (push (list x y) a)))
   ;;(print a)
   (assert (equal a '((8 24) (5 22)))))
+
+(defun array-indices-to-dim-slice (indices)
+  "Convert a list of indices to a dim-slice.
+Example (array-indices-to-dim-slice '(7 5 8 9)) == '(7 8 5 6 8 10)."
+  (let ((dim-slice nil))
+    (loop for i in indices do
+	 (if (null dim-slice)
+	     (progn
+	       (push i dim-slice)
+	       (push (1+ i) dim-slice))
+	     (if (= (car dim-slice) i)
+		 (setf (car dim-slice) (1+ i))
+		 (progn
+		   (push i dim-slice)
+		   (push (1+ i) dim-slice)))))
+    (nreverse dim-slice)))
 
 (defun array-transpose (a r)
   "Put the transpose of 2-dimensional array A into array R."
@@ -841,22 +856,25 @@ Return the new array."
 	  (setf (row-major-aref r r-index) (row-major-aref a a-index)))))
     r))
 
+(defun array-slice-dimensions (slices)
+  "Return the dimensions (as returned by 'array-dimensions) of the slices SLICES.
+Example: (array-slice-dimensions '((0 3 5 7) (0 1 2 3 4 5))) == '(5 3)."
+  (loop for dim-slice in slices collect
+       (loop for s on dim-slice by #'cddr while (not (null s)) sum
+	    (- (second s) (first s)))))
+
 (defun array-select-perm-slice (a a-perm a-slice)
   "Return a new array obtained from permuting array's A dimensions with permutation A-PERM, and slicing the resulting array using slice A-SLICE."
-  (labels ((slice-dimensions (slice dim)
-	     (if (null slice)
-		 (nreverse dim)
-		 (slice-dimensions (cdr slice) (cons (array-dim-slice-count (car slice)) dim)))))
-    (let* ((a-dim (array-dimensions a))
-	   (r-dim (slice-dimensions a-slice nil))
-	   (r (make-array r-dim :element-type (array-element-type a)))
-	   (r-perm (default-array-permutation r))
-	   (r-slice (default-array-slice r-dim))) ;don't need to permute r-dim, because r-perm is identity
-      (assert (array-slice-valid a-slice a-dim))
-      (arrays-walk (list a-dim r-dim) (list a-perm r-perm) (list a-slice r-slice)
-		   (lambda (a-index r-index)
-		     (setf (row-major-aref r r-index) (row-major-aref a a-index))))
-      r)))
+  (let* ((a-dim (array-dimensions a))
+	 (r-dim (array-slice-dimensions a-slice))
+	 (r (make-array r-dim :element-type (array-element-type a)))
+	 (r-perm (default-array-permutation r))
+	 (r-slice (default-array-slice r-dim))) ;don't need to permute r-dim, because r-perm is identity
+    (assert (array-slice-valid a-slice a-dim))
+    (arrays-walk (list a-dim r-dim) (list a-perm r-perm) (list a-slice r-slice)
+		 (lambda (a-index r-index)
+		   (setf (row-major-aref r r-index) (row-major-aref a a-index))))
+    r))
 
 (defun array-insert-perm-slice (a a-perm a-slice r r-perm r-slice)
   "Insert the with A-PERM permuted and A-SLICe sliced elements of array A into the elements of R specified by dimension permutation R-PERM and slice R-SLICE."
@@ -1016,7 +1034,7 @@ The sum of the numbers of the H-parameters plus the sum of the list of numbers o
 	      (array-insert-perm-slice softmax-probs-2d (default-array-permutation softmax-probs-2d) (default-array-slice (array-dimensions softmax-probs-2d)) probs probs-perm probs-softmax-slice))))
   nil)
 
-(defun rbm-learn-cd1 (data rbm)
+(defun rbm-learn-cd1 (data rbm &key (print-err nil))
   ;;TODO: possibility to specify neuron types
   "Do one contrastive-divergence-1 step on a restricted boltzmann machine.
 DATA is a two-dimensional array of input values: the first dimension represents the cases of the mini-batch, the second dimension represents visible neurons.
@@ -1109,34 +1127,41 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
       (array-array-fun pos-v-act neg-v-act (lambda (a b) (declare (type single-float a b)) (/ (- a b) n-cases)) v-biases-inc)
       (array-array-fun pos-h-act neg-h-act (lambda (a b) (declare (type single-float a b)) (/ (- a b) n-cases)) h-biases-inc)
 ;;      (print (list "w-inc" w-inc "v-biases-inc" v-biases-inc "h-biases-inc" h-biases-inc))
-      (let ((err-array (make-array (list n-cases n-v) :element-type 'single-float))
-	    (err nil))
-	(array-array-fun data neg-data (lambda (a b) (declare (type single-float a b)) (expt (- a b) 2)) err-array)
-	(setf err (aref (the (simple-array single-float) (array-project (the (simple-array single-float) (array-project err-array #'+)) #'+))))
-	(print (list "err" err)))
+      (when print-err
+	(let ((err-array (make-array (list n-cases n-v) :element-type 'single-float))
+	      (err nil))
+	  (array-array-fun data neg-data (lambda (a b) (declare (type single-float a b)) (expt (- a b) 2)) err-array)
+	  (setf err (aref (the (simple-array single-float) (array-project (the (simple-array single-float) (array-project err-array #'+)) #'+))))
+	  (print (list "err" err))))
       (values w-inc v-biases-inc h-biases-inc))))
 
-(defun visible-free-energy (data rbm)
-  "For given vectors of visible layer assignments DATA and a given RBM, return the free energy of the vectors in DATA."
+(defun visible-free-energy-log (data rbm)
+  "For given vectors of visible layer assignments DATA and a given RBM, return the log of the free energy of the vectors in DATA."
   (let* ((n-visible (rbm-n-v rbm))
 	 (n-cases (array-dimension data 0))
 	 (n-hidden (rbm-n-h rbm))
 	 (v-biases (rbm-v-biases rbm))
-	 (pos-h-probs (rbm-h-from-v data rbm))
+	 (h-biases (rbm-h-biases rbm))
+	 (w (rbm-w rbm))
+	 (pos-h-probs (make-array (list n-cases n-hidden) :element-type 'single-float))
 	 (t1 (make-array (list n-cases n-visible) :element-type 'single-float))
 	 (t2 (make-array (list n-cases n-hidden) :element-type 'single-float)))
-    ;(prind pos-h-probs)
+    (array-array-mul data w pos-h-probs)
+    (array-array-fun pos-h-probs (array-repeat h-biases (list n-cases) nil) #'+ pos-h-probs)
+    ;;(prind pos-h-probs)
     (array-array-fun data (array-repeat v-biases (list n-cases) nil) #'* t1)
-    (array-fun pos-h-probs (lambda (x) (log (1+ (exp x)))) t2)
-    ;(prind t1)
-    ;(prind t2)
+    (flet ((safe-log1+exp (x)
+	     (handler-case (log (1+ (exp x)))
+	       (floating-point-overflow (c) (declare (ignore c)) x))))
+      (array-fun pos-h-probs #'safe-log1+exp t2))
+    ;;(prind t1)
+    ;;(prind t2)
     (let ((s1 (array-project t1 #'+ :dim 1))
 	  (s2 (array-project t2 #'+ :dim 1))
 	  (e (make-array n-cases :element-type 'single-float)))
-      (array-array-fun s1 s2 (lambda (a b) (exp (+ a b))) e)
-      ;(prind s1)
-      ;(prind s2)
-      ;(prind e)
+      ;;(prind s1)
+      ;;(prind s2)
+      (array-array-fun s1 s2 (lambda (a b) (+ a b)) e)
       e)))
 
 (defparameter *data-imbalanced* #2A((1 1 0 0 0 0) (0 0 1 1 0 0) (0 0 0 0 1 1) (0 0 0 0 1 1)))
@@ -1154,6 +1179,34 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 (defparameter *data+5* #2A((0 5) (1 6) (2 7) (3 8) (4 9) (5 10)))
 (defparameter *data+5-extrapolate* #2A((6 11) (7 12) (8 13) (9.5 14.5) (-40 -35) (0 0)))
 (defparameter *data-softmax* #2A((1 0 0 1 0 0) (0 1 0 0 1 0) (0 0 1 0 0 1))) ;v-softmax='(3 3)
+;; rock-paper-scissors-lizard-spock game
+;;                              -player1-  -player2-  -win- (win0=1:draw win1=1 player1_wins win2=1 player2_wins)
+(defparameter *data-rpsls* #2A((1 0 0 0 0  1 0 0 0 0  1 0 0)
+			       (1 0 0 0 0  0 1 0 0 0  0 0 1)
+			       (1 0 0 0 0  0 0 1 0 0  0 1 0)
+			       (1 0 0 0 0  0 0 0 1 0  0 1 0)
+			       (1 0 0 0 0  0 0 0 0 1  0 0 1)
+			       (0 1 0 0 0  1 0 0 0 0  0 1 0)
+			       (0 1 0 0 0  0 1 0 0 0  1 0 0)
+			       (0 1 0 0 0  0 0 1 0 0  0 0 1)
+			       (0 1 0 0 0  0 0 0 1 0  0 0 1)
+			       (0 1 0 0 0  0 0 0 0 1  0 1 0)
+			       (0 0 1 0 0  1 0 0 0 0  0 0 1)
+			       (0 0 1 0 0  0 1 0 0 0  0 1 0)
+			       (0 0 1 0 0  0 0 1 0 0  1 0 0)
+			       (0 0 1 0 0  0 0 0 1 0  0 1 0)
+			       (0 0 1 0 0  0 0 0 0 1  0 0 1)
+			       (0 0 0 1 0  1 0 0 0 0  0 0 1)
+			       (0 0 0 1 0  0 1 0 0 0  0 1 0)
+			       (0 0 0 1 0  0 0 1 0 0  0 0 1)
+			       (0 0 0 1 0  0 0 0 1 0  1 0 0)
+			       (0 0 0 1 0  0 0 0 0 1  0 1 0)
+			       (0 0 0 0 1  1 0 0 0 0  0 1 0)
+			       (0 0 0 0 1  0 1 0 0 0  0 0 1)
+			       (0 0 0 0 1  0 0 1 0 0  0 1 0)
+			       (0 0 0 0 1  0 0 0 1 0  0 0 1)
+			       (0 0 0 0 1  0 0 0 0 1  1 0 0)))
+(defparameter *rbmnew-rpsls* (new-rbm 13 13 :v-softmax '(5 5 3) :h-binary 13))
 
 (defun rbm-update (rbm w-inc v-biases-inc h-biases-inc learn-rate)
   (let* ((w (rbm-w rbm))
@@ -1175,13 +1228,13 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
   (assert (> max-iterations 0))
   (labels ((rec (rbm w-inc v-biases-inc h-biases-inc iteration)
 	     (print (list "iteration" iteration))
-	     (multiple-value-bind (w-inc-1 v-biases-inc-1 h-biases-inc-1) (rbm-learn-cd1 data rbm)
+	     (multiple-value-bind (w-inc-1 v-biases-inc-1 h-biases-inc-1) (rbm-learn-cd1 data rbm :print-err t)
 	       (array-array-fun w-inc-1 (rbm-w rbm) (lambda (a b) (- a (* weight-cost b))) w-inc-1) ;add weight-cost
 	       (array-array-fun w-inc w-inc-1 (lambda (a b) (+ (* a momentum) b)) w-inc)
 	       (array-array-fun v-biases-inc v-biases-inc-1 (lambda (a b) (+ (* a momentum) b)) v-biases-inc)
 	       (array-array-fun h-biases-inc h-biases-inc-1 (lambda (a b) (+ (* a momentum) b)) h-biases-inc)
 	       (let ((new-rbm (rbm-update rbm w-inc v-biases-inc h-biases-inc learn-rate)))
-		 (if (= iteration max-iterations)
+		 (if (>= iteration max-iterations)
 		     new-rbm
 		     (rec new-rbm w-inc v-biases-inc h-biases-inc (1+ iteration)))))))
     (let ((w-inc (make-array (array-dimensions (rbm-w rbm)) :element-type 'single-float))
@@ -1189,20 +1242,19 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 	  (h-biases-inc (make-array (array-dimensions (rbm-h-biases rbm)) :element-type 'single-float)))
       (rec rbm w-inc v-biases-inc h-biases-inc 1))))
 
-(defun rbm-learn (get-data-fn rbm learn-rate momentum weight-cost max-iterations)
+(defun rbm-learn (get-data-fn rbm learn-rate momentum weight-cost)
   "Learn a Restricted Boltzmann Machine (rbm) using different mini-batches of data and using RBM-LEARN-CD1 on the current rbm RBM to get a training signal.
 Each iteration, the funtion GET-DATA-FN is called with the current iteration and rbm.
 The function must decide whether to proceed with learning or to abort.
 If it wants to proceed, it must return a list of input data to be learned.
 If it wants to quit, it must return NIL.
 The training signal obtained from RBM-LEARN-CD1 is added, after using LEARN-RATE, MOMENTUM, and WEIGHT-COST, to the current RBM using RBM-UPDATE.
-This procedure is repeated at most MAX-ITERATIONS times and the resulting rbm is returned."
-  (assert (>= max-iterations 0))
+The resulting rbm is returned."
   (labels ((rec (rbm w-inc v-biases-inc h-biases-inc iteration)
-	     (print (list "iteration" iteration))
+	     ;;(print (list "iteration" iteration))
 	     (let ((data (funcall get-data-fn iteration rbm))
 		   (momentum (if (< iteration 10) (/ momentum 2) momentum)))
-	       (if (or (null data) (>= iteration max-iterations))
+	       (if (null data)
 		   rbm
 		   (multiple-value-bind (w-inc-1 v-biases-inc-1 h-biases-inc-1) (rbm-learn-cd1 data rbm)
 		     (array-array-fun w-inc-1 (rbm-w rbm) (lambda (a b) (- a (* weight-cost b))) w-inc-1) ;add weight-cost
@@ -1226,13 +1278,15 @@ This procedure is repeated at most MAX-ITERATIONS times and the resulting rbm is
 	 (h-binary (rbm-h-binary rbm))
 	 (h-softmax (rbm-h-softmax rbm))
 	 ;;(h-gaussian (rbm-h-gaussian rbm))
-	 ;;(h-linear (rbm-h-linear rbm))
+	 (h-linear (rbm-h-linear rbm))
 	 )
     ;; positive phase
     (array-array-mul data w pos-h-probs)
     (array-array-fun pos-h-probs (array-repeat h-biases (list n-cases) nil) #'+ pos-h-probs)
     (array-fun pos-h-probs (lambda (x) (sigmoid x)) pos-h-probs :a-slice (list cases-dim-slice h-binary) :r-slice (list cases-dim-slice h-binary))
     (softmax-calc-probs n-cases h-softmax pos-h-probs)
+    ;; need to clamp pos-h-probs at 0.0.
+    (array-fun pos-h-probs (lambda (x) (declare (type single-float x)) (max 0.0 x)) pos-h-probs :a-slice (list cases-dim-slice h-linear) :r-slice (list cases-dim-slice h-linear))
     pos-h-probs))
 
 (defun rbm-v-from-h (pos-h-states rbm)
@@ -1252,6 +1306,30 @@ This procedure is repeated at most MAX-ITERATIONS times and the resulting rbm is
     (softmax-calc-probs n-cases v-softmax neg-data)
     (array-fun neg-data (lambda (x) (max x 0)) neg-data :a-slice (list cases-dim-slice v-linear) :r-slice (list cases-dim-slice v-linear))
     neg-data))
+
+(defun rbm-reconstruction-error (data rbm &key (neg-data (rbm-v-from-h (rbm-h-from-v data rbm) rbm)))
+  (let* ((n-cases (array-dimension data 0))
+	 (n-v (rbm-n-v rbm))
+	 (err-array (make-array (list n-cases n-v) :element-type 'single-float)))
+    (array-array-fun data neg-data (lambda (a b) (declare (type single-float a b)) (expt (- a b) 2)) err-array)
+    (aref (the (simple-array single-float) (array-project (the (simple-array single-float) (array-project err-array #'+)) #'+)))))
+
+(defun rbm-learn-sequentially (data rbm learn-rate momentum weight-cost mini-batch-size continue-fun)
+  "CONTINUE-FUN has to return NIL if it wants the learning to stop, a non-NIL value otherwise."
+  (let* ((n-samples (array-dimension data 0))
+	 (n-features (array-dimension data 1))
+	 (indices-mini-batches (loop for i below n-samples by mini-batch-size collect (loop for j from i below (min (+ i mini-batch-size) n-samples) collect j)))
+	 (slice-mini-batches (mapcar (lambda (indices)
+				       (list (array-indices-to-dim-slice indices) (list 0 n-features)))
+				     indices-mini-batches))
+	 (data-mini-batches (mapcar (lambda (slice) (array-select-perm-slice data (default-array-permutation data) slice))
+				    slice-mini-batches))
+	 (n-mini-batches (length data-mini-batches)))
+    (flet ((get-data (iteration rbm)
+	     (if (funcall continue-fun iteration rbm)
+		 (nth (mod iteration n-mini-batches) data-mini-batches)
+		 nil)))
+      (rbm-learn #'get-data rbm learn-rate momentum weight-cost))))
 
 ;; these give good models:
 ;;(defparameter *rbm* (rbm-learn-minibatch *data* (new-rbm 6 3 :v-binary 6 :h-softmax '(3)) .01 0 .002 10000))
@@ -1299,107 +1377,35 @@ This procedure is repeated at most MAX-ITERATIONS times and the resulting rbm is
 	   (0.0 0.0 0.0 0.0 0.0 0.0 0.0 1.0))))
   (defparameter *data-code2* (make-array '(8 8) :element-type 'single-float :initial-contents c))
   (defparameter *rbm-code2*  (new-rbm 8 3 :V-BINARY 0 :V-SOFTMAX '(8) :V-GAUSSIAN 0 :H-SOFTMAX nil :H-BINARY 3 :H-GAUSSIAN 0 :h-noisefree 0))
-  (defun rbm-code2-learn (learn-rate momentum weight-cost max-iterations n-mini-batch)
+  (defun rbm-code2-learn (learn-rate momentum weight-cost max-iterations mini-batch-size)
     (flet ((get-data (i rbm)
-	     (declare (ignore i rbm))
-	     (let ((r (make-array (list n-mini-batch 8) :element-type 'single-float :initial-contents (loop for i below n-mini-batch collect (elt c (random 8))))))
-	       (prind r)
-	       r)))
-      (let ((rbm (rbm-learn #'get-data *rbm-code2* learn-rate momentum weight-cost max-iterations)))
+	     (declare (ignore rbm))
+	     (if (>= i max-iterations)
+		 nil
+		 (let ((r (make-array (list mini-batch-size 8) :element-type 'single-float :initial-contents (loop for i below mini-batch-size collect (elt c (random 8)))))
+		       ;;(r (make-array (list mini-batch-size 8) :element-type 'single-float :initial-contents (loop for i below mini-batch-size collect (elt c i))))
+		       )
+		   ;;(prind r)
+		   r))))
+      (let ((rbm (rbm-learn #'get-data *rbm-code2* learn-rate momentum weight-cost)))
 	(rbm-print-h-and-v *data-code2* rbm)
 	(defparameter *rbm-res* rbm)))))
-;; rbm-code2-learn finds a model where all v-units are 1/8, even when learning 8 times as many iterations as rbm-learn-minibatch.
+
+;; rbm-code2-learn sometimes finds a model where all v-units are 1/8, even when learning 8 times as many iterations as rbm-learn-minibatch.
 ;; however, when learning all data at once, rbm-learn-minibatch finds good models:
 ;;(defparameter *rbm-res* (rbm-learn-minibatch *data-code2* *rbm-code2* 2 .9 .0002 3000))
+
+(let* ((cases 4)
+       (variables 8)
+       (hidden 1)
+       (a (make-array (list cases variables) :element-type 'single-float)))
+  (loop for i below cases do (loop for j below variables do (setf (aref a i j) (+ i (random 1.0)))))
+  (defparameter *data-code3* a)
+  ;;(defparameter *rbm-code3* (new-rbm variables hidden :v-gaussian variables :h-gaussian hidden))
+  (defparameter *rbm-code3* (new-rbm variables hidden :v-linear variables :h-linear hidden))
+  )
 
 ;;(require :sb-sprof)
 ;;(defun do-sprof-rbm-learn-minibatch (max-iterations)
 ;;  (sb-sprof:with-profiling (:max-samples 1000 :report :flat :loop nil :reset t)
 ;;    (rbm-learn-minibatch *data* (new-rbm 6 3 :h-binary 3) 1 .9 .0002 max-iterations))
-
-(defun h-from-v (v w)
-;;  (format t "h-from-v~%")
-  (let ((h-size (cdr (matrix-dim w)))
-	(v-size (length v)))
-    (loop for j below h-size collect
-	 (sigmoid (loop for i below v-size for wi in w for vi in v sum
-		       (progn
-;;			 (format t "i:~A j:~A wij:~A~%" i j (elt wi j))
-			 (* vi (elt wi j))))))))
-
-(defun v-from-h (w h)
-;;  (format t "v-from-h~%")
-  (let ((h-size (cdr (matrix-dim w)))
-	(v-size (car (matrix-dim w))))
-;;	(v-size (length v)))
-    (loop for i below v-size for wi in w collect
-	 (sigmoid (loop for j below h-size for hj in h sum
-		       (progn 
-;;				   (format t "i:~A j:~A wij:~A~%" i j (elt wi j))
-			 (* hj (elt wi j))))))))
-
-(defun activate (n)
-  (loop for p in n collect
-       (if (<= (random 1.0) p) 1 0)))
-
-(defun bias (n)
-  "set last element to 1 (bias node)"
-  (let ((m (loop for i in n collect i)))
-    (setf (elt m (1- (length m))) 1)
-    m))
-
-(defun learn (v w rate)
-  ;; v are the input layer values, w is the connection matrix
-  (let* ((h (h-from-v v w))
-	 (ha (activate h))
-	 (pos (outer v h))
-	 (v1 (v-from-h w ha))
-	 (v1b (bias v1))
-	 (h1 (h-from-v v1b w))
-	 (neg (outer v1b h1))
-	 (update (num* rate (num- pos neg))))
-    update))
-
-(defun recall (v w &optional (verbose nil))
-  (let* ((h (h-from-v v w))
-	 (ha (activate h)))
-    (when verbose
-      (format t "h:~A~%" h))
-    (v-from-h w ha)))
-
-;; learn a simple relation between a and a+.5
-(defun test1 (num-hidden)
-  (let ((w (loop for i below 3 collect (loop for j below num-hidden collect (1- (random 2.0))))))
-    (loop for i below 1000 do
-	 (let* ((a (random .5))
-		(v (list a (+ .5 a) 1)))
-	   (format t "~%i:~A v:~A~%" i v)
-	   (setf w (num+ w (learn v w .05)))
-	   (format t "new w:~A~%h:~A~%" w (h-from-v v w))
-	   (format t "v-recall:~A~%" (recall v w))))))
-  
-(defun test2 (num-hidden)
-  (let ((w (loop for i below 10 collect (loop for j below num-hidden collect (- (random 0.2) 0.1)))))
-    (loop for i below 1000 do
-	 (let* ((a (random 3))
-		(v (ecase a
-		     (0 '(1 1 1 0 0 0 0 0 0 1))
-		     (1 '(0 0 0 1 1 1 0 0 0 1))
-		     (2 '(0 0 0 0 0 0 1 1 1 1)))))
-	   (format t "~%i:~A v:~A~%" i v)
-	   (setf w (num+ w (learn v w .05)))
-	   (format t "new w:~A~%h:~A~%" w (h-from-v v w))
-	   (format t "v-recall:~A~%" (recall v w))))
-    w))
-
-(defun hidden-test2 (w)
-  (loop for v in '((1 1 1 0 0 0 0 0 0 1)
-		   (0 0 0 1 1 1 0 0 0 1)
-		   (0 0 0 0 0 0 1 1 1 1)) collect
-       (h-from-v v w)))
-
-(defun recall-test2 (w)
-  (loop for v in '((1 1 1 0 0 0 0 0 0 1)
-		   (0 0 0 1 1 1 0 0 0 1)
-		   (0 0 0 0 0 0 1 1 1 1)) collect
-       (recall v w)))
