@@ -25,7 +25,7 @@ RESULT-TYPE is the resulting sequence type."
 (defun map-into-list (result-list function &rest lists)
   "Same as map-into, but for lists instead of sequences.
 This function is faster than map-into, but slower than DO (which is possible when the number of LISTS is fixed and FUNCTION is known)."
-  (declare (optimize (speed 3) (debug 0) (safety 0) (space 0) (compilation-speed 0))
+  (declare (optimize (speed 3) (debug 0) (safety 3) (space 0) (compilation-speed 0))
 	   (type list result-list lists))
   ;; TODO: write a macro-expansion for this function which uses DO, if the number of lists is fixed.
   (macrolet ((labels-rec-n (name n &body body)
@@ -64,9 +64,19 @@ This function is faster than map-into, but slower than DO (which is possible whe
 	     (4 (rec4 result-list (first lists) (second lists) (third lists) (fourth lists)))
 	     (t (rec result-list (copy-list lists))))))))))))
 
+(defun copy-array (array &key (array-element-type (array-element-type array)) (adjustable (adjustable-array-p array)))
+  ;; (fill-pointer array) is only available for arrays of type vector, therefore I'm omitting it.
+  (let* ((array-dimensions (array-dimensions array))
+	 (res (make-array array-dimensions :element-type array-element-type :adjustable adjustable))
+	 (max-index (apply #'* array-dimensions)))
+    ;;(prind (array-element-type res) array-element-type adjustable)
+    (loop for i below max-index do
+	 (setf (row-major-aref res i) (coerce (row-major-aref array i) array-element-type)))
+    res))
+
 (defun random-gaussian-2 ()
   "Return two with mean 0 and standard deviation 1 normally distributed random variables."
-  (declare (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0)))
+  (declare (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 3) (space 0)))
   (flet ((xinit ()
 	   (the single-float (- (* 2.0 (random 1.0)) 1))))
     (do* ((x1 (xinit) (xinit))
@@ -100,7 +110,7 @@ This function is faster than map-into, but slower than DO (which is possible whe
 (let ((next-random-gaussian nil))
   (defun random-gaussian ()
     "Return a with mean MEAN and standard deviation SD normally distributed random variable."
-    (declare (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0)))
+    (declare (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 3) (space 0)))
     (if (null next-random-gaussian)
 	(multiple-value-bind (r1 r2) (random-gaussian-2)
 	  (setf next-random-gaussian r2)
@@ -255,7 +265,7 @@ Example: (array-dim-slice-iterate '((0 1 3 4) (6 8)) '(10 1) '(5 10) (lambda (i 
   ;;Iterate over the dim-slice-list using the variables.
   ;;Example: (array-dim-slice-iterate ((i '(0 1 3 4)) (j '(6 8))) (print (list i j)))
   ;;VAR-AND-DIM-SLICE-LIST is a list of (VAR DIM-SLICE) lists."
-  (declare (optimize (speed 3) (debug 0) (safety 0) (space 0) (compilation-speed 0))
+  (declare (optimize (speed 3) (debug 0) (safety 3) (space 0) (compilation-speed 0))
 	   (type list dim-slice-list inc-list))
   (when (null dim-slice-list)
     (return-from array-dim-slice-iterate nil))
@@ -470,7 +480,7 @@ N-DIM is the current dimension number (counting down), and 1 is the last.
 I0S is the list of start indices.
 I0S-MULS is the list of list of i0 (index) multipliers.
 SLICES is the list of array slices."
-  (declare (optimize (speed 3) (debug 0) (safety 0) (space 0) (compilation-speed 0))
+  (declare (optimize (speed 3) (debug 0) (safety 3) (space 0) (compilation-speed 0))
 	   (type index n-dim)
 	   (type cons i0s i0s-muls slices))
   ;;(prind n-dim i0s i0s-muls slices)
@@ -537,7 +547,7 @@ ARRAYS-SLICE is the list of array slices which is applied before iterating but a
 	       (list a-slice b-slice r-slice)
 	       (lambda (a-i b-i r-i)
 		 (declare (type index a-i b-i r-i)
-			  (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0)))
+			  (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 3) (space 0)))
 		 (setf (row-major-aref r r-i)
 		       (funcall (the function f)
 				(row-major-aref a a-i)
@@ -546,7 +556,7 @@ ARRAYS-SLICE is the list of array slices which is applied before iterating but a
 
 (defun array-array-fun-noperm (a b f r)
   (declare (type (simple-array single-float *) a b r)
-	   (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0)))
+	   (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 3) (space 0)))
   (let* ((a-dims (array-dimensions a))
 	 (b-dims (array-dimensions b))
 	 (r-dims (array-dimensions r))
@@ -564,7 +574,7 @@ ARRAYS-SLICE is the list of array slices which is applied before iterating but a
 A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices used to address elements of A and B are permuted with the function PERMUTE before calling function F."
   (declare (type cons a-perm b-perm)
 	   (type (simple-array single-float *) a b r)
-	   (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0)))
+	   (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 3) (space 0)))
   (let* ((a-dims (array-dimensions a))
 	 (b-dims (array-dimensions b))
 	 (r-dims (array-dimensions r))
@@ -681,7 +691,7 @@ A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices 
 
 (defun array-fun-noperm (a f r)
   "Fill the array R by calling function F on each element of A."
-  (declare (optimize (speed 3) (debug 0) (safety 0) (space 0) (compilation-speed 0))
+  (declare (optimize (speed 3) (debug 0) (safety 3) (space 0) (compilation-speed 0))
 	   (type (simple-array single-float) a r))
   (let ((x (reduce #'* (array-dimensions a))))
     (declare (type index x))
@@ -690,14 +700,14 @@ A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices 
   nil)
 
 (defun array-fun-perm-slice (a f r a-perm r-perm a-slice r-slice)
-  (declare (optimize (speed 3) (debug 0) (safety 0) (space 0) (compilation-speed 0))
+  (declare (optimize (speed 3) (debug 0) (safety 3) (space 0) (compilation-speed 0))
 	   (type (simple-array single-float *) a r)) ;important float declaration
   (arrays-walk (list (array-dimensions a) (array-dimensions r))
 	       (list a-perm r-perm)
 	       (list a-slice r-slice)
 	       (lambda (a-i r-i)
 		 (declare (type index a-i r-i)
-			  (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0)))
+			  (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 3) (space 0)))
 		 (setf (row-major-aref r r-i)
 		       (funcall (the function f)
 				(row-major-aref a a-i)))))
@@ -736,7 +746,7 @@ A-PERM and B-PERM are indexing permutations of matrix A and B, i.e. the indices 
 This produces a new array, where DIM is omitted.
 For all elements of the new array, call function F with pairwise items (like reduce) along the DIM axis and store the result in the element.
 Return the new array."
-  (declare (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0))
+  (declare (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 3) (space 0))
 	   (type (simple-array single-float) a))
   (let* ((a-dimensions (array-dimensions a))
 	 (before-dimensions (subseq a-dimensions 0 dim))
@@ -770,7 +780,7 @@ The new array is like A except that after the modifications by A-PERM dimension 
 For all elements of the new array, call function F with pairwise items (like reduce) along the DIM axis and store the result in the element.
 Return the new array."
   ;; The idea of this function is to permute the dimensions of A so that the dimension DIM to be omitted is coming last, and when walking the permuted array to use the consecutive elements of the last dimension in calling F.
-  (declare (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0))
+  (declare (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 3) (space 0))
 	   (type (simple-array single-float) a))
   (flet ((perm-last (perm dim)
 	   "Modify PERM so that dimension DIM is mapped last."
@@ -916,7 +926,7 @@ ARRAYS-TYPE is the element-type of RES, A, ..., Z."
 			     (declare (type (simple-array ,(car arrays-type) ,(car arrays-dim)) ,res-sym)
 				      ,@(loop for dim in (cdr arrays-dim) for sym in rest-arrays-sym for type in (cdr arrays-type) collect
 					     `(type (simple-array ,type ,dim) ,sym))
-				      (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0)))
+				      (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 3) (space 0)))
 			     ,@body)))
       ;;(print body)
       (compile nil map-into-array))))
@@ -1039,7 +1049,7 @@ The sum of the numbers of the H-parameters plus the sum of the list of numbers o
   "Do one contrastive-divergence-1 step on a restricted boltzmann machine.
 DATA is a two-dimensional array of input values: the first dimension represents the cases of the mini-batch, the second dimension represents visible neurons.
 RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
-  (declare (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 0) (space 0)))
+  (declare (optimize (speed 3) (compilation-speed 0) (debug 0) (safety 3) (space 0)))
   (let* ((w (rbm-w rbm))
 	 (v-biases (rbm-v-biases rbm))
 	 (h-biases (rbm-h-biases rbm))
@@ -1137,6 +1147,8 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 
 (defun visible-free-energy-log (data rbm)
   "For given vectors of visible layer assignments DATA and a given RBM, return the log of the free energy of the vectors in DATA."
+  (when (not (equal (array-element-type data) 'single-float))
+    (setf data (copy-array data :array-element-type 'single-float)))
   (let* ((n-visible (rbm-n-v rbm))
 	 (n-cases (array-dimension data 0))
 	 (n-hidden (rbm-n-h rbm))
@@ -1207,6 +1219,46 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 			       (0 0 0 0 1  0 0 0 1 0  0 0 1)
 			       (0 0 0 0 1  0 0 0 0 1  1 0 0)))
 (defparameter *rbmnew-rpsls* (new-rbm 13 13 :v-softmax '(5 5 3) :h-binary 13))
+;;(defparameter *rbm-rpsls* (rbm-learn-minibatch *data-rpsls* *rbmnew-rpsls* .01 0.0 .0002 10000)) yields a reconstruction-error of 20.60756.
+;;(defparameter *rbm-rpsls* (rbm-learn-minibatch *data-rpsls* *rbmnew-rpsls* .01 0.9 .0002 10000)) yields a reconstruction-error of 7.000717e-5.
+;;(defparameter *rbm-rpsls* (rbm-learn-minibatch *data-rpsls* (new-rbm 13 25 :v-softmax '(5 5 3) :h-softmax '(25)) .01 0.9 .0002 10000)) yields a reconstruction-error of 31.975252.
+;;(defparameter *rbm-rpsls* (rbm-learn-minibatch *data-rpsls* (new-rbm 13 25 :v-softmax '(5 5 3) :h-softmax '(25)) .1 0.9 .0002 10000)) yields a reconstruction-error of 35.655266, 31.311026, 31.989447, 30.147305.
+;;(defparameter *rbm-rpsls* (rbm-learn-minibatch *data-rpsls* (new-rbm 13 25 :v-softmax '(5 5 3) :h-softmax '(25)) .1 .0 .0002 10000)) yields a reconstruction-error of 31.96534, 33.841312, 31.949482.
+;;(defparameter *rbm-rpsls* (rbm-learn-minibatch *data-rpsls* (new-rbm 13 25 :v-softmax '(5 5 3) :h-softmax '(25)) 4.0 .9 .0002 1000)) yields a reconstruction-error of 31.21259, 28.04349, 32.60846.
+;;(defparameter *rbm-rpsls* (rbm-learn-minibatch *data-rpsls* (new-rbm 13 25 :v-softmax '(5 5 3) :h-softmax '(25)) 1.0 .9 .0002 1000)) yields a reconstruction-error of 25.86813, 29.170877, 27.095364, 31.12667, 27.525604.
+;;(defparameter *rbm-rpsls* (rbm-learn-minibatch *data-rpsls* (new-rbm 13 50 :v-softmax '(5 5 3) :h-softmax '(50)) 1.5 .9 .0002 1000)) yields a reconstruction-error of 32.02281, 25.38587, 27.085512, 32.00493.
+;;(defparameter *rbm-rpsls* (rbm-learn-minibatch *data-rpsls* (new-rbm 13 50 :v-softmax '(5 5 3) :h-softmax '(25 25)) 1.5 .9 .0002 1000)) yields a reconstruction-error of 0.046805285.
+;;(defparameter *rbm-rpsls* (rbm-learn-minibatch *data-rpsls* (new-rbm 13 5 :v-softmax '(5 5 3) :h-binary 5) 1.5 .9 .0002 1000)) yields a reconstruction-error of 5.8492384, 1.6673808, 4.351033, 9.602575, 3.659302.
+(defun rpsls-win-doesntwork (data rbm iterations)
+  (when (not (equal (array-element-type data) 'single-float))
+    (setf data (copy-array data :array-element-type 'single-float)))
+  (let ((v (copy-array data)))
+    (loop for j below (array-dimension v 0) do
+	 (loop for k from 10 below 13 do (setf (aref v j k) (float 1/3))))
+    (loop for i below iterations do
+	 (loop for j below (array-dimension v 0) do
+	      (loop for k from 0 below 10 do (setf (aref v j k) (aref data j k))))
+	 (prind v)
+	 (let* ((h (rbm-h-from-v v rbm))
+		(v1 (rbm-v-from-h h rbm)))
+	   (setf v v1)))
+    v))
+(defun rpsls-win (data rbm)
+  ;; TODO: rewrite this function using array-select-dim (like selecting a row or col in R) or something like that.
+  (loop for i below (array-dimension data 0) do
+       (let ((best nil)
+	     (best-free-energy nil))
+	 (loop for win-case below 3 do
+	      (let ((da (make-array '(1 13) :initial-contents '((0 0 0 0 0  0 0 0 0 0  0 0 0)))))
+		(loop for j below 10 do
+		     (setf (aref da 0 j) (aref data i j)))
+		(loop for j below 3 do
+		     (setf (aref da 0 (+ 10 j)) (if (= j win-case) 1 0)))
+		(let ((free-energy (aref (visible-free-energy-log da rbm) 0)))
+		  (when (or (null best) (> free-energy best-free-energy))
+		    (setf best da)
+		    (setf best-free-energy free-energy)))))
+	 (prind best))))
 
 (defun rbm-update (rbm w-inc v-biases-inc h-biases-inc learn-rate)
   (let* ((w (rbm-w rbm))
@@ -1226,6 +1278,8 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 
 (defun rbm-learn-minibatch (data rbm learn-rate momentum weight-cost max-iterations)
   (assert (> max-iterations 0))
+  (when (not (equal (array-element-type data) 'single-float))
+    (setf data (copy-array data :array-element-type 'single-float)))
   (labels ((rec (rbm w-inc v-biases-inc h-biases-inc iteration)
 	     (print (list "iteration" iteration))
 	     (multiple-value-bind (w-inc-1 v-biases-inc-1 h-biases-inc-1) (rbm-learn-cd1 data rbm :print-err t)
@@ -1269,6 +1323,8 @@ The resulting rbm is returned."
       (rec rbm w-inc v-biases-inc h-biases-inc 0))))
 
 (defun rbm-h-from-v (data rbm)
+  (when (not (equal (array-element-type data) 'single-float))
+    (setf data (copy-array data :array-element-type 'single-float)))
   (let* ((w (rbm-w rbm))
 	 (h-biases (rbm-h-biases rbm))
 	 (n-h (rbm-n-h rbm))
@@ -1290,6 +1346,8 @@ The resulting rbm is returned."
     pos-h-probs))
 
 (defun rbm-v-from-h (pos-h-states rbm)
+  (when (not (equal (array-element-type pos-h-states) 'single-float))
+    (setf pos-h-states (copy-array pos-h-states :array-element-type 'single-float)))
   (let* ((w (rbm-w rbm))
 	 (n-v (rbm-n-v rbm))
 	 (v-biases (rbm-v-biases rbm))
@@ -1308,6 +1366,10 @@ The resulting rbm is returned."
     neg-data))
 
 (defun rbm-reconstruction-error (data rbm &key (neg-data (rbm-v-from-h (rbm-h-from-v data rbm) rbm)))
+  (when (not (equal (array-element-type data) 'single-float))
+    (setf data (copy-array data :array-element-type 'single-float)))
+  (when (not (equal (array-element-type neg-data) 'single-float))
+    (setf neg-data (copy-array neg-data :array-element-type 'single-float)))
   (let* ((n-cases (array-dimension data 0))
 	 (n-v (rbm-n-v rbm))
 	 (err-array (make-array (list n-cases n-v) :element-type 'single-float)))
