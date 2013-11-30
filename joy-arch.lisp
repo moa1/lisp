@@ -208,6 +208,10 @@ Example: (list-replace-symbols '(a b (c a (d)) e) '(a 1 e nil)) == '(1 B (C 1 (D
   ((cd-value :initarg :cd-value :reader joy-timeout-error-cd-value)) ;the value of the countdown at the time when the timeout was detected (<= 0.0)
   (:documentation "An error signaling a too long runtime of a joy program."))
 
+(define-condition unknown-op (error)
+  ((op :initarg :op :reader unknown-op-op))
+  (:documentation "An error signaling an unknown operation."))
+
 ;; '((1) 1 DEFINE 1)
 (defun joy-eval (stk exp &key (heap (make-hash-table)) (c (make-counter 0)) (cd (make-countdown 0.0)))
   (declare (optimize (debug 0) (compilation-speed 0) (speed 3) (space 0))
@@ -313,17 +317,22 @@ This function must not modify stk, only copy it (otherwise test values might be 
 			      (progn
 				(setf (gethash (caar stk) heap) (cadr stk)) ;(cdar stk) is not used.
 				(cddr stk))))))
+	 ;; TODO: add a "constant" joy operation, which defines a constant and signals an error if a re-definition defines it differently. (maybe create a new const-heap, which stores the constants.)
 	 ;; implement an "undefine", which ends the scope of a "define"d program, but leaves defined programs (and programs on the stack) using the to be "undefine"d program running intact. this would require replacing the "define"d name with an anonymous name.
 	 (t
-	  (if (or (not (symbolp (car exp))) (null heap))
+	  (if (or (numberp (car exp)) (listp (car exp)))
 	      (cons (car exp) stk)
-	      (multiple-value-bind (value present-p) (gethash (car exp) heap)
+	      (multiple-value-bind (value present-p) (when (not (null heap)) (gethash (car exp) heap))
 		(if present-p
 		    (progn (setf exp (append '(1) value (cdr exp))) stk)
-		    (cons (car exp) stk))))))
+		    (error (make-condition 'unknown-op :op (car exp))))))))
        (cdr exp) :heap heap :c c :cd cd)))
 
-(defun joy-eval2 (stk exp stks exps &key (heap (make-hash-table)) (c (make-counter 0)) (cd (make-countdown 0.0)))
+(defun default-no-op (op stk exp stks exps heap)
+  (declare (ignore stk exp stks exps heap))
+  (error (make-condition 'unknown-op :op op)))
+
+(defun joy-eval2 (stk exp stks exps &key (heap (make-hash-table)) (c (make-counter 0)) (cd (make-countdown 0.0)) (no-op #'default-no-op))
   (declare (optimize (debug 0) (compilation-speed 0) (speed 3) (space 0))
 	   (type (function () fixnum) c cd))
   "Note that this function does not fail for the same inputs as the joy implementation by Manfred von Thun, e.g. '(branch) returns nil, but would fail for the real implementation.
@@ -452,12 +461,19 @@ This function must not modify stk, only copy it (otherwise test values might be 
 				       (cddr stk))))))
 		;; implement an "undefine", which ends the scope of a "define"d program, but leaves defined programs (and programs on the stack) using the to be "undefine"d program running intact. this would require replacing the "define"d name with an anonymous name.
 		(t
-		 (if (or (not (symbolp (car exp))) (null heap))
+		 (if (or (numberp (car exp)) (listp (car exp)) (null heap))
 		     (cons (car exp) stk)
-		     (multiple-value-bind (value present-p) (gethash (car exp) heap)
+		     (multiple-value-bind (value present-p) (when (not (null heap)) (gethash (car exp) heap))
 		       (if present-p
 			   (progn (setf exp (append '(1) value (cdr exp))) stk)
-			   (cons (car exp) stk))))))
+			   (multiple-value-bind (new-stk new-exp new-stks new-exps new-heap)
+			       (funcall no-op (car exp) stk (cdr exp) stks exps heap)
+			     (setf stk new-stk)
+			     (setf exp (cons nil new-exp))
+			     (setf stks new-stks)
+			     (setf exps new-exps)
+			     (setf heap new-heap)
+			     stk))))))
 	      (cdr exp) stks exps))))))
 
 ;; For example, the step combinator can be used to access all elements of an aggregate in sequence. For strings and lists this means the order of their occurrence, for sets it means the underlying order. The following will step through the members of the second list and swons them into the initially empty first list. The effect is to reverse the non-empty list, yielding [5 6 3 8 2].  
@@ -507,9 +523,9 @@ This function must not modify stk, only copy it (otherwise test values might be 
 	  (error (format nil "joy-test2 failed for stk:~A exp:~A res:~A r:~A"
 			 stk exp res r))))))
 
-(joy-test nil '(nil nil) '(nil nil))
+(joy-test nil '(nill nill) '(nil nil))
 (joy-test nil '(5 4 +) '(9))
-(joy-test nil '(nil 5 and) '(nil))
+(joy-test nil '(nill 5 and) '(nil))
 (joy-test nil '(3 5 and) '(3))
 (joy-test nil '(true (1) (2) branch) '(1))
 (joy-test nil '(nill (1) (2) branch) '(2))
@@ -533,8 +549,8 @@ This function must not modify stk, only copy it (otherwise test values might be 
 (joy-test nil '(true not) '(nil))
 (joy-test nil '((a 1 b 2) (a c) patsub) '((1 c)))
 ;;(joy-test nil '(((a) (b) (c)) (1 2) (a b c) patmat) '((c nil b 2 a 1)))
-(joy-test nil '(nil 5 or) '(5))
-(joy-test nil '(nil nil or) '(nil))
+(joy-test nil '(nill 5 or) '(5))
+(joy-test nil '(nill nill or) '(nil))
 (joy-test nil '(5 4 pop) '(5))
 (joy-test nil '(5 pred) '(4))
 (joy-test nil '(5 quote) '((5)))
@@ -543,7 +559,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 (joy-test nil '(1 2 <) '(t))
 (joy-test nil '(2 1 <) '(nil))
 (joy-test nil '(1 2 stack) '((2 1) 2 1))
-(joy-test nil '((swap cons) (swons) define 0 nil (1 2 3) (swons) step) '((3 2 1) 0))
+(joy-test nil '((swap cons) (swons) define 0 nill (1 2 3) (swons) step) '((3 2 1) 0))
 (joy-test nil '(4 5 -) '(-1))
 (joy-test nil '(3 succ) '(4))
 (joy-test nil '(1 2 swap) '(1 2))
@@ -559,7 +575,6 @@ This function must not modify stk, only copy it (otherwise test values might be 
 (joy-test nil '(2 (dup +) (superman) define) '(2))
 (joy-test nil '(2 (1) (superman) define superman) '(1 2))
 (joy-test nil '((1) (a) define a (2) (a) define a 1) '(1 2 1))
-(joy-test nil '(1 a) '(a 1))
 (joy-test nil '(gensym quote dup (5) swap define i) '(5))
 ;; own defines. maybe write fitness tests for letting them find
 (joy-test nil '((0 equal) (null) define 0 null) '(t))
@@ -567,32 +582,27 @@ This function must not modify stk, only copy it (otherwise test values might be 
 (joy-test nil '((pred) (dec) define 5 dec) '(4))
 (joy-test nil '((succ) (inc) define 5 inc) '(6))
 (joy-test nil '((swap cons) (swons) define (2) 1 swons) '((1 2)))
-(joy-eval nil
-	  ;;doesn't really calculate factorial, b/c the y-operator doesn't work.
-	  '(((dup cons) swap concat dup cons i) (y) define
-	    (((pop null) (pop succ) ((dup pred) dip i *) ifte) y) (fac) define
-	    1 fac) :heap (make-hash-table))
 ;; development of while as a recursive program:
 (joy-eval2 '((pop) (pop pop stack (1) equal not) 7 6 5 4 3 2 1)
-	   '(((stack) dip dup (si uncons pop) dip) dip) ;apply the while-test.
-	   nil nil)
-(joy-eval2 '((pop) (pop pop stack (1) equal not) 7 6 5 4 3 2 1) 
-	   '(((stack) dip dup (si uncons pop) dip) dip
-	     dup (swap ((dup) dip swap) dip swap) dip swap) ;duplicate boolean and while-program and place them.
-	   nil nil)
-(joy-eval2 '((pop) (pop pop stack (1) equal not) 7 6 5 4 3 2 1) 
-	   '(((stack) dip dup (si uncons pop) dip) dip
-	     dup (swap ((dup) dip swap) dip swap) dip swap
-	     (((nill branch) dip) dip) dip ;apply while-program.
-	     (while) nill branch) ;prepare test for recursion and recursion.
-	   nil nil)
-(joy-eval2 '((pop) (pop pop stack (1) equal not) 7 6 5 4 3 2 1) 
-	   '((((stack) dip dup (si uncons pop) dip) dip ;finished version
+	    '(((stack) dip dup (si uncons pop) dip) dip) ;apply the while-test.
+	    nil nil)
+(joy-eval2 '((pop) (pop pop stack (1) equal not) 7 6 5 4 3 2 1)
+	    '(((stack) dip dup (si uncons pop) dip) dip
+	      dup (swap ((dup) dip swap) dip swap) dip swap) ;duplicate boolean and while-program and place them.
+	    nil nil)
+(joy-eval2 '((pop) (pop pop stack (1) equal not) 7 6 5 4 3 2 1)
+	    '(((stack) dip dup (si uncons pop) dip) dip
 	      dup (swap ((dup) dip swap) dip swap) dip swap
-	      (((nill branch) dip) dip) dip
-	      (while) (pop pop) branch)
-	     (while) define while)
-	   nil nil)
+	      (((nill branch) dip) dip) dip ;apply while-program.
+	      (nill) nill branch) ;prepare test for recursion and recursion.
+	    nil nil)
+(joy-eval2 '((pop) (pop pop stack (1) equal not) 7 6 5 4 3 2 1)
+	    '((((stack) dip dup (si uncons pop) dip) dip ;finished version
+	       dup (swap ((dup) dip swap) dip swap) dip swap
+	       (((nill branch) dip) dip) dip
+	       (while) (pop pop) branch)
+	      (while) define while)
+	    nil nil)
 
 ;; compare (count-tree-nodes EXP) for the following EXPs:
 ;;34: (joy-eval '() '((pred dup 0 < (dup 0 equal) dip or (pop) (dup (*) dip fak-1) branch) (fak-1) define
@@ -613,6 +623,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
   (handler-case (joy-eval stk exp :heap heap :c c :cd cd)
     (joy-overrun-error () 'overrun)
     (joy-timeout-error () 'timeout)
+    (unknown-op () 'unknown-op)
     #+CMU (simple-error () 'error)
     #+CMU (arithmetic-error () 'error)
     (simple-type-error () 'error)
@@ -1053,13 +1064,12 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 	  (- (+ 10 (abs (- (length r) (length goal)))))))) ;replace this with the edit-distance between r and goal
 
 (defparameter *test-cases-rotate*
-  (make-test-cases :values '((a b c) (x y z d e f) ((1) (2 3) j k l))
-		   :generate (lambda (v) (declare (ignore v)) (let ((l (random 10)) (a (sample *letter-symbols*)) (b (sample *letter-symbols*)) (c (sample *letter-symbols*)))
-					   (list (nconc (list a b c) (loop for i below l collect (random 10))))))
-		   :goal (lambda (v) (destructuring-bind (a b c &rest r) (reverse v) (nconc (list c b a) r)))
+  (make-test-cases :values '(((a b c) unstack) ((x y z d e f) unstack) (((1) (2 3) j k l) unstack))
+		   :generate (lambda (v) (declare (ignore v)) (let ((l (random 10)) (a (gensym)) (b (gensym)) (c (gensym)))
+								(list (list (nconc (list a b c) (loop for i below l collect (random 10))) 'unstack))))
+		   :goal (lambda (v) (destructuring-bind (a b c &rest r) (car v) (nconc (list c b a) r)))
 		   :score #'score-list-similarity))
 (assert (eq 0 (joy-show-fitness '((swap) dip swap (swap) dip) *test-cases-rotate*)))
-(assert (eq 0 (joy-show-fitness '(SWAP QUOTE CONS DIP) *test-cases-rotate*)))
 
 (defun score-one-symbol-equal (r goal exp)
   (declare (ignorable exp))
