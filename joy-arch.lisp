@@ -25,9 +25,6 @@
 	  :initform 0
 	  :initarg :steps)))
 
-(define-condition joy-error (error)
-  ((text :initarg :text :reader :text)))
-
 (defun zip (&rest lists)
   (apply #'mapcar #'list lists))
 
@@ -64,6 +61,10 @@ The second, called with a number of seconds, postpones the timer by the number o
 	(check-type c fixnum)
 	(values	(lambda () (- c (get-internal-run-time)))
 		(lambda (seconds-delta) (incf c (* seconds-delta internal-time-units-per-second)))))))
+
+(define-condition time-error (condition)
+  ((time :initarg :time :reader time-error-time)) ;the value describing the time when the error was detected
+  (:documentation "An error having to do with time."))
 
 (defun mean (seq)
   (/ (apply #'+ seq) (length seq)))
@@ -194,19 +195,32 @@ Example: (list-replace-symbols '(a b (c a (d)) e) '(a 1 e nil)) == '(1 B (C 1 (D
 (defvar +list-replace-symbols-seconds-per-node+ (let ((l '(a b (c a (d)) e)) (bind '(a 1 e nil)))
 						  (/ (seconds-per-call (lambda () (list-replace-symbols l bind)) :mintime 0.5) (+ (count-tree-nodes l) (count-tree-nodes bind)))))
 
-(define-condition joy-time-error (error)
-  ((stk :initarg :stk :reader joy-time-error-stk) ;the joy stack before the operation causing the error.
-   (exp :initarg :exp :reader joy-time-error-exp) ;the joy expressions before the operation causing the error. (this means (car exp) is the operation in question.)
-   (heap :initarg :heap :reader joy-time-error-heap)) ;the joy heap before the operation causing the error.
-  (:documentation "An error signaling a too long runtime of a joy program."))
+(define-condition joy-error (error)
+  ((stk :initarg :stk :reader joy-error-stk) ;the joy stack before the operation causing the error.
+   (exp :initarg :exp :reader joy-error-exp) ;the joy expressions before the operation causing the error. (this means (car exp) is the operation causing the error.)
+   (heap :initarg :heap :reader joy-error-heap)) ;the joy heap before the operation causing the error.
+  (:documentation "An error in a joy program."))
 
-(define-condition joy-overrun-error (joy-time-error)
-  ((c-value :initarg :c-value :reader joy-overrun-error-c-value)) ;the value of the counter at the time when the overrun was detected
+(define-condition joy-eval-2-error (joy-error)
+  ((stks :initarg :stks :reader joy-error-2-stks)
+   (exps :initarg :exps :reader joy-error-2-exps))
+  (:documentation "An error in a joy program during evaluation with joy-eval-2."))
+
+(define-condition joy-counter-error (joy-error time-error)
+  ()
   (:documentation "An error signaling too many computation steps of a joy program."))
 
-(define-condition joy-timeout-error (joy-time-error)
-  ((cd-value :initarg :cd-value :reader joy-timeout-error-cd-value)) ;the value of the countdown at the time when the timeout was detected (<= 0.0)
+(define-condition joy-countdown-error (joy-error time-error)
+  ()
   (:documentation "An error signaling a too long runtime of a joy program."))
+
+(define-condition joy-eval-2-counter-error (joy-eval-2-error time-error)
+  ()
+  (:documentation "An error signaling too many computation steps of a joy program evaluated with joy-eval-2."))
+
+(define-condition joy-eval-2-countdown-error (joy-eval-2-error time-error)
+  ()
+  (:documentation "An error signaling a too long runtime of a joy program evaluated with joy-eval-2."))
 
 (define-condition unknown-op (error)
   ((op :initarg :op :reader unknown-op-op))
@@ -223,12 +237,12 @@ This function must not modify stk, only copy it (otherwise test values might be 
     ;;(print (list "stk" stk "exp" exp "c-value" c-value "cd-value" cd-value))
     (when (<= c-value 0)
       (restart-case
-	  (error (make-condition 'joy-overrun-error :stk stk :exp exp :heap heap :c-value c-value))
+	  (error (make-condition 'joy-counter-error :stk stk :exp exp :heap heap :time c-value))
 	(continue ()
 	  :report "Continue, ignoring the counter overrun this step.")))
     (when (<= cd-value 0.0) ;if this check doesn't do what it is supposed to, check the output type of (funcall cd) and whether it is identical to the cd type declaration of joy-eval!
       (restart-case
-	  (error (make-condition 'joy-timeout-error :stk stk :exp exp :heap heap :cd-value cd-value))
+	  (error (make-condition 'joy-countdown-error :stk stk :exp exp :heap heap :time cd-value))
 	(continue ()
 	  :report "Continue, ignoring the countdown timeout this step."))))
   (if (null exp)
@@ -267,14 +281,14 @@ This function must not modify stk, only copy it (otherwise test values might be 
 	 (patmat  (let ((vars (caddr stk)) (exp (cadr stk)) (pat (car stk)) (cd-value (funcall cd)))
 		    (if (> (* +patmat-seconds-per-node+ (+ (count-tree-nodes exp) (count-tree-nodes pat)))
 			   cd-value)
-			(error (make-condition 'joy-timeout-error :stk stk :exp exp :heap heap :cd-value cd-value))
+			(error (make-condition 'joy-countdown-error :stk stk :exp exp :heap heap :cd-value cd-value))
 			(cons
 			 (alist-to-plist (patmat vars exp pat))
 			 (cdddr stk)))))
 	 (patsub  (let ((l (car stk)) (bind (cadr stk)) (cd-value (funcall cd)))
 		    (if (> (* +list-replace-symbols-seconds-per-node+ (+ (count-tree-nodes l) (count-tree-nodes bind)))
 			   cd-value)
-			(error (make-condition 'joy-timeout-error :stk stk :exp exp :heap heap :cd-value cd-value))
+			(error (make-condition 'joy-countdown-error :stk stk :exp exp :heap heap :cd-value cd-value))
 			(cons (list-replace-symbols l bind) (cddr stk)))))
 	 (pop     (cdr stk))
 	 (pred    (cons (1- (car stk)) (cdr stk)))
@@ -332,7 +346,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
   (declare (ignore stk exp stks exps heap))
   (error (make-condition 'unknown-op :op op)))
 
-(defun joy-eval2 (stk exp stks exps &key (heap (make-hash-table)) (c (make-counter 0)) (cd (make-countdown 0.0)) (no-op #'default-no-op))
+(defun joy-eval-2 (stk exp stks exps &key (heap (make-hash-table)) (c (make-counter 0)) (cd (make-countdown 0.0)) (no-op #'default-no-op))
   (declare (optimize (debug 0) (compilation-speed 0) (speed 3) (space 0))
 	   (type (function () fixnum) c cd))
   "Note that this function does not fail for the same inputs as the joy implementation by Manfred von Thun, e.g. '(branch) returns nil, but would fail for the real implementation.
@@ -344,16 +358,16 @@ This function must not modify stk, only copy it (otherwise test values might be 
     ;;(print (list "stk" stk "exp" exp "c-value" c-value "cd-value" cd-value))
     (when (<= c-value 0)
       (restart-case
-	  (error (make-condition 'joy-overrun-error :stk stk :exp exp :heap heap :c-value c-value))
+	  (error (make-condition 'joy-eval-2-counter-error :stk stk :exp exp :stks stks :exps exps :heap heap :time c-value))
 	(continue ()
-	  :report "Continue, ignoring the counter overrun this step.")))
+	  :report "Continue, ignoring the counter overrun this evaluation step.")))
     (when (<= cd-value 0.0) ;if this check doesn't do what it is supposed to, check the output type of (funcall cd) and whether it is identical to the cd type declaration of joy-eval!
       (restart-case
-	  (error (make-condition 'joy-timeout-error :stk stk :exp exp :heap heap :cd-value cd-value))
+	  (error (make-condition 'joy-eval-2-countdown-error :stk stk :exp exp :stks stks :exps exps :heap heap :time cd-value))
 	(continue ()
-	  :report "Continue, ignoring the countdown timeout this step."))))
+	  :report "Continue, ignoring the countdown timeout this evaluation step."))))
   (macrolet ((rec (stk exp stks exps)
-	       `(joy-eval2 ,stk ,exp ,stks ,exps :heap heap :c c :cd cd)))
+	       `(joy-eval-2 ,stk ,exp ,stks ,exps :heap heap :c c :cd cd :no-op no-op)))
     (if (null exp)
 	(if (null exps)
 	    (progn
@@ -421,14 +435,14 @@ This function must not modify stk, only copy it (otherwise test values might be 
 		(patmat  (let ((vars (caddr stk)) (exp (cadr stk)) (pat (car stk)) (cd-value (funcall cd)))
 			   (if (> (* +patmat-seconds-per-node+ (+ (count-tree-nodes exp) (count-tree-nodes pat)))
 				  cd-value)
-			       (error (make-condition 'joy-timeout-error :stk stk :exp exp :heap heap :cd-value cd-value))
+			       (error (make-condition 'joy-countdown-error :stk stk :exp exp :heap heap :cd-value cd-value))
 			       (cons
 				(alist-to-plist (patmat vars exp pat))
 				(cdddr stk)))))
 		(patsub  (let ((l (car stk)) (bind (cadr stk)) (cd-value (funcall cd)))
 			   (if (> (* +list-replace-symbols-seconds-per-node+ (+ (count-tree-nodes l) (count-tree-nodes bind)))
 				  cd-value)
-			       (error (make-condition 'joy-timeout-error :stk stk :exp exp :heap heap :cd-value cd-value))
+			       (error (make-condition 'joy-countdown-error :stk stk :exp exp :heap heap :cd-value cd-value))
 			       (cons (list-replace-symbols l bind) (cddr stk)))))
 		(pop     (cdr stk))
 		(pred    (cons (1- (car stk)) (cdr stk)))
@@ -518,7 +532,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 		      (while) (pop pop) branch))
 	 (heap (make-hash-table)))
     (setf (gethash 'while heap) joy-while)
-    (let ((r (joy-eval2 stk exp nil nil :heap heap)))
+    (let ((r (joy-eval-2 stk exp nil nil :heap heap)))
       (if (not (equal r res))
 	  (error (format nil "joy-test2 failed for stk:~A exp:~A res:~A r:~A"
 			 stk exp res r))))))
@@ -583,20 +597,20 @@ This function must not modify stk, only copy it (otherwise test values might be 
 (joy-test nil '((succ) (inc) define 5 inc) '(6))
 (joy-test nil '((swap cons) (swons) define (2) 1 swons) '((1 2)))
 ;; development of while as a recursive program:
-(joy-eval2 '((pop) (pop pop stack (1) equal not) 7 6 5 4 3 2 1)
+(joy-eval-2 '((pop) (pop pop stack (1) equal not) 7 6 5 4 3 2 1)
 	    '(((stack) dip dup (si uncons pop) dip) dip) ;apply the while-test.
 	    nil nil)
-(joy-eval2 '((pop) (pop pop stack (1) equal not) 7 6 5 4 3 2 1)
+(joy-eval-2 '((pop) (pop pop stack (1) equal not) 7 6 5 4 3 2 1)
 	    '(((stack) dip dup (si uncons pop) dip) dip
 	      dup (swap ((dup) dip swap) dip swap) dip swap) ;duplicate boolean and while-program and place them.
 	    nil nil)
-(joy-eval2 '((pop) (pop pop stack (1) equal not) 7 6 5 4 3 2 1)
+(joy-eval-2 '((pop) (pop pop stack (1) equal not) 7 6 5 4 3 2 1)
 	    '(((stack) dip dup (si uncons pop) dip) dip
 	      dup (swap ((dup) dip swap) dip swap) dip swap
 	      (((nill branch) dip) dip) dip ;apply while-program.
 	      (nill) nill branch) ;prepare test for recursion and recursion.
 	    nil nil)
-(joy-eval2 '((pop) (pop pop stack (1) equal not) 7 6 5 4 3 2 1)
+(joy-eval-2 '((pop) (pop pop stack (1) equal not) 7 6 5 4 3 2 1)
 	    '((((stack) dip dup (si uncons pop) dip) dip ;finished version
 	       dup (swap ((dup) dip swap) dip swap) dip swap
 	       (((nill branch) dip) dip) dip
@@ -621,8 +635,8 @@ This function must not modify stk, only copy it (otherwise test values might be 
 
 (defun joy-eval-handler (stk exp &key (heap (make-hash-table)) (c (make-counter)) (cd (make-countdown)))
   (handler-case (joy-eval stk exp :heap heap :c c :cd cd)
-    (joy-overrun-error () 'overrun)
-    (joy-timeout-error () 'timeout)
+    (joy-counter-error () 'counter-error)
+    (joy-countdown-error () 'countdown-error)
     (unknown-op () 'unknown-op)
     #+CMU (simple-error () 'error)
     #+CMU (arithmetic-error () 'error)
@@ -1221,7 +1235,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 ;;;(joy-show-fitness i tc)
 ;)
 
-(defparameter *test-cases-joy-eval-and-joy-eval2-equivalence*
+(defparameter *test-cases-joy-eval-and-joy-eval-2-equivalence*
   (make-test-cases :values '(())
 		   :generate (lambda (vs) vs)
 		   :goal (constantly nil)
@@ -1233,9 +1247,9 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 						(while) (pop pop) branch))
 				   (heap (make-hash-table)))
 			      (setf (gethash 'while heap) joy-while)
-			      (let ((r2 (handler-case (joy-eval2 nil exp nil nil :heap heap :c (make-counter 1000))
-					  (joy-overrun-error () 'overrun)
-					  (joy-timeout-error () 'timeout)
+			      (let ((r2 (handler-case (joy-eval-2 nil exp nil nil :heap heap :c (make-counter 1000))
+					  (joy-counter-error () 'counter)
+					  (joy-coundown-error () 'coundown)
 					  #+CMU (simple-error () 'error)
 					  #+CMU (arithmetic-error () 'error)
 					  (simple-type-error () 'error)
@@ -1246,8 +1260,8 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 					  #+SBCL (SB-KERNEL::ARG-COUNT-ERROR () 'error))))
 				(assert (equal r r2) (r r2) "assertion failed. r:~A != r2:~A for exp:~A" r r2 exp)))
 			    0)))
-;;(tournament-new '() 200 1000000 *test-cases-joy-eval-and-joy-eval2-equivalence* (remove 'sample (remove 'gensym *joy-ops*)) 1000 0.0)
-;; NOTE: joy-eval and joy-eval2 with DEFINEd WHILE differ, because it can be redefined, but the built-in WHILE cannot.
+;;(tournament-new '() 200 1000000 *test-cases-joy-eval-and-joy-eval-2-equivalence* (remove 'sample (remove 'gensym *joy-ops*)) 1000 0.0)
+;; NOTE: joy-eval and joy-eval-2 with DEFINEd WHILE differ, because it can be redefined, but the built-in WHILE cannot.
 
 ;; Add a test-cases that scores joy programs by the value they return.
 ;; The length of the joy programs is also scored, programs of length larger than a predefined number receive a very low fitness.
@@ -1422,7 +1436,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 	  (let ((new-fit (fitness-score-test-values fitness test-goal-values new max-ticks max-seconds)))
 	    ;;(print (list "c1" c1 "c2" c2 "c2-fit" c2-fit "new-fit" new-fit))
 	    (when (or (> new-fit c2-fit) (and (= new-fit c2-fit) (chance .5)))
-	      ;; sometimes, c2-fit can become very low, because of a TIMEOUT in joy-eval due to garbage collection or so.
+	      ;; sometimes, c2-fit can become very low, because of a countdown timeout in joy-eval due to garbage collection or so.
 	      ;; then, c2 is replaced by a new-mut with potentially lower fitness.
 	      ;; therefore, make the population size big enough to guard against losing good genomes.
 	      (setf (elt pop c2) new)
@@ -1711,11 +1725,11 @@ Signal the same errors that JOY-EVAL would."
     (funcall fun count stk exp heap)
     (multiple-value-bind (counter counter-delta) (make-counter 2) ;not 1 for some reason.
       (handler-bind
-	  ((joy-overrun-error (lambda (condition)
+	  ((joy-counter-error (lambda (condition)
 				(let ((c-value (funcall c)))
 				  (when (> c-value 0)
 				    (incf count)
-				    (funcall fun count (joy-time-error-stk condition) (joy-time-error-exp condition) (joy-time-error-heap condition))
+				    (funcall fun count (joy-error-stk condition) (joy-error-exp condition) (joy-error-heap condition))
 				    (funcall counter-delta 1)
 				    (invoke-restart 'continue))))))
 	(joy-eval stk exp :heap heap :c counter :cd cd)))))
