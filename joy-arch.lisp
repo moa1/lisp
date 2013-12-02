@@ -1016,14 +1016,14 @@ The test-cases' test values must be ordered increasingly."
 			  (b (car (elt values (mod (1+ i) (length values))))))
 		     (list (+ a (random (- b a))))))))
 
-(defparameter *fitness-invalid* -1000000) ;score for invalid joy-expressions or invalid results
+(defconstant +fitness-invalid+ -1000000) ;score for invalid joy-expressions or invalid results
 
 (defun score-one-value (r goal exp)
   "calculates the score of the joy-eval-result r against the goal.
-r should be a list of one value, otherwise *fitness-invalid* is returned."
+r should be a list of one value, otherwise +fitness-invalid+ is returned."
   (declare (ignorable exp))
   (if (or (not (listp r)) (not (numberp (car r))) (not (eq (cdr r) nil)))
-      *fitness-invalid*
+      +fitness-invalid+
       (- (absdiff goal (car r)))))
 
 (defstruct test-cases
@@ -1050,7 +1050,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 (defun score-stacklength (r goal exp)
   (declare (ignorable exp))
   (if (or (not (listp r)) (not (proper-list-p r)))
-      *fitness-invalid*
+      +fitness-invalid+
       (- (absdiff (length r) goal))))
 
 (defparameter *test-cases-stacklength*
@@ -1072,7 +1072,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 (defun score-list-similarity (r goal exp)
   (declare (ignorable exp))
   (if (or (not (listp r)) (not (proper-list-p r)))
-      *fitness-invalid*
+      +fitness-invalid+
       (if (equal r goal)
 	  0
 	  (- (+ 10 (abs (- (length r) (length goal)))))))) ;replace this with the edit-distance between r and goal
@@ -1088,7 +1088,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 (defun score-one-symbol-equal (r goal exp)
   (declare (ignorable exp))
   (if (or (not (listp r)) (not (numberp (car r))) (not (eq (cdr r) nil)))
-      *fitness-invalid*
+      +fitness-invalid+
       (if (equal (car r) goal) 0 -10)))
 
 (defparameter *test-cases-at*
@@ -1147,10 +1147,10 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 		      :score (lambda (r goal exp) (declare (ignore goal))
 				     (if (= exp-nodes (count-tree-nodes exp))
 					 (if (eq r 'error) 
-					     (progn (incf error-c) *fitness-invalid*)
+					     (progn (incf error-c) +fitness-invalid+)
 					     (progn (incf ok-c) 0))
 					 (if (eq r 'error)
-					     *fitness-invalid*
+					     +fitness-invalid+
 					     0))))
      (lambda () (values goal-c error-c ok-c)))))
 
@@ -1192,10 +1192,10 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 					 (progn
 					   (push (cons exp r) exps-and-results)
 					   (if (eq r 'error)
-					       *fitness-invalid*
+					       +fitness-invalid+
 					       0))
 					 (if (eq r 'error)
-					     *fitness-invalid*
+					     +fitness-invalid+
 					     0))))
      (lambda () exps-and-results))))
 
@@ -1220,7 +1220,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 				(declare (ignore exp))
 				(if (symbolp r)
 				    ;; FIXME: sometimes, R is 'TIMEOUT due to GC or so, which could lead to a wrong fitness.
-				    *fitness-invalid*
+				    +fitness-invalid+
 				    (if goal
 					(if (car r) 0 -1)
 					(if (car r) -1 0))))))))
@@ -1275,7 +1275,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 		     :score (lambda (r goal exp)
 			      (declare (ignore goal))
 			      (if (or (not (listp r)) (not (numberp (car r))) (not (eq (cdr r) nil)) (> (count-tree-nodes exp) maxnodes))
-				  *fitness-invalid*
+				  +fitness-invalid+
 				  (let ((v (car r)))
 				    (if (<= v 0)
 					-1
@@ -1318,7 +1318,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 		   :score (lambda (r goal exp)
 			    (declare (ignore exp))
 			    (if (or (not (listp r)) (not (proper-list-p r)))
-				*fitness-invalid*
+				+fitness-invalid+
 				(score-tree-equal-prefix r goal)))))
 ;; (systematicmapping 7 '() *test-cases-ifte* *joy-ops* 1000 .01 nil) exhausts heap, because the best exps are collected.
 (assert (eq 0 (joy-show-fitness '(() (1) (0) ifte) *test-cases-ifte*)))
@@ -1330,7 +1330,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 		   :score (lambda (r goal exp)
 			    (declare (ignore exp))
 			    (if (or (not (listp r)) (not (proper-list-p r)))
-				*fitness-invalid*
+				+fitness-invalid+
 				(score-tree-equal-prefix r goal)))))
 ;; does (systematicmapping 6 '() *test-cases-branch* *joy-ops* 1000 .01 nil) exhaust heap?
 (assert (eq 0 (joy-show-fitness '((1) (0) branch) *test-cases-branch*)))
@@ -1343,7 +1343,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 		   :score (lambda (r goal exp)
 			    (declare (ignore exp))
 			    (if (or (not (listp r)) (not (proper-list-p r)))
-				*fitness-invalid*
+				+fitness-invalid+
 				(score-tree-equal-prefix r goal)))))
 
 (defparameter *test-cases-10-stack* (generate-test-cases-stack (loop for i below 10 collect '+)))
@@ -1356,7 +1356,7 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
 		   :goal (lambda (x) (declare (ignore x)) stack)
 		   :score (lambda (r goal exp)
 			    (if (or (not (listp r)) (not (proper-list-p r)))
-				*fitness-invalid*
+				+fitness-invalid+
 				(- (score-tree-equal-prefix r goal) (* node-cost (count-tree-nodes exp)))))))
 
 (defparameter *test-cases-10-stack-small* (generate-test-cases-stack-small (loop for i below 10 collect '+) .1))
@@ -1370,10 +1370,10 @@ r should be a list of one value, otherwise *fitness-invalid* is returned."
     (flet ((score-list-prefix (r goal exp)
 	     (declare (ignorable exp))
 	     (if (or (not (listp r)) (not (proper-list-p r)) (not (listp (car r))) (not (proper-list-p (car r))) (not (eq nil (cdr r))))
-		 *fitness-invalid*
+		 +fitness-invalid+
 		 (let ((decoded (joy-eval-handler nil (car r) :c (make-counter decoder-maxticks) :cd (make-countdown decoder-max-seconds))))
 		   (if (or (not (listp decoded)) (not (proper-list-p decoded)) (not (eq (cdr decoded) nil)) (not (listp (car decoded))) (not (proper-list-p (car decoded))))
-		       *fitness-invalid*
+		       +fitness-invalid+
 		       (let ((diff (score-tree-equal-prefix (car decoded) (car goal) 0))
 			     (code-length (count-tree-nodes r)))
 			 ;;(print (list "r" r "goal" goal "exp" exp "decoded" decoded "diff" diff "code-length" code-length))
@@ -1577,7 +1577,7 @@ l-1-fits must be a list of fitnesses which must be nil if the previous calls yie
 	       (setf l-heaps (cons l-1-heap l-heaps))
 	       (setf l-fits (cons l-1-fit l-fits))
 	       ;;(setf fit-sum (+ fit-sum l-1-fit))) ;if the shorter expression failed, so will this longer one
-	       (setf fit-sum (+ fit-sum *fitness-invalid*)))
+	       (setf fit-sum (+ fit-sum +fitness-invalid+)))
 	     (multiple-value-bind (res heap fit) ;no error in level above
 		 (extend-and-evaluate l-exp l-1-stk l-1-heap ins goal-value score-fn max-ticks max-seconds)
 	       ;;(format t "goal-value:~A stk:~A fit:~A~%" goal-value res fit)
