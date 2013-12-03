@@ -1733,3 +1733,146 @@ Signal the same errors that JOY-EVAL would."
 				    (funcall counter-delta 1)
 				    (invoke-restart 'continue))))))
 	(joy-eval stk exp :heap heap :c counter :cd cd)))))
+
+;;;; In a competition, genomes can replicate actively, submit solutions, and communicate.
+
+(defclass competition (standard-object)
+  ((fitness :initform (constantly 0) :type function :initarg :fitness :reader competition-fitness)
+   (pop :initform (vector) :type vector :initarg :pop :accessor competition-pop) ;the genomes.
+   (state :initform (vector) :type vector :initarg :state :accessor competition-state) ;the state genomes are in currently.
+   (claim :initform (vector) :type vector :initarg :claim :accessor competition-claim) ;the claims handed in by the genomes.
+   (fit :initform (vector) :type vector :initarg :fit :accessor competition-fit)
+   (par :initform nil :initarg :par :accessor competition-par)))
+
+(defgeneric make-offspring (competition i1 i2)
+  (:documentation "In competition COMPETITION, use the genomes with indices I1 and I2 to make one offspring."))
+
+(defgeneric execute (competition i test-goal-values)
+  (:documentation "In competition COMPETITION, continue executing the I-th entry in (competition-state COMPETITION)."))
+
+(defgeneric initial-state (genome)
+  (:documentation "Return the initial state of GENOME."))
+
+(defstruct joy-state
+  (stk nil :type list)
+  (exp nil :type list)
+  (stks nil :type list)
+  (exps nil :type list)
+  (heap nil :type hash-table))
+
+(defstruct joy-default-pop
+  (genome nil :type list)
+  (mut nil :type list))
+
+(defstruct joy-default-par
+  (joy-ops nil :type list)
+  (schedule-ticks 0 :type (and fixnum unsigned-byte))
+  (schedule-seconds 0.0 :type float)
+  (score-ticks 0 :type (and fixnum unsigned-byte))
+  (score-seconds 0 :type float))
+
+(defclass competition-joy-default (competition)
+  ())
+
+(defmethod make-offspring ((comp competition-joy-default) i1 i2)
+  (with-slots (pop mut par) comp
+    (let* ((joy-ops (joy-default-par-joy-ops par))
+	   (c1-mut (elt mut i1))
+	   (c2-mut (elt mut i2))
+	   (new-mut (mutate-mutate .1 (mutate-crossover c1-mut c2-mut)))
+	   (new (apply #'crossover-and-mutate joy-ops (elt pop i1) (elt pop i2) new-mut)))
+      new)))
+
+(defun joy-eval-competition (stk exp stks exps heap c cd add-offspring-fun score-fun claim-fun)
+  "(ADD-OFFSPRING-FUN genome mut initial-fit) adds the pair GENOME, MUT as a new organism and submits INITIAL-FIT as initial fitness to it.
+ (SCORE-FUN program) returns the score of joy program PROGRAM.
+ (CLAIM-FUN program) submits the joy program PROGRAM as claim."
+  (flet ((new-ops (op stk exp stks exps heap)
+	   (values 
+	    (case op
+	      ;; TODO: add hash-table copier for heap.
+	      ;;(new-heap  (cons (make-hash-table) stk))
+	      ;;(copy-heap (cons (copy-hash-table (car stk)) stk))
+	      (claim )
+	      ;; TODO: add sending messages to other organisms.
+	      (send )
+	      (t (default-no-op op stk exp stks exps heap)))
+	    exp stks exps heap)))
+    ;;TODO: (handler-bind catch time-errors
+    (joy-eval-2 stk exp stks exps :heap heap :c c :cd cd :no-op #'new-ops)))
+
+(defmethod execute ((comp competition-joy-default) i test-goal-values)
+  (with-slots (fitness pop state claim fit par) comp
+    (let ((score-ticks (joy-default-par-score-ticks par))
+	  (score-seconds (joy-default-par-score-seconds par)))
+      (flet ((add-offspring-fun (genome mut initial-fit)
+	       ;; TODO: check that (and (listp genome) (valid-joy-exp genome)), otherwise don't add the genome.
+	       ;; TODO: clamp the recursion probability in MUT at 0.9.
+	       ;; TODO: Problem is, we need to give the genomes a bit time to submit some program, so that scores can be compared fairly. Maybe add a parameter (to COMPETITION-PAR) describing the minimum run time before they may be kicked out. But then flooding with calls to ADD-OFFSPRING-FUN could fill the whole population with random genomes, which would kick out all the good evolved organisms. Maybe make it so that a newly created organism receives an initial amount of fitness from its parent (whose fitness is reduced by the same amount).
+	       ;; When comparing fitnesses to determine an organism which is to be kicked out, use a different test-cases.
+;;	       (let* ((test-goal-values (fitness-generate-test-goal-values fitness))
+;;		      (c2-fit (fitness-score-test-values fitness test-goal-values (elt pop c2) score-ticks score-seconds)))
+;;		 )
+	       )
+	     (score-fun (joy-program)
+	       (if (and (listp joy-program) (valid-joy-exp joy-program '(:any)))
+		   (fitness-score-test-values fitness test-goal-values joy-program score-ticks score-seconds)
+		   +fitness-invalid+))
+	     (claim-fun (joy-program)
+	       (setf (elt claim i) joy-program)))
+	(let ((stk (joy-state-stk state))
+	      (exp (joy-state-exp state))
+	      (stks (joy-state-stks state))
+	      (exps (joy-state-exps state))
+	      (heap (joy-state-heap state))
+	      (ticks (joy-default-par-schedule-ticks par))
+	      (seconds (joy-default-par-schedule-seconds par)))
+	  (joy-eval-competition stk exp stks exps heap (make-counter ticks) (make-countdown seconds) #'add-offspring-fun #'score-fun #'claim-fun))))))
+  
+(defmethod initial-state ((genome joy-default-pop))
+  (make-joy-state :stk nil :exp (joy-default-pop-genome genome) :stks nil :exps nil :heap (make-hash-table)))
+
+(defun new-joy-default-competition (o size joy-ops schedule-ticks schedule-seconds score-ticks score-seconds cycles fitness)
+  (labels ((generate-mut ()
+	     (append
+	      (list (random *mut0-max*))
+	      (loop for i below (1- *mut-length-const*) collect (random 1.0))
+	      (loop for i below (length joy-ops) collect (random 1.0))))
+	   (generate-pop ()
+	     (let* ((mut (generate-mut))
+		    (pop (make-joy-default-pop :genome o :mut mut)))
+	       pop)))
+    (let* ((pop (make-array size :initial-contents (loop for i below size collect (generate-pop))))
+	   (par (make-joy-default-par :joy-ops joy-ops :schedule-ticks schedule-ticks :schedule-seconds schedule-seconds :score-ticks score-ticks :score-seconds score-seconds)))
+      (competition 'competition-joy-default pop par cycles fitness))))
+
+;;(defun competition (pop mut cycles fitness joy-ops max-ticks max-seconds)
+(defun competition (competition-type pop par cycles fitness)
+  "Same as function TOURNAMENT, but different..."
+  (let* ((size (length pop))
+	 (state (make-array size :initial-contents (loop for p across pop collect (initial-state p))))
+	 (claim (make-array size :initial-element nil))
+	 (fit (make-array size :element-type 'number :initial-element +fitness-invalid+))
+	 (comp (make-instance competition-type :fitness fitness :pop pop :state state :claim claim :fit fit :par par))
+	 (logstream (open "/tmp/log.txt" :direction :output :if-exists :rename-and-delete :if-does-not-exist :create)))
+    (dotimes (c cycles)
+      (let ((test-goal-values (fitness-generate-test-goal-values fitness))) ;test with the same test-goal value pairs
+	(dotimes (i size)
+	  (execute comp i test-goal-values)))
+      (when (= 0 (mod c 1000))
+	(print (list "c" c "max-fit" (loop for f across (competition-fit comp) maximize f))))
+      (when (= 0 (mod c 10000))
+	(let ((res (sort (zip-array 'list (competition-pop comp) (competition-fit comp)) #'< :key #'second)))
+	  (competition-log-mut-stats res logstream)
+	  (print (list "best-pop" (car (car (last res))) "best-fit" (cadr (car (last res))))))))
+    (close logstream)
+    (sort (zip-array 'list (competition-pop comp) (competition-fit comp)) #'< :key #'second)))
+
+(defun competition-log-mut-stats (res logstream)
+  (let* ((fits (mapcar #'cadr res))
+	 (fit-max (apply #'max fits))
+	 (fit-mean (mean fits))
+	 (fit-stddev (stddev-corr fits)))
+    (format logstream "~A ~A ~A" (float fit-max) (float fit-mean) fit-stddev)
+    (format logstream "~%"))
+  (finish-output logstream))
