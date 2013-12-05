@@ -1238,7 +1238,7 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
     (loop for i below iterations do
 	 (loop for j below (array-dimension v 0) do
 	      (loop for k from 0 below 10 do (setf (aref v j k) (aref data j k))))
-	 (prind v)
+	 ;;(prind v)
 	 (let* ((h (rbm-h-from-v v rbm))
 		(v1 (rbm-v-from-h h rbm)))
 	   (setf v v1)))
@@ -1258,7 +1258,8 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 		  (when (or (null best) (> free-energy best-free-energy))
 		    (setf best da)
 		    (setf best-free-energy free-energy)))))
-	 (prind best))))
+	 ;;(prind best))))
+	 best)))
 
 (defun rbm-update (rbm w-inc v-biases-inc h-biases-inc learn-rate)
   (let* ((w (rbm-w rbm))
