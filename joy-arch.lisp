@@ -1863,6 +1863,8 @@ Signal the same errors that JOY-EVAL would."
     ;;TODO: (handler-bind catch time-errors
     (joy-eval-2 stk exp stks exps :heap heap :c c :cd cd :no-op #'new-ops)))
 
+(defparameter *joy-eval-competition-ops* (append '(offspring give score claim send receive) *joy-ops*))
+
 (defun valid-genome (genome)
   (and (listp genome) (valid-joy-exp genome)))
 
@@ -1965,13 +1967,15 @@ Signal the same errors that JOY-EVAL would."
     (dotimes (c cycles)
       (let ((test-goal-values (fitness-generate-test-goal-values fitness))) ;test with the same test-goal value pairs
 	(dotimes (i size)
-	  (execute comp i test-goal-values)
-	  (competition-remove-dead comp))
-	;; When comparing fitnesses to determine an organism which is to be kicked out, use a different test-cases.
-	;;(let* ((test-goal-values (fitness-generate-test-goal-values fitness))
-	;;(c2-fit (fitness-score-test-values fitness test-goal-values (elt pop c2) score-ticks score-seconds)))
-	;;)
-      )
+	  (execute comp i test-goal-values))
+	(competition-remove-dead comp)
+	;;TODO: evaluate claims: the fitness has to be non-negative and below some maximum fitness, so that subtracting number of ticks in each iteration works.
+	;;(dotimes (i size)
+      ) 
+      ;; When comparing fitnesses to determine an organism which is to be kicked out, use a different test-cases.
+      ;;(let* ((test-goal-values (fitness-generate-test-goal-values fitness))
+      ;;(c2-fit (fitness-score-test-values fitness test-goal-values (elt pop c2) score-ticks score-seconds)))
+      ;;)
       (when (= 0 (mod c 1000))
 	(print (list "c" c "max-fit" (loop for f across (competition-fit comp) maximize f))))
       (when (= 0 (mod c 10000))
