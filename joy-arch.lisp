@@ -1019,7 +1019,7 @@ r should be a list of one value, otherwise +test-cases-invalid+ is returned."
 r should be a list of one value, otherwise +test-cases-invalid+ is returned."
   (declare (ignorable exp))
   (if (or (not (listp r)) (not (numberp (car r))) (not (eq (cdr r) nil)))
-      +test-cases-invalid+
+      0
       (/ 1 (1+ (absdiff goal (car r))))))
 
 (defstruct test-cases
@@ -1884,7 +1884,7 @@ Signal the same errors that JOY-EVAL would."
       (dotimes (i (length pop))
 	(incf (elt fit i)
 	      (* score-factor
-		 (score-exam test-cases test-goal-values (elt claim i) score-ticks score-seconds)))))))
+		 (score-exam-in-01 test-cases test-goal-values (elt claim i) score-ticks score-seconds)))))))
 
 (defun joy-eval-competition (stk exp stks exps heap c cd offspring-fun give-fun score-fun claim-fun send-fun receive-fun)
   "(ADD-OFFSPRING-FUN genome mut) adds the pair GENOME, MUT as a new organism, and leaves an organism id on the stack.
@@ -2007,7 +2007,7 @@ Signal the same errors that JOY-EVAL would."
 	   (par (make-joy-default-par :joy-ops joy-ops :schedule-ticks schedule-ticks :schedule-seconds schedule-seconds :score-ticks score-ticks :score-seconds score-seconds)))
       (competition 'competition-joy-default pop par cycles test-cases score-factor max-births))))
 
-;;(new-joy-default-competition '(0) 100 1000000 *test-cases-pi-value* 100 .01 (cons 0 *joy-competition-ops*) 1000 .01 1000 1)
+;;(new-joy-default-competition '(((1) claim 51 (0.5) times stack (0) offspring a) (a) define a) 10 10000 *test-cases-pi-value* 100 .01 (cons 0 *joy-competition-ops*) 1000 .01 1000 1)
 
 (defun min-index (s)
   (reduce (lambda (i j) (let ((a (elt s i))
@@ -2045,13 +2045,14 @@ Signal the same errors that JOY-EVAL would."
 	    (competition-remove-dead comp))
 	  ;;(print (list "remove un-fittest. size=" (length pop)))
 	  ;; add one organism, so that there are now SIZE old organisms.
+	  ;;(print (list "(length pop)" (length pop)))
 	  (let* ((size (length pop))
 		 (new (make-offspring comp (random size) (random size))))
 	    (when (not (null new))
 	      (competition-new-organism comp new)))
 	  ;; TODO: randomly kill new organisms, so that there remain max MAX-BIRTHS new organisms.
 	  )
-	(when (= 0 (mod cycle 10))
+	(when (= 0 (mod cycle 1))
 	  (let ((n-old (loop for b across bday sum (if (< b cycle) 1 0))))
 	    (print (list "cycle" cycle "max-fit" (loop for f across fit maximize f) "n-old" n-old "n-born" n-born "n-dead" n-died))))
 	(when (= 0 (mod cycle 100))
