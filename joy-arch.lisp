@@ -4,6 +4,7 @@
 ;; (declaim (optimize speed))
 
 (load "~/lisp/arbitrary-trees.lisp")
+;;(load "~/lisp/multitree.lisp")
 (handler-case (load "~/lisp/multitree.lisp")
   (SB-PCL::SLOTD-INITIALIZATION-ERROR (c) (continue c))) ;how to avoid it?
 (load "~/lisp/refal-patmat.lisp")
@@ -1764,13 +1765,15 @@ Signal the same errors that JOY-EVAL would."
 
 (defclass competition (standard-object)
   ((cycle :initform 0 :type (and unsigned-byte integer) :initarg :cycle :accessor competition-cycle)
-   (test-cases :initform (constantly 0) :type function :initarg :test-cases :reader competition-test-cases)
+   (test-cases :initform nil :type test-cases :initarg :test-cases :reader competition-test-cases)
    (pop :initform (make-set) :type vector :initarg :pop :accessor competition-pop) ;the genomes.
    (state :initform (make-set) :type vector :initarg :state :accessor competition-state) ;the state genomes are in currently.
    (claim :initform (make-set) :type vector :initarg :claim :accessor competition-claim) ;the claims handed in by the genomes.
    (fit :initform (make-set) :type vector :initarg :fit :accessor competition-fit)
    (bday :initform (make-set) :type vector :initarg :bday :accessor competition-bday)
-   (par :initform nil :initarg :par :accessor competition-par)))
+   (par :initform nil :initarg :par :accessor competition-par)
+   (n-born :initform 0 :type (and unsigned-byte fixnum) :initarg :n-born :accessor competition-n-born)
+   (n-died :initform 0 :type (and unsigned-byte fixnum) :initarg :n-died :accessor competition-n-died)))
 
 (defparameter *competition-initial-claim* nil)
 
@@ -1785,18 +1788,29 @@ Signal the same errors that JOY-EVAL would."
 (defgeneric initial-state (genome)
   (:documentation "Return the initial state of GENOME."))
 
+(defgeneric competition-new-cycle (competition cyclei)
+  (:documentation "Inform the competition that the cycle with number CYCLEI has started."))
+
+(defmethod competition-new-cycle ((comp competition) cyclei)
+  (with-slots (cycle n-born n-died) comp
+    (setf cycle cyclei)
+    (setf n-born 0)
+    (setf n-died 0)))
+
 (defgeneric competition-organism-die (competition i)
   (:documentation "Mark the organism with id I in the competition COMPETITION as dead so that it will be removed when COMPETITION-REMOVE-DEAD is called."))
 
 (defmethod competition-organism-die ((comp competition) i)
-  (with-slots (fit) comp
+  (with-slots (fit n-died) comp
+    (incf n-died)
     (setf (elt fit i) :dead)))
 
 (defgeneric competition-new-organism (competition new-pop)
   (:documentation "Add a new organism with the given properties to COMPETITION and return its identifier."))
 
 (defmethod competition-new-organism ((comp competition) new-pop)
-  (with-slots (cycle pop state claim fit bday) comp
+  (with-slots (cycle pop state claim fit bday n-born) comp
+    (incf n-born)
     (set-add pop new-pop)
     (set-add state (initial-state new-pop))
     (set-add claim *competition-initial-claim*)
@@ -1945,14 +1959,19 @@ Signal the same errors that JOY-EVAL would."
 	       (stks (joy-state-stks istate))
 	       (exps (joy-state-exps istate))
 	       (heap (joy-state-heap istate))
-	       (ticks (let ((ticks (joy-default-par-schedule-ticks par)) (f (ceiling (elt fit i)))) (if (< f ticks) (max 0 f) ticks)))
+	       ;;(ticks (let ((ticks (joy-default-par-schedule-ticks par)) (f (ceiling (elt fit i)))) (if (< f ticks) (max 0 f) ticks)))
+	       (ticks (joy-default-par-schedule-ticks par))
 	       (seconds (joy-default-par-schedule-seconds par)))
-	  (labels ((die ()
+	  (labels ((die (c)
+		     (declare (ignorable c))
+		     ;;(print (list "organism i" i "dies. reason=" c))
 		     (competition-organism-die comp i))
 		   (save-state (c)
 		     (decf (elt fit i) ticks)
 		     (if (<= (elt fit i) 0)
-			 (die)
+			 (progn
+			   ;;(die )
+			   )
 			 (setf (elt state i) (make-joy-state :stk (joy-error-stk c)
 							     :exp (joy-error-exp c)
 							     :stks (joy-eval-2-error-stks c)
@@ -1964,13 +1983,14 @@ Signal the same errors that JOY-EVAL would."
 		(joy-eval-competition stk exp stks exps heap (make-counter ticks) (make-countdown seconds) #'offspring-fun #'give-fun #'score-fun #'claim-fun #'send-fun #'receive-fun)
 	      (joy-eval-2-counter-error (c) (save-state c))
 	      (joy-eval-2-countdown-error (c) (save-state c))
-	      (simple-type-error () (die))
-	      (type-error () (die))
-	      (division-by-zero () (die))
-	      (floating-point-invalid-operation () (die))
-	      (floating-point-overflow () (die))
-	      #+SBCL (SB-KERNEL::ARG-COUNT-ERROR () (die))
-	      (:no-error (stk) (declare (ignore stk)) (die)))
+	      (unknown-op-error (c) (die c))
+	      (simple-type-error (c) (die c))
+	      (type-error (c) (die c))
+	      (division-by-zero (c) (die c))
+	      (floating-point-invalid-operation (c) (die c))
+	      (floating-point-overflow (c) (die c))
+	      #+SBCL (SB-KERNEL::ARG-COUNT-ERROR (c) (die c))
+	      (:no-error (stk) (declare (ignorable stk)) (die (list :no-error stk))))
 	    ))))))
 
 (defun new-joy-default-competition (o size cycles test-cases schedule-ticks schedule-seconds joy-ops score-ticks score-seconds score-factor max-births)
@@ -1997,26 +2017,33 @@ Signal the same errors that JOY-EVAL would."
 
 (defun competition (competition-type pop par cycles test-cases score-factor max-births)
   "Same as function TOURNAMENT, but different..."
+  (declare (optimize (debug 3) (safety 3)))
   (let* ((size (length pop))
 	 (comp (make-instance competition-type :test-cases test-cases :par par))
 	 (logstream (open "/tmp/log.txt" :direction :output :if-exists :rename-and-delete :if-does-not-exist :create)))
     (loop for p across pop do
 	 (competition-new-organism comp p))
-    (with-slots (pop claim fit) comp
+    (with-slots (pop claim fit bday n-born n-died) comp
       (dotimes (cycle cycles)
-	(setf (competition-cycle comp) cycle)
+	(competition-new-cycle comp cycle)
 	(let ((test-goal-values (generate-exam test-cases))) ;test with the same test-goal value pairs
+	  ;;(print (list "before execute. size=" (length pop)))
 	  (dotimes (i (length pop))
 	    (execute comp i test-goal-values))
 	  (competition-remove-dead comp)
 	  (competition-add-score comp score-factor)
 	  ;; of the organisms which are not new, remove the un-fittest ones so that there are (1- SIZE) old organisms.
-	  (let ((z (loop for i from 0 for f across fit collect (cons i f))))
+	  ;;(print (list "size=" (length pop)))
+	  (let* ((oldi (loop for i from 0 for b across bday when (< b cycle) collect i))
+		 (z (loop for i in oldi for f across fit collect (cons i f))))
 	    (sort z #'> :key #'cdr)
+	    ;;(print (list "(1- size)" (1- size) "(length z)" (length z)))
 	    (loop for i from (1- size) below (length z)
 	       for ze in z do
+		 (print (list "(car ze)" (car ze)))
 		 (competition-organism-die comp (car ze)))
 	    (competition-remove-dead comp))
+	  ;;(print (list "remove un-fittest. size=" (length pop)))
 	  ;; add one organism, so that there are now SIZE old organisms.
 	  (let* ((size (length pop))
 		 (new (make-offspring comp (random size) (random size))))
@@ -2024,9 +2051,10 @@ Signal the same errors that JOY-EVAL would."
 	      (competition-new-organism comp new)))
 	  ;; TODO: randomly kill new organisms, so that there remain max MAX-BIRTHS new organisms.
 	  )
-	(when (= 0 (mod cycle 1000))
-	  (print (list "cycle" cycle "max-fit" (loop for f across fit maximize f))))
-	(when (= 0 (mod cycle 10000))
+	(when (= 0 (mod cycle 10))
+	  (let ((n-old (loop for b across bday sum (if (< b cycle) 1 0))))
+	    (print (list "cycle" cycle "max-fit" (loop for f across fit maximize f) "n-old" n-old "n-born" n-born "n-dead" n-died))))
+	(when (= 0 (mod cycle 100))
 	  (let ((res (sort (zip-array 'list pop fit) #'< :key #'second)))
 	    (competition-log-mut-stats res logstream)
 	    (print (list "best-pop" (car (car (last res))) "best-fit" (cadr (car (last res))))))))
