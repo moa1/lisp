@@ -66,11 +66,13 @@ X, (car X), and (cdr X) may be a list, a symbol, or a number."
   ;; FIXME: handle circular lists
   (declare (optimize (speed 3) (safety 0) (compilation-speed 0) (space 0)))
   (declare (values (and fixnum unsigned-byte))) ;inferred automatically (see describe 'lsxhash)
+  ;; in SBCL, etypecase takes 80% of the time of defmethod-ing on the different types of X: (let ((h (make-hash-table))) (timediff (lsxhash h) (mlsxhash h) :showtimes t))
   (etypecase x
     (single-float (sxhash x))
     (double-float (sxhash x))
     (ratio (sxhash x))
-    (fixnum (sxhash x))
+    (fixnum (sxhash x)) ;;in SBCL, close numbers seem to have close hashes.
+    (string (sxhash x)) ;;in SBCL, (sxhash "ABC") == (sxhash 'abc).
     ;;(number (sxhash x))
     (symbol (sxhash x))
     ;; here, X can't be nil since (symbolp nil) == T.
