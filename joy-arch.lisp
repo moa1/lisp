@@ -652,8 +652,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 (defparameter *joy-ops* 
   '(+ and branch concat cons dip / dup equal gensym i ifte list * nill not or patmat patsub pop pred quote rem si sample < stack step - succ swap times true uncons unstack while define))
 
-;; TODO: rename this to (defconstant +mut0-max+ 0.8)
-(defparameter *mut0-max* 0.8)
+(defconstant +mut0-max+ 0.8)
 
 (defun mutate (joy-ops exp debranch-p p1 p2 p3 p4 p5 p6
 	       &rest ops-p)
@@ -684,7 +683,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 ;;  (print (list "exp" exp "p0" p0))
   (let ((p0 (car probs))
 	(prest (cdr probs)))
-    (assert (< p0 *mut0-max*))
+    (assert (< p0 +mut0-max+))
     (if (chance p0)
 	(apply #'mutate-rec joy-ops (apply #'mutate joy-ops exp t prest) probs)
 	(apply #'mutate joy-ops exp t prest))))
@@ -696,7 +695,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 		 (if (chance p0)
 		     (rec (cdr probs) (cons (random .99) mut-probs)) ;previously, (random .99) was a random walk +- 0.1. I think mutation parameter smoothness should be provided by mutate-crossover.
 		     (rec (cdr probs) (cons (car probs) mut-probs))))))
-    (rec (cdr probs) (cons (random *mut0-max*) nil)))) ; recursion prob < *mut0-max*
+    (rec (cdr probs) (cons (random +mut0-max+) nil)))) ; recursion prob < +mut0-max+
 
 (defun mutate-crossover (probs1 probs2)
   (labels ((rec (probs1 probs2 acc)
@@ -1067,7 +1066,7 @@ r should be a list of one value, otherwise +test-cases-invalid+ is returned."
 		   :score01 #'score01-one-value))
 (assert (eq 0 (joy-show-test-cases-score '(0 (swap) (succ (uncons swap pop) dip) while swap pop) *test-cases-stackcount*)))
 
-(defparameter *letter-symbols* '(a b c d e f g h i j k l m n o p q r s t u v w x y z))
+(defconstant +letter-symbols+ '(a b c d e f g h i j k l m n o p q r s t u v w x y z) "All 26 letters as symbols.")
 
 (defun score-list-similarity (r goal exp)
   (declare (ignorable exp))
@@ -1096,7 +1095,7 @@ r should be a list of one value, otherwise +test-cases-invalid+ is returned."
 		   :generate (lambda (v)
 				     (loop for i below (length v) collect
 					  (let ((l (1+ (random 10))))
-					    (list (loop for i below l collect (sample *letter-symbols*))
+					    (list (loop for i below l collect (sample +letter-symbols+))
 						  (random l)))))
 		   :goal (lambda (v) (elt (car v) (cadr v)))
 		   :score #'score-one-symbol-equal))
@@ -1398,16 +1397,15 @@ r should be a list of one value, otherwise +test-cases-invalid+ is returned."
 
 ;;;; tournament selection
 
-;; TODO: rename this to (defconstant +mut-length-const+ (+ 6 3))
-(defparameter *mut-length-const* (+ 6 3))
+(defconstant +mut-length-const+ (+ 6 3))
 
 (defun tournament-new (o size cycles test-cases joy-ops max-ticks max-seconds)
   (let* ((pop (make-array size :initial-element o))
 	 (mut (make-array size)))
     (flet ((generate-mut ()
 	     (append
-	      (list (random *mut0-max*))
-	      (loop for i below (1- *mut-length-const*) collect (random 1.0))
+	      (list (random +mut0-max+))
+	      (loop for i below (1- +mut-length-const+) collect (random 1.0))
 	      (loop for i below (length joy-ops) collect (random 1.0)))))
       (dotimes (s size) (setf (aref mut s) (generate-mut)))
       (tournament pop mut cycles test-cases joy-ops max-ticks max-seconds))))
@@ -1916,9 +1914,9 @@ Signal the same errors that JOY-EVAL would."
 
 (defun valid-mut (mut length-joy-ops)
   (and (listp mut)
-       (= (+ *mut-length-const* length-joy-ops) (length mut))
+       (= (+ +mut-length-const+ length-joy-ops) (length mut))
        (loop for m in mut always (and (realp m) (<= 0 m 1)))
-       (<= (elt mut 0) *mut0-max*)))
+       (<= (elt mut 0) +mut0-max+)))
 
 (defmethod execute ((comp competition-joy-default) i test-goal-values)
   ;; Problem is, we need to give the genomes a bit time to submit some program, so that scores can be compared fairly. Maybe add a parameter (to COMPETITION-PAR) describing the minimum run time before they may be kicked out. But then flooding with calls to ADD-OFFSPRING-FUN could fill the whole population with random genomes, which would kick out all the good evolved organisms. Maybe make it so that a newly created organism receives an initial amount of fitness from its parent (whose fitness is reduced by the same amount).
@@ -1996,8 +1994,8 @@ Signal the same errors that JOY-EVAL would."
 (defun new-joy-default-competition (o size cycles test-cases schedule-ticks schedule-seconds joy-ops score-ticks score-seconds score-factor max-births)
   (labels ((generate-mut ()
 	     (append
-	      (list (random *mut0-max*))
-	      (loop for i below (1- *mut-length-const*) collect (random 1.0))
+	      (list (random +mut0-max+))
+	      (loop for i below (1- +mut-length-const+) collect (random 1.0))
 	      (loop for i below (length joy-ops) collect (random 1.0))))
 	   (generate-pop ()
 	     (let* ((mut (generate-mut))
