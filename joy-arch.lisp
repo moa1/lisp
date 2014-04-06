@@ -111,9 +111,10 @@ The second, called with a number of seconds, postpones the timer by the number o
 Elements of w are numbers and represent the relative chance of picking that item.
 The sum of w must not be 0."
   (let* ((s (reduce #'+ w))) ;:from-end T was here for the following reason: is necessary because otherwise (weighted-sample-index '(0.99 0.989622 0.9895308 0.9893857 0.9898456 0.98966277 0.9894621 0.99 0.9889513 0.9896954)) fails with a high probability in 10.000.000 cases. probably a corner case of float arithmetic. with :from-end we add in the same order in that we are subtracting in rec. However, it doesn't help in all cases. Therefore, s is artificially reduced to be smaller than the sum.
+    (assert (> s 0))
     (labels ((rec (x v i)
 	       (if (null v) ;this should never happen, but due to floating-point inaccuracies, it does.
-		   (random (length w))
+		   (rec (random s) w 0) ;then just try another (random s).
 		   (let ((x0 (- x (car v))))
 		     (if (< x0 0)
 			 i
@@ -330,6 +331,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 		      (setf res (joy-eval res (car stk) :heap heap :c c :cd cd)))
 		    res))
 	 ;; define is special
+	 ;; TODO: remove define or let it have another meaning, see below.
 	 (define  (if (null heap) (error "define doesn't work for a nil heap")
 		      (if (not (listp (car stk)))
 			  (error (make-condition 'type-error :datum (car stk) :expected-type 'list))
@@ -339,7 +341,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 				(setf (gethash (caar stk) heap) (cadr stk)) ;(cdar stk) is not used.
 				(cddr stk))))))
 	 ;; TODO: add a "constant" joy operation, which defines a constant and signals an error if a re-definition defines it differently. (maybe create a new const-heap, which stores the constants.)
-	 ;; implement an "undefine", which ends the scope of a "define"d program, but leaves defined programs (and programs on the stack) using the to be "undefine"d program running intact. this would require replacing the "define"d name with an anonymous name.
+	 ;; TODO: implement an "undefine", which ends the scope of a "define"d program, but leaves defined programs (and programs on the stack) using the to be "undefine"d program running intact. this would require replacing the "define"d name with an anonymous name.
 	 (t
 	  (if (or (numberp (car exp)) (listp (car exp)))
 	      (cons (car exp) stk)
@@ -1041,6 +1043,14 @@ r should be a list of one value, otherwise +test-cases-invalid+ is returned."
 		   :score01 #'score01-one-value))
 ;; TODO: write a joy program that computes the sqrt. Therefore, write test-cases that provide solutions for required ops, like the joy operation 'rotate.
 ;;(time (systematicmapping 4 '() *test-cases-sqrt* '(+ dip / dup < - while) 1000 .01))
+
+(defun my-sqrt (x)
+  (labels ((rec (r)
+	     (let ((r2 (/ (+ r (/ x r)) 2)))
+	       (if (< (absdiff r2 r) 0.0001)
+		   r2
+		   (rec r2)))))
+    (rec (float x))))
 
 (defparameter *test-cases-expt2*
   (make-test-cases :values '((1) (5) (10))
@@ -2075,3 +2085,10 @@ Signal the same errors that JOY-EVAL would."
     (format logstream "~A ~A ~A" (float fit-max) (float fit-mean) fit-stddev)
     (format logstream "~%"))
   (finish-output logstream))
+
+;; TODO: search through the joy tree of possible programs. Only extend the currently fastest program by all possible extensions. This needs rewriting joy trees as lists using tree-to-list and list-to-tree (see learner-joy-rbm.lisp).
+;; TODO: search through the joy tree of possible programs. Only extend the currently best-scoring programs by all possible extensions.
+;; TODO: think hard about how to find out if two joy programs are equivalent. Use this to reduce the search space for joy programs. this might be related to caching implemented in systematicmapping, but also might not.
+;; What is equal? Two programs are equal if they yield the same output for any input. Since we can't try all inputs, we might limit ourselves to inputs not exceeding a certain length.
+;; Are there other approaches for testing program equality? Maybe there's a symbolic approach? Or a test-only-special-values, like if there's an IF, then we only have to test the values that make it execute the true-branch and those values that make it execute the false-branch.
+;; Maybe most important is to prefer programs that have local variable accesses instead of programs that access variables very deep in the stack. Maybe I should consider implementing a evaluator for The Mill.
