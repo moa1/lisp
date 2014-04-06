@@ -1411,6 +1411,108 @@ r should be a list of one value, otherwise +test-cases-invalid+ is returned."
 ;;  (systematicmapping 2 '(200 (cons dup) times) tc joy-ops 1000 .01 30000))
 ;; it was solved by allowing count-tree-nodes to efficiently count self-similar trees, and estimating the run time of the operations.
 
+(defun enumerate-permutations (l k)
+  "Return all possible permutations of taking K items out of list L.
+E.g. (enumerate-permutations '(1 2 3) 2) == '((1 2) (1 3) (2 1) (2 3) (3 1) (3 2))."
+  (assert (<= 0 k (length l)))
+  (let ((len (length l)))
+    (labels ((copy-omit-nth (l n &optional (result nil))
+	       "Copy list L, leaving out the N-th element. The returned list may share structure with L."
+	       ;; If this function is made a separate DEFUN, then error-check if (null L) before (= n 0).
+	       (if (= n 0)
+		   (nconc (nreverse result) (cdr l))
+		   (copy-omit-nth (cdr l) (1- n) (cons (car l) result))))
+	     (rec (l l-len k)
+	       (if (= 0 k)
+		   (list nil) ;the list of the empty permutation.
+		   (let ((result nil))
+		     (loop for i below l-len do
+			  (let* ((e (nth i l))
+				 (l-1 (copy-omit-nth l i))
+				 (l-1-perms (rec l-1 (1- l-len) (1- k))))
+			    (loop for l-1-perm in l-1-perms do
+				 (push (cons e l-1-perm) result))))
+		     result))))
+      (rec l len k))))
+;; Using enumerate-permutations, write a test-cases that finds all programs that yield any permutation of the stack. Do this by checking the returned stack against a pre-computed hash-table of permutations.
+
+(defun generate-test-cases-permute-stack (stack-length)
+  (let* ((stk (loop for i below stack-length collect
+		   (gensym "H")))
+	 (stks-perm (apply #'nconc (loop for i upto stack-length collect
+				       (enumerate-permutations stk i))))
+	 (stk-tail (loop for i below 10 collect (gensym "T")))
+	 (stks-hashtable (make-lsxhash-equal-hash-table)))
+    ;; insert all permuted stacks to be recognized into stks-hashtable.
+    (dolist (stk-head stks-perm)
+      (let ((stk-whole (append stk-head stk-tail)))
+	(setf (gethash stk-whole stks-hashtable) t)))
+    (flet ((score-stk (r goal exp)
+	     (declare (ignore exp goal))
+	     (if (or (not (listp r)) (not (proper-list-p r)))
+		 +test-cases-invalid+
+		 (if (nth-value 1 (gethash r stks-hashtable))
+		     1
+		     0))))
+      (make-test-cases :values (list (append (list (append stk stk-tail)) '(unstack)))
+		       :generate (lambda (vs) vs)
+		       :goal (lambda (v) v) ;;TODO: actually we have many goals (all permuted stacks), but can't specify them here.
+		       :score #'score-stk))))
+;;(let ((tc (generate-test-cases-permute-stack 3)))
+;;  (joy-show-test-cases-score '(pop) tc))
+;; (let ((tc (generate-test-cases-permute-stack 3))
+;;       (joy-ops '(concat cons dip dup i list pop quote si stack swap uncons unstack)))
+;;   (systematicmapping 4 '() tc joy-ops 1000 .01 nil))
+
+;;;; Keeping track of scores in multiple test-cases
+;; TODO: Rewrite test-cases (and maybe systematicmapping, tournament, and competition) to support multiple goals. Then rewrite generate-test-cases-permute-stack to use it. (Although test-cases-permute-stack would be a rather uninteresting test-cases, since it only finds completely disjunct joy programs, i.e. there is no joy program which finds multiple permuted stacks at the same time.)
+;; How to support multiple goals: An joy program is scored according to N test-cases, so there are N scores. We want to remember only those programs that are better than all other programs in at least one category. Another criterium would be to forget all those programs which are worse than another program in all categories. Are these two criteria equivalent?
+;; Example of multiple goals: N==number of test-cases, NP number of programs.
+;; generate example N scores for NP programs, each line holds the scores of one program:
+
+;; (example-multiple-scores 3 10) yields:
+;;     A B C  goal    <inallgoals
+;; 0: (4 5 2)         <1,3,7
+;; 1: (7 6 8)         <
+;; 2: (4 2 0)         <0,1,3,4,7,9
+;; 3: (8 7 9) bestB,C <
+;; 4: (6 2 6)         <1,3
+;; 5: (2 7 3) bestB   <1,7
+;; 6: (0 6 0)         <1,3,5,7
+;; 7: (5 7 3) bestB   <
+;; 8: (0 3 9) bestC   <
+;; 9: (9 2 1) bestA   <
+(defun example-multiple-scores (n np)
+  (labels ((annotate-best-in-one (prog-scores)
+	     (let ((best (loop for i in (cadr (car prog-scores)) collect i)))
+	       (loop for (i scores) in (cdr prog-scores) do
+		    (loop for score in scores for best-cdr on best do
+			 (when (> score (car best-cdr))
+			   (setf (car best-cdr) score))))
+	       (loop for (i scores) in prog-scores collect
+		    (loop for score in scores for best-score in best for i from 0
+		       when (= score best-score) collect i))))
+	   (worse (scores-1 scores-2)
+	     "Returns T if SCORES-1 has worse scores than SCORES-2 in all test-cases."
+	     (loop for s1 in scores-1 for s2 in scores-2 never (>= s1 s2)))
+	   (annotate-worse-in-all (prog-scores)
+	     "Annotate programs with their worse-in-all-goals-than list."
+	     (loop for (i scores) in prog-scores collect
+		  (let ((worse-than (loop for (j scores-j) in prog-scores
+				       when (worse scores scores-j) collect
+				       j)))
+		    worse-than))))
+    (let* ((scores (loop for i below np collect
+			(cons i (list (loop for j below n collect (random 10))))))
+	   (best-in-one (annotate-best-in-one scores))
+	   (worse-than (annotate-worse-in-all scores)))
+      (loop
+	 for (i scores) in scores
+	 for b in best-in-one
+	 for w in worse-than
+	 do
+	   (format t "~A: ~A best:~A <~A~%" i scores b w)))))
+
 ;;;; tournament selection
 
 (define-constant +mut-length-const+ (+ 6 3))
