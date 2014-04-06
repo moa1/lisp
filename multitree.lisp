@@ -361,10 +361,11 @@ Returns the dllist pointing to the newly inserted element, or a newly constructe
 	    (setf (dllist-bdr cdr) new-dll))
 	  new-dll))))
 
-(defmacro with-gensyms (symbols &body body)
-  ;;(declare (type unique-list symbols))
-  `(let ,(loop for symbol in symbols collect `(,symbol (gensym)))
-     ,@body))
+;; in alexandria
+;; (defmacro with-gensyms (symbols &body body)
+;;   ;;(declare (type unique-list symbols))
+;;   `(let ,(loop for symbol in symbols collect `(,symbol (gensym)))
+;;      ,@body))
 
 (defmacro specializing-if (test then &optional else)
   "If TEST is T, only insert THEN, if TEST is NIL, only ELSE, otherwise the if-statement (if ,test ,then ,else)."

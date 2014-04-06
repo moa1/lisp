@@ -3,12 +3,15 @@
 ;; (sb-ext:restrict-compiler-policy 'debug 3)
 ;; (declaim (optimize speed))
 
+(load "~/quicklisp/setup.lisp")
+(ql:quickload 'alexandria)
+(use-package 'alexandria)
+
 (load "~/lisp/arbitrary-trees.lisp")
 ;;(load "~/lisp/multitree.lisp")
 (handler-case (load "~/lisp/multitree.lisp")
   (SB-PCL::SLOTD-INITIALIZATION-ERROR (c) (continue c))) ;how to avoid it?
 (load "~/lisp/refal-patmat.lisp")
-;;(load "~/quicklisp/setup.lisp") ;is in multitree.lisp
 ;;(ql:quickload :cl-custom-hash-table)
 ;;(use-package :cl-custom-hash-table)
 
@@ -33,13 +36,14 @@
 (defun zip-array (result-type &rest arrays)
   (apply #'map result-type #'list arrays))
 
-(defun proper-list-p (l)
-  ; TODO: this function should reject circular lists
-  (if (null l)
-      t
-      (if (consp l)
-	  (proper-list-p (cdr l))
-	  nil)))
+;; in alexandria
+;; (defun proper-list-p (l)
+;;   ; TODO: this function should reject circular lists
+;;   (if (null l)
+;;       t
+;;       (if (consp l)
+;; 	  (proper-list-p (cdr l))
+;; 	  nil)))
 
 (defun make-counter (&optional (counter 0))
   (declare (type fixnum counter))
@@ -68,8 +72,9 @@ The second, called with a number of seconds, postpones the timer by the number o
   ((time :initarg :time :reader time-error-time)) ;the value describing the time when the error was detected
   (:documentation "An error having to do with time."))
 
-(defun mean (seq)
-  (/ (apply #'+ seq) (length seq)))
+;; in alexandria
+;;(defun mean (seq)
+;;  (/ (apply #'+ seq) (length seq)))
 
 (defun square (x)
   (* x x))
@@ -652,7 +657,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 (defparameter *joy-ops* 
   '(+ and branch concat cons dip / dup equal gensym i ifte list * nill not or patmat patsub pop pred quote rem si sample < stack step - succ swap times true uncons unstack while define))
 
-(defconstant +mut0-max+ 0.8)
+(define-constant +mut0-max+ 0.8)
 
 (defun mutate (joy-ops exp debranch-p p1 p2 p3 p4 p5 p6
 	       &rest ops-p)
@@ -1003,7 +1008,7 @@ The test-cases' test values must be ordered increasingly."
 			  (b (car (elt values (mod (1+ i) (length values))))))
 		     (list (+ a (random (- b a))))))))
 
-(defconstant +test-cases-invalid+ -1000000) ;score for invalid joy-expressions or invalid results
+(define-constant +test-cases-invalid+ -1000000) ;score for invalid joy-expressions or invalid results
 
 (defun score-one-value (r goal exp)
   "calculates the score of the joy-eval-result r against the goal.
@@ -1066,7 +1071,8 @@ r should be a list of one value, otherwise +test-cases-invalid+ is returned."
 		   :score01 #'score01-one-value))
 (assert (eq 0 (joy-show-test-cases-score '(0 (swap) (succ (uncons swap pop) dip) while swap pop) *test-cases-stackcount*)))
 
-(defconstant +letter-symbols+ '(a b c d e f g h i j k l m n o p q r s t u v w x y z) "All 26 letters as symbols.")
+(define-constant +letter-symbols+ '(a b c d e f g h i j k l m n o p q r s t u v w x y z) :test 'equal
+		 :documentation "All 26 letters as symbols.")
 
 (defun score-list-similarity (r goal exp)
   (declare (ignorable exp))
@@ -1397,7 +1403,7 @@ r should be a list of one value, otherwise +test-cases-invalid+ is returned."
 
 ;;;; tournament selection
 
-(defconstant +mut-length-const+ (+ 6 3))
+(define-constant +mut-length-const+ (+ 6 3))
 
 (defun tournament-new (o size cycles test-cases joy-ops max-ticks max-seconds)
   (let* ((pop (make-array size :initial-element o))
@@ -1489,20 +1495,21 @@ r should be a list of one value, otherwise +test-cases-invalid+ is returned."
 
 ;; systematic program score measurement
 
-(defun copy-hash-table (ht)
-  "returns a copy of ht. (keys and) values are not copied."
-  (let ((copy (make-hash-table :test (hash-table-test ht) 
-			       :size (hash-table-size ht)
-			       :rehash-size (hash-table-rehash-size ht)
-			       :rehash-threshold
-			       (hash-table-rehash-threshold ht))))
-    (with-hash-table-iterator (next ht)
-      (labels ((rec ()
-		 (multiple-value-bind (present-p key value) (next)
-		   (unless present-p (return-from rec))
-		   (setf (gethash key copy) value))))
-	(rec)))
-    copy))
+;; in alexandria
+;; (defun copy-hash-table (ht)
+;;   "returns a copy of ht. (keys and) values are not copied."
+;;   (let ((copy (make-hash-table :test (hash-table-test ht)
+;; 			       :size (hash-table-size ht)
+;; 			       :rehash-size (hash-table-rehash-size ht)
+;; 			       :rehash-threshold
+;; 			       (hash-table-rehash-threshold ht))))
+;;     (with-hash-table-iterator (next ht)
+;;       (labels ((rec ()
+;; 		 (multiple-value-bind (present-p key value) (next)
+;; 		   (unless present-p (return-from rec))
+;; 		   (setf (gethash key copy) value))))
+;; 	(rec)))
+;;     copy))
 
 (defmacro defun-list-cmp (name value-null-a-b value-null-a value-null-b number-cmp string-cmp)
   "A macro for defining a lexicographic comparison function of two lists."
