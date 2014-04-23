@@ -1438,13 +1438,14 @@ E.g. (enumerate-permutations '(1 2 3) 2) == '((1 2) (1 3) (2 1) (2 3) (3 1) (3 2
 
 (defun generate-test-cases-permute-stack (stack-length)
   (let* ((stk (loop for i below stack-length collect
-		   (gensym "H")))
+		   (gensym (format nil "H-~A-" i))))
 	 (stks-perm (apply #'nconc (loop for i upto stack-length collect
 				       (enumerate-permutations stk i))))
+	 (stks-perm-w/o-id (remove stk stks-perm :test #'equal)) ;TODO: Currently this doesn't handle superfluous computation for other permutations, e.g. (nil pop swap),(swap nil pop) etc. Rather than removing the identity, have an additional scoring variable representing the total time required.
 	 (stk-tail (loop for i below 10 collect (gensym "T")))
 	 (stks-hashtable (make-lsxhash-equal-hash-table)))
     ;; insert all permuted stacks to be recognized into stks-hashtable.
-    (dolist (stk-head stks-perm)
+    (dolist (stk-head stks-perm-w/o-id)
       (let ((stk-whole (append stk-head stk-tail)))
 	(setf (gethash stk-whole stks-hashtable) t)))
     (flet ((score-stk (r goal exp)
@@ -2193,4 +2194,5 @@ Signal the same errors that JOY-EVAL would."
 ;; TODO: think hard about how to find out if two joy programs are equivalent. Use this to reduce the search space for joy programs. this might be related to caching implemented in systematicmapping, but also might not.
 ;; What is equal? Two programs are equal if they yield the same output for any input. Since we can't try all inputs, we might limit ourselves to inputs not exceeding a certain length.
 ;; Are there other approaches for testing program equality? Maybe there's a symbolic approach? Or a test-only-special-values, like if there's an IF, then we only have to test the values that make it execute the true-branch and those values that make it execute the false-branch.
-;; Maybe most important is to prefer programs that have local variable accesses instead of programs that access variables very deep in the stack. Maybe I should consider implementing a evaluator for The Mill.
+;; Maybe most important is to prefer programs that have local variable accesses instead of programs that access variables very deep in the stack. Maybe I should consider implementing an evaluator for The Mill (computer architecture).
+;; Also prefer programs which minimize maximal memory use. This should be related to prefering variable accesses close to the stack top. (Related in the sense that programs with local variable access also should automatically have lower maximal memory usage.)
