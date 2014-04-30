@@ -1506,13 +1506,30 @@ E.g. (enumerate-permutations '(1 2 3) 2) == '((1 2) (1 3) (2 1) (2 3) (3 1) (3 2
     (let* ((scores (loop for i below np collect
 			(cons i (list (loop for j below n collect (random 10))))))
 	   (best-in-one (annotate-best-in-one scores))
-	   (worse-than (annotate-worse-in-all scores)))
-      (loop
-	 for (i scores) in scores
-	 for b in best-in-one
-	 for w in worse-than
-	 do
-	   (format t "~A: ~A best:~A <~A~%" i scores b w)))))
+	   (worse-than (annotate-worse-in-all scores))
+	   (all (loop
+		   for (i scores) in scores
+		   for b in best-in-one
+		   for w in worse-than
+		   collect
+		     (list i scores b w))))
+      (flet ((print-all (all)
+	       (loop for (i scores b w) in all do
+		    (format t "~A: ~A best:~A <~A~%" i scores b w)))
+	     (compare-scores (a b)
+	       (destructuring-bind ((ai ascores ab aw) (bi bscores bb bw))
+		   (list a b)
+		 (declare (ignore ab bb))
+		 (cond
+		   ((< (length aw) (length bw)) (return-from compare-scores t))
+		   ((> (length aw) (length bw)) (return-from compare-scores nil)))
+		 (loop for as in ascores for bs in bscores do
+		      (cond
+			((< as bs) (return-from compare-scores nil))
+			((> as bs) (return-from compare-scores t))))
+		 nil)))
+	(setf all (sort all #'compare-scores))
+	(print-all all)))))
 
 ;;;; tournament selection
 
