@@ -6,6 +6,9 @@
 (load "~/quicklisp/setup.lisp")
 (ql:quickload 'alexandria)
 (use-package 'alexandria)
+(ql:quickload 'ltree)
+(use-package 'ltree)
+(ql:quickload 'cl-heap)
 
 (load "~/lisp/arbitrary-trees.lisp")
 ;;(load "~/lisp/multitree.lisp")
@@ -2213,3 +2216,118 @@ Signal the same errors that JOY-EVAL would."
 ;; Are there other approaches for testing program equality? Maybe there's a symbolic approach? Or a test-only-special-values, like if there's an IF, then we only have to test the values that make it execute the true-branch and those values that make it execute the false-branch.
 ;; Maybe most important is to prefer programs that have local variable accesses instead of programs that access variables very deep in the stack. Maybe I should consider implementing an evaluator for The Mill (computer architecture).
 ;; Also prefer programs which minimize maximal memory use. This should be related to prefering variable accesses close to the stack top. (Related in the sense that programs with local variable access also should automatically have lower maximal memory usage.)
+
+(define-ltree-type-with-children-array-storage ltree-visited init-ltree-visited make-ltree-visited)
+(defparameter *bfs-joy-ops* (append *joy-ops* '([ ] 0 1)))
+(defparameter *bfs-joy-ops-nobrackets* (remove-if (lambda (x) (find x '(define [ ]))) *bfs-joy-ops*))
+(init-ltree-visited *bfs-joy-ops*)
+
+(defstruct evalled
+  (stk nil)
+  (ticks 0 :type integer) ;remaining ticks
+  (scores nil :type list))
+
+(defun make-evaluator (test-cases-list max-ticks)
+  "Return as values an evaluator function and the nil-evalled."
+  (flet ((make-standardized-exam (test-cases)
+	   (let* ((test-values (test-cases-values test-cases))
+		  ;; Maybe change the following functions to interpret the test-values as a multiple-scoring-problem. This way the bfs could first hard-code solutions for the separate test-values, and only later find a general-purpose algorithm. But for this I first need to find a good algorithm for the multiple-scoring-problem.
+		  (goal-fn (test-cases-goal test-cases)))
+	     (loop for test in test-values collect
+		  (cons test (funcall goal-fn test)))))
+	 (score-exam (test-cases exam r)
+	   (let ((score-fn (test-cases-score test-cases)))
+	     (loop for (test . goal) in exam sum
+		  (funcall score-fn r goal :exp-not-available)))))
+    (let ((exams (loop for test-cases in test-cases-list collect (make-standardized-exam test-cases))))
+      (flet ((evaluator (old-evalled exp)
+	       "Return the evalled resulting from applying exp to old-evalled."
+	       (let* ((stk (evalled-stk old-evalled))
+		      (old-ticks (evalled-ticks old-evalled))
+		      (counter (make-counter (1+ old-ticks))) ;1+ because evaluating nil at the end costs 1 tick
+		      (r (joy-eval-handler stk exp :heap nil :c counter :cd (make-countdown 0.0)))
+		      (new-ticks (1+ (funcall counter))) ;1+ because (funcall counter) costs 1 tick
+		      (scores (loop
+				 for test-cases in test-cases-list
+				 for exam in exams
+				 collect
+				   (score-exam test-cases exam r))))
+		 (make-evalled :stk r
+			       :ticks new-ticks
+			       :scores scores))))
+	(values #'evaluator
+		(let ((nil-evalled (evaluator (make-evalled :stk nil :ticks 1 :scores nil) nil)))
+		  (make-evalled :stk nil
+				:ticks max-ticks
+				:scores (evalled-scores nil-evalled))))))))
+
+(defstruct bfs
+  (ops nil :type list)
+  (evaluator)
+  (tree nil) ;tree of already visited joy programs
+  )
+
+(defun bfs-new (joy-ops test-cases-list max-ticks)
+  (let ((tree (make-ltree-visited)))
+    (multiple-value-bind (evaluator nil-evalled) (make-evaluator test-cases-list max-ticks)
+      (setf (ltree-value tree) nil-evalled)
+      (make-bfs :ops joy-ops :evaluator evaluator :tree tree))))
+
+(defun ltree-reduce-leaves (ltree reduce-function initial-value &key sort-children-predicate)
+  "Visit the leaves of LTREE.
+Initialize VALUE with INITIAL-VALUE.
+For each leaf, call REDUCE-FUNCTION with the current leaf and VALUE, and set VALUE to the result.
+Iterate until all leaves are visited, and return VALUE."
+  (flet ((node-function (node children-value)
+	   (when children-value ;non-leaves are constantly nil
+	     (setf initial-value (funcall reduce-function node initial-value)))))
+   (ltree-reduce ltree (constantly nil) t #'node-function :sort-children-predicate sort-children-predicate))
+  initial-value)
+
+(defun make-extender-bestscore (bfs)
+  ;; Greedily extend the best scores
+  (let ((queues nil))
+    (labels ((register (node)
+	       (loop
+		  for queue in queues
+		  for s in (evalled-scores (ltree-value node))
+		  do
+		    (cl-heap:enqueue queue node s)))
+	     (init (tree)
+	       "Initialize the queues with the leaves' nodes, prioritized according to the scores."
+	       (flet ((leaf-function (node v)
+			(declare (ignore v))
+			(let* ((evalled (ltree-value node))
+			       (scores (evalled-scores evalled)))
+			  (when (null queues)
+			    (setf queues (mapcar (lambda (s)
+						   (declare (ignore s))
+						   (make-instance 'cl-heap:priority-queue :sort-fun #'>))
+						 scores)))
+			  (register node))))
+		 (ltree-reduce-leaves tree #'leaf-function nil)))
+	     (extender ()
+	       (let* ((queue (sample queues))
+		      (best-node (cl-heap:dequeue queue)))
+		 best-node)))
+      (init (bfs-tree bfs))
+      (values #'extender #'register))))
+
+(defun bfs-continue (bfs make-extender-fn number-extensions)
+  (multiple-value-bind (extender-fn register-fn) (funcall make-extender-fn bfs)
+    (let ((ops (bfs-ops bfs))
+	  (evaluator (bfs-evaluator bfs)))
+      (dotimes (i number-extensions)
+	(let* ((best-node (funcall extender-fn))
+	       (old-evalled (ltree-value best-node)))
+	  (format t "~A: extend ~A~%" i (ltree-path-from-root best-node))
+	  (dolist (op ops)
+	    (let* ((evalled (funcall evaluator old-evalled (list op)))
+		   (child-node (ltree-set-new-child best-node op evalled)))
+	      (funcall register-fn child-node)))))
+      (loop for i below (length ops) collect
+	   (let ((best-node (funcall extender-fn)))
+	     (list (cdr (ltree-path-from-root best-node))
+		   (evalled-scores (ltree-value best-node))))))))
+
+;;(bfs-continue (bfs-new *bfs-joy-ops-nobrackets* (list *test-cases-sqrt*) 1000) #'make-extender-bestscore 1000)
