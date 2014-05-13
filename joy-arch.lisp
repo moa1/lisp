@@ -67,7 +67,7 @@ The second, called with a number of seconds, postpones the timer by the number o
       (values (lambda () 1)
 	      (lambda (seconds-delta) (declare (ignore seconds-delta))))
       (let ((c (+ (get-internal-run-time) (ceiling (* seconds internal-time-units-per-second)))))
-	(check-type c fixnum)
+	(check-type c (and integer unsigned-byte))
 	(values	(lambda () (- c (get-internal-run-time)))
 		(lambda (seconds-delta) (incf c (* seconds-delta internal-time-units-per-second)))))))
 
@@ -1046,6 +1046,14 @@ r should be a list of one value, otherwise +test-cases-invalid+ is returned."
 		   :score01 #'score01-one-value))
 ;; TODO: write a joy program that computes the sqrt. Therefore, write test-cases that provide solutions for required ops, like the joy operation 'rotate.
 ;;(time (systematicmapping 4 '() *test-cases-sqrt* '(+ dip / dup < - while) 1000 .01))
+;; (joy-show-exam-score '(5
+;; 		       (dup) dip dup (/) dip + 2 /
+;; 		       (dup) dip dup (/) dip + 2 /
+;; 		       (dup) dip dup (/) dip + 2 /
+;; 		       (dup) dip dup (/) dip + 2 /
+;; 		       (dup) dip dup (/) dip + 2 /
+;; 		       )
+;; 		     (make-exam-from-test-cases *test-cases-sqrt*))
 
 (defun my-sqrt (x)
   (labels ((rec (r)
@@ -1468,71 +1476,79 @@ E.g. (enumerate-permutations '(1 2 3) 2) == '((1 2) (1 3) (2 1) (2 3) (3 1) (3 2
 ;;       (joy-ops '(concat cons dip dup i list pop quote si stack swap uncons unstack)))
 ;;   (systematicmapping 4 '() tc joy-ops 1000 .01 nil))
 
+(defun make-exam-from-test-cases (test-cases &optional values)
+  "Return an exam.
+An exam is a list of tasks.
+Each task consists of a list consisting of the input for the task, and a scoring function accepting a result as parameter and returning the score for the task."
+  ;; Idea how to include description into a task: The input of a task could be a list consisting of a description of the task (e.g. simply a constant denoting the task type), and the inputs of the task in a suitable format (e.g. a list).
+  (when (null values)
+    (setf values (test-cases-values test-cases)))
+  (let ((exam nil)
+	(goal-fn (test-cases-goal test-cases))
+	(score-fn (test-cases-score test-cases)))
+    (loop
+       for value in values
+       do
+	 (let ((goal (funcall goal-fn value)))
+	   (flet ((scoring-fn (result)
+		    (funcall score-fn result goal (make-condition 'error "exp not available"))))
+	     (let ((task (list value #'scoring-fn)))
+	       (push task exam)))))
+    (nreverse exam)))
+
+(defun joy-show-exam-score (o exam)
+  (loop for (inp scorer) in exam collect
+       (let* ((stk (joy-eval-handler nil (append inp o)))
+	      (score (funcall scorer stk)))
+	 (format t "inp:~A stk:~A score:~A~%" inp stk score)
+	 score)))
+
 ;;;; Keeping track of scores in multiple test-cases
 ;; TODO: Rewrite test-cases (and maybe systematicmapping, tournament, and competition) to support multiple goals. Then rewrite generate-test-cases-permute-stack to use it. (Although test-cases-permute-stack would be a rather uninteresting test-cases, since it only finds completely disjunct joy programs, i.e. there is no joy program which finds multiple permuted stacks at the same time.)
 ;; How to support multiple goals: An joy program is scored according to N test-cases, so there are N scores. We want to remember only those programs that are better than all other programs in at least one category. Another criterium would be to forget all those programs which are worse than another program in all categories. Are these two criteria equivalent?
-;; Example of multiple goals: N==number of test-cases, NP number of programs.
-;; generate example N scores for NP programs, each line holds the scores of one program:
 
-;; (example-multiple-scores 3 10) yields:
-;;     A B C  goal    <inallgoals
-;; 0: (4 5 2)         <1,3,7
-;; 1: (7 6 8)         <
-;; 2: (4 2 0)         <0,1,3,4,7,9
-;; 3: (8 7 9) bestB,C <
-;; 4: (6 2 6)         <1,3
-;; 5: (2 7 3) bestB   <1,7
-;; 6: (0 6 0)         <1,3,5,7
-;; 7: (5 7 3) bestB   <
-;; 8: (0 3 9) bestC   <
-;; 9: (9 2 1) bestA   <
-(defun example-multiple-scores (n np)
-  (labels ((annotate-best-in-one (prog-scores)
-	     (let ((best (loop for i in (cadr (car prog-scores)) collect i)))
-	       (loop for (i scores) in (cdr prog-scores) do
-		    (loop for score in scores for best-cdr on best do
-			 (when (> score (car best-cdr))
-			   (setf (car best-cdr) score))))
-	       (loop for (i scores) in prog-scores collect
-		    (loop for score in scores for best-score in best for i from 0
-		       when (= score best-score) collect i))))
-	   (worse (scores-1 scores-2)
-	     "Returns T if SCORES-1 has worse scores than SCORES-2 in all test-cases."
-	     (loop for s1 in scores-1 for s2 in scores-2 never (>= s1 s2)))
-	   (annotate-worse-in-all (prog-scores)
-	     "Annotate programs with their worse-in-all-goals-than list."
-	     (loop for (i scores) in prog-scores collect
-		  (let ((worse-than (loop for (j scores-j) in prog-scores
-				       when (worse scores scores-j) collect
-				       j)))
-		    worse-than))))
-    (let* ((scores (loop for i below np collect
-			(cons i (list (loop for j below n collect (random 10))))))
-	   (best-in-one (annotate-best-in-one scores))
-	   (worse-than (annotate-worse-in-all scores))
-	   (all (loop
-		   for (i scores) in scores
-		   for b in best-in-one
-		   for w in worse-than
-		   collect
-		     (list i scores b w))))
-      (flet ((print-all (all)
-	       (loop for (i scores b w) in all do
-		    (format t "~A: ~A best:~A <~A~%" i scores b w)))
-	     (compare-scores (a b)
-	       (destructuring-bind ((ai ascores ab aw) (bi bscores bb bw))
-		   (list a b)
-		 (declare (ignore ai bi ab bb))
-		 (cond
-		   ((< (length aw) (length bw)) (return-from compare-scores t))
-		   ((> (length aw) (length bw)) (return-from compare-scores nil)))
-		 (loop for as in ascores for bs in bscores do
-		      (cond
-			((< as bs) (return-from compare-scores nil))
-			((> as bs) (return-from compare-scores t))))
-		 nil)))
-	(setf all (sort all #'compare-scores))
-	(print-all all)))))
+(defun multiscore-add-new (new-scores scores-list &key key)
+  "Return the new dominating scores list when adding the scores NEW-SCORES to the old dominating SCORES-LIST.
+Dominating is defined as being better in at least one category.
+Every scores in SCORES-LIST must be dominating all other scores in SCORES-LIST.
+This function tries to optimize future calls to itself by not reordering SCORES-LIST except in the following situation: when a scores in SCORES-LIST dominates NEW-SCORES, the scores is put at the beginning of the returned scores list. (The reasoning is that the score will probably dominate other NEW-SCORES in future calls to this function.)
+When KEY is not NIL, it is used to access the scores of SCORES-LIST and NEW-SCORES, otherwise they are used directly."
+  (flet ((better-p (scores-1 scores-2)
+	   "Return T if SCORES-1 is better than SCORES-2 in at least one category, NIL otherwise."
+	   (let ((equal t))
+	     (loop for s1 in scores-1 for s2 in scores-2 do
+		  (if (< s1 s2)
+		      (return-from better-p nil)
+		      (if (> s1 s2)
+			  (setf equal nil))))
+	     (not equal))))
+    ;; TODO: specialize on key==NIL.
+    (setf key (if (null key) (lambda (x) x) key))
+    (let ((ret nil)
+	  (new-scores-obj new-scores)
+	  (new-scores (funcall key new-scores)))
+      (loop for scores in scores-list for cdr-scores-list on scores-list do
+	   (let ((scores-obj scores)
+		 (scores (funcall key scores)))
+	     (if (better-p scores new-scores)
+		 (return-from multiscore-add-new
+		   ;; put scores-obj in front in the hope that it will dominiate other new-scores in the future.
+		   ;; if new-scores is dominated, we don't need to return it, even if it was better than others in some category.
+		   (cons scores-obj (nconc (nreverse ret) (cdr cdr-scores-list))))
+		 (if (better-p new-scores scores)
+		     nil
+		     (push scores-obj ret)))))
+      (cons new-scores-obj (nreverse ret)))))
+
+(assert (equal (multiscore-add-new '(9 5) '((9 4) (7 9))) '((9 5) (7 9))))
+(assert (equal (multiscore-add-new '(9 3) '((9 4) (7 9))) '((9 4) (7 9))))
+(assert (equal (multiscore-add-new '(9 4) '((9 4) (7 9))) '((9 4) (9 4) (7 9))))
+
+;; (let ((scores (loop for i below 10 collect (list (random 10) (random 10))))
+;;       (dominators nil))
+;;   (loop for s in scores do
+;;        (setf dominators (multiscore-add-new s dominators))
+;;        (print (list "s" s "dominators" dominators))))
 
 ;;;; tournament selection
 
@@ -2209,69 +2225,7 @@ Signal the same errors that JOY-EVAL would."
     (format logstream "~%"))
   (finish-output logstream))
 
-;; TODO: search through the joy tree of possible programs. Only extend the currently fastest program by all possible extensions. This needs rewriting joy trees as lists using tree-to-list and list-to-tree (see learner-joy-rbm.lisp).
-;; TODO: search through the joy tree of possible programs. Only extend the currently best-scoring programs by all possible extensions.
-;; TODO: think hard about how to find out if two joy programs are equivalent. Use this to reduce the search space for joy programs. this might be related to caching implemented in systematicmapping, but also might not.
-;; What is equal? Two programs are equal if they yield the same output for any input. Since we can't try all inputs, we might limit ourselves to inputs not exceeding a certain length.
-;; Are there other approaches for testing program equality? Maybe there's a symbolic approach? Or a test-only-special-values, like if there's an IF, then we only have to test the values that make it execute the true-branch and those values that make it execute the false-branch.
-;; Maybe most important is to prefer programs that have local variable accesses instead of programs that access variables very deep in the stack. Maybe I should consider implementing an evaluator for The Mill (computer architecture).
-;; Also prefer programs which minimize maximal memory use. This should be related to prefering variable accesses close to the stack top. (Related in the sense that programs with local variable access also should automatically have lower maximal memory usage.)
-
-(define-ltree-type-with-children-array-storage ltree-visited init-ltree-visited make-ltree-visited)
-(defparameter *bfs-joy-ops* (append *joy-ops* '([ ] 0 1)))
-(defparameter *bfs-joy-ops-nobrackets* (remove-if (lambda (x) (find x '(define [ ]))) *bfs-joy-ops*))
-(init-ltree-visited *bfs-joy-ops*)
-
-(defstruct evalled
-  (stk nil)
-  (ticks 0 :type integer) ;remaining ticks
-  (scores nil :type list))
-
-(defun make-evaluator (test-cases-list max-ticks)
-  "Return as values an evaluator function and the nil-evalled."
-  (flet ((make-standardized-exam (test-cases)
-	   (let* ((test-values (test-cases-values test-cases))
-		  ;; Maybe change the following functions to interpret the test-values as a multiple-scoring-problem. This way the bfs could first hard-code solutions for the separate test-values, and only later find a general-purpose algorithm. But for this I first need to find a good algorithm for the multiple-scoring-problem.
-		  (goal-fn (test-cases-goal test-cases)))
-	     (loop for test in test-values collect
-		  (cons test (funcall goal-fn test)))))
-	 (score-exam (test-cases exam r)
-	   (let ((score-fn (test-cases-score test-cases)))
-	     (loop for (test . goal) in exam sum
-		  (funcall score-fn r goal :exp-not-available)))))
-    (let ((exams (loop for test-cases in test-cases-list collect (make-standardized-exam test-cases))))
-      (flet ((evaluator (old-evalled exp)
-	       "Return the evalled resulting from applying exp to old-evalled."
-	       (let* ((stk (evalled-stk old-evalled))
-		      (old-ticks (evalled-ticks old-evalled))
-		      (counter (make-counter (1+ old-ticks))) ;1+ because evaluating nil at the end costs 1 tick
-		      (r (joy-eval-handler stk exp :heap nil :c counter :cd (make-countdown 0.0)))
-		      (new-ticks (1+ (funcall counter))) ;1+ because (funcall counter) costs 1 tick
-		      (scores (loop
-				 for test-cases in test-cases-list
-				 for exam in exams
-				 collect
-				   (score-exam test-cases exam r))))
-		 (make-evalled :stk r
-			       :ticks new-ticks
-			       :scores scores))))
-	(values #'evaluator
-		(let ((nil-evalled (evaluator (make-evalled :stk nil :ticks 1 :scores nil) nil)))
-		  (make-evalled :stk nil
-				:ticks max-ticks
-				:scores (evalled-scores nil-evalled))))))))
-
-(defstruct bfs
-  (ops nil :type list)
-  (evaluator)
-  (tree nil) ;tree of already visited joy programs
-  )
-
-(defun bfs-new (joy-ops test-cases-list max-ticks)
-  (let ((tree (make-ltree-visited)))
-    (multiple-value-bind (evaluator nil-evalled) (make-evaluator test-cases-list max-ticks)
-      (setf (ltree-value tree) nil-evalled)
-      (make-bfs :ops joy-ops :evaluator evaluator :tree tree))))
+;;;; ltree auxiliary functions
 
 (defun ltree-reduce-leaves (ltree reduce-function initial-value &key sort-children-predicate)
   "Visit the leaves of LTREE.
@@ -2283,6 +2237,107 @@ Iterate until all leaves are visited, and return VALUE."
 	     (setf initial-value (funcall reduce-function node initial-value)))))
    (ltree-reduce ltree (constantly nil) t #'node-function :sort-children-predicate sort-children-predicate))
   initial-value)
+
+(defun ltree-leaves (ltree &key sort-children-predicate)
+  (let ((leaves nil))
+    (flet ((reduce-function (node v)
+	     (declare (ignore v))
+	     (push node leaves)))
+      (ltree-reduce-leaves ltree
+			   #'reduce-function
+			   nil
+			   :sort-children-predicate sort-children-predicate)
+      leaves)))
+
+(defun ltree-visit-nodes (ltree node-function)
+  "Visit all the nodes of LTREE in arbitrary order, calling NODE-FUNCTION on each.
+Return NIL."
+  (ltree-reduce ltree (constantly nil) nil (lambda (node value) (declare (ignore value)) (funcall node-function node))))
+
+;; TODO: search through the joy tree of possible programs. Only extend the currently fastest program by all possible extensions. This needs rewriting joy trees as lists using tree-to-list and list-to-tree (see learner-joy-rbm.lisp).
+;; TODO: search through the joy tree of possible programs. Only extend the currently best-scoring programs by all possible extensions.
+;; TODO: think hard about how to find out if two joy programs are equivalent. Use this to reduce the search space for joy programs. this might be related to caching implemented in systematicmapping, but also might not.
+;; What is equal? Two programs are equal if they yield the same output for any input. Since we can't try all inputs, we might limit ourselves to inputs not exceeding a certain length.
+;; Are there other approaches for testing program equality? Maybe there's a symbolic approach? Or a test-only-special-values, like if there's an IF, then we only have to test the values that make it execute the true-branch and those values that make it execute the false-branch.
+;; Maybe most important is to prefer programs that have local variable accesses instead of programs that access variables very deep in the stack. Maybe I should consider implementing an evaluator for The Mill (computer architecture).
+;; Also prefer programs which minimize maximal memory use. This should be related to prefering variable accesses close to the stack top. (Related in the sense that programs with local variable access also should automatically have lower maximal memory usage.)
+
+;;;; Breadth-first-search
+
+(define-ltree-type-with-children-array-storage ltree-visited init-ltree-visited make-ltree-visited)
+(defparameter *bfs-joy-ops* (append *joy-ops* '([ ] 0 1)))
+(defparameter *bfs-joy-ops-nobrackets* (remove-if (lambda (x) (find x '(define [ ]))) *bfs-joy-ops*))
+(init-ltree-visited *bfs-joy-ops*)
+
+(defstruct evalled
+  (states nil)
+  (scores nil :type list))
+
+(defun make-evaluator (exam-list)
+  "Return as values an evaluator function and the nil-evalled."
+  (let ((stk-init (mapcar #'car exam-list))
+	(scorers (mapcar #'cadr exam-list)))
+    (labels ((joy-eval-handler-counter (stk exp &key (heap (make-hash-table)))
+	       (let* ((counter (make-counter most-positive-fixnum))
+		      (countdown (make-countdown (float most-positive-fixnum)))
+		      (stk (joy-eval-handler stk exp :heap heap :c counter :cd countdown)))
+		 (let* ((elapsed-counter (- most-positive-fixnum (funcall counter) 2)) ;-2 because evaluating nil at the end costs 1 tick, and (funcall counter) costs 1 tick
+			(elapsed-countdown (- most-positive-fixnum (funcall countdown))))
+		   (values stk heap elapsed-counter (/ elapsed-countdown internal-time-units-per-second)))))
+	     (evaluator (old-evalled exp)
+	       "Return the evalled resulting from applying exp to old-evalled."
+	       (let* ((states (evalled-states old-evalled))
+		      (scores nil)
+		      (new-states (loop
+				     for state in states
+				     for scorer in scorers
+				     collect
+				       (destructuring-bind (o-stk o-elapsed-counter o-elapsed-countdown) state
+					 (multiple-value-bind (stk heap elapsed-counter elapsed-countdown)
+					     (joy-eval-handler-counter o-stk exp)
+					   (declare (ignore heap))
+					   (let ((elapsed-counter (+ elapsed-counter o-elapsed-counter))
+						 (elapsed-countdown (+ elapsed-countdown o-elapsed-countdown)))
+					     ;;(print (list "exp" exp "o-stk" o-stk "stk" stk))
+					     (setf scores (cons (funcall scorer stk) (cons (- elapsed-counter) scores)))
+					     (list stk elapsed-counter elapsed-countdown)))))))
+		 ;;(print (list "old-evalled" old-evalled "exp" exp "scores" scores))
+		 (make-evalled :states new-states
+			       :scores scores))))
+    (values #'evaluator
+	    (let* ((states (loop for stk in stk-init collect (list stk 0 0.0)))
+		   (nil-evalled (evaluator (make-evalled :states states
+							 :scores nil)
+					   nil))
+		   (nil-states (evalled-states nil-evalled)))
+	      (make-evalled :states nil-states
+			    :scores (evalled-scores nil-evalled)))))))
+
+(defstruct bfs
+  (ops nil :type list)
+  (evaluator)
+  (tree nil) ;tree of already visited joy programs
+  )
+
+(defun bfs-new (joy-ops test-cases-list)
+  (let ((tree (make-ltree-visited)))
+    (multiple-value-bind (evaluator nil-evalled) (make-evaluator (loop for test-cases in test-cases-list append
+								      (make-exam-from-test-cases test-cases)))
+      (setf (ltree-value tree) nil-evalled)
+      (make-bfs :ops joy-ops :evaluator evaluator :tree tree))))
+
+(defun count-unique (sequence &key (test #'eql))
+  "Return (ELEMENT . COUNT) for the unique (under equality TEST) elements in SEQUENCE."
+  (let ((ht (make-hash-table :test test))
+	(result))
+    (map nil
+	 (lambda (x)
+	   (incf (gethash x ht 0) 1))
+	 sequence)
+    (maphash (lambda (x c)
+	       (push (cons x c) result))
+	     ht)
+    result))
 
 (defun make-extender-bestscore (bfs)
   ;; Greedily extend the best scores
@@ -2297,9 +2352,9 @@ Iterate until all leaves are visited, and return VALUE."
 	       "Initialize the queues with the leaves' nodes, prioritized according to the scores."
 	       (flet ((leaf-function (node v)
 			(declare (ignore v))
-			(let* ((evalled (ltree-value node))
-			       (scores (evalled-scores evalled)))
-			  (when (null queues)
+			(when (null queues)
+			  (let* ((evalled (ltree-value node))
+				 (scores (evalled-scores evalled)))
 			    (setf queues (mapcar (lambda (s)
 						   (declare (ignore s))
 						   (make-instance 'cl-heap:priority-queue :sort-fun #'>))
@@ -2307,10 +2362,35 @@ Iterate until all leaves are visited, and return VALUE."
 			  (register node))))
 		 (ltree-reduce-leaves tree #'leaf-function nil)))
 	     (extender ()
-	       (let* ((queue (sample queues))
-		      (best-node (cl-heap:dequeue queue)))
-		 best-node)))
+	       (unique (loop for queue in queues collect
+			    (cl-heap:dequeue queue)))))
       (init (bfs-tree bfs))
+      (values #'extender #'register))))
+
+(defun make-extender-dominators (bfs)
+  ;; Extend one of the dominators. If all dominators have been extended, extend a random leaf of a dominator.
+  (let ((dominators nil))
+    (labels ((register (node)
+	       (flet ((key (node)
+			(evalled-scores (ltree-value node))))
+		 ;;(print (list "register" "node" (ltree-path-from-root node) "node-scores" (funcall #'key node) "dominators" (mapcar #'key dominators)))
+		 (setf dominators (multiscore-add-new node dominators :key #'key))
+		 ;;(print (list "dominators" (mapcar #'key dominators) "nodes" (mapcar #'ltree-path-from-root dominators)))
+		 ))
+	     (init (tree)
+	       "Initialize the dominators with all nodes."
+	       (ltree-visit-nodes tree #'register))
+	     (extender ()
+	       ;;TODO: "Return the leaves of the dominators that have the shortest distance from its dominator root."
+	       ;;(print (list "extender" "dominators" dominators))
+	       (let* ((leaves (apply #'nconc (mapcar #'ltree-leaves dominators)))
+		      (leaf-count (count-unique leaves :test #'eq))
+		      (max-count (loop for (leaf . count) in leaf-count maximizing count))
+		      (max-leaf-count (remove-if (lambda (x) (/= (cdr x) max-count)) leaf-count)))
+		 (mapcar #'car max-leaf-count))
+	       ))
+      (init (bfs-tree bfs))
+      (format t "init done. ~A~%" dominators)
       (values #'extender #'register))))
 
 (defun bfs-continue (bfs make-extender-fn number-extensions)
@@ -2318,16 +2398,24 @@ Iterate until all leaves are visited, and return VALUE."
     (let ((ops (bfs-ops bfs))
 	  (evaluator (bfs-evaluator bfs)))
       (dotimes (i number-extensions)
-	(let* ((best-node (funcall extender-fn))
-	       (old-evalled (ltree-value best-node)))
-	  (format t "~A: extend ~A~%" i (ltree-path-from-root best-node))
-	  (dolist (op ops)
-	    (let* ((evalled (funcall evaluator old-evalled (list op)))
-		   (child-node (ltree-set-new-child best-node op evalled)))
-	      (funcall register-fn child-node)))))
-      (loop for i below (length ops) collect
-	   (let ((best-node (funcall extender-fn)))
-	     (list (cdr (ltree-path-from-root best-node))
-		   (evalled-scores (ltree-value best-node))))))))
+	(let* ((best-nodes (funcall extender-fn))
+	       (old-evalleds (mapcar #'ltree-value best-nodes)))
+	  (loop
+	     for best-node in best-nodes
+	     for old-evalled in old-evalleds
+	     do
+	       (format t "~A: extend ~A scores ~A~%" i (ltree-path-from-root best-node) (evalled-scores old-evalled))
+	       (dolist (op ops)
+		 (let* ((evalled (funcall evaluator old-evalled (list op)))
+			(child-node (ltree-set-new-child best-node op evalled)))
+		   (funcall register-fn child-node))))))
+;;      bfs)))
+      (let ((best-nodes (funcall extender-fn)))
+	;;(print (list "best-nodes" best-nodes))
+      	(mapcar (lambda (best-node)
+      		  (list (ltree-path-from-root best-node)
+      			(evalled-scores (ltree-value best-node))))
+      		best-nodes)))))
 
-;;(bfs-continue (bfs-new *bfs-joy-ops-nobrackets* (list *test-cases-sqrt*) 1000) #'make-extender-bestscore 1000)
+;;(bfs-continue (bfs-new *bfs-joy-ops-nobrackets* (list *test-cases-sqrt*)) #'make-extender-bestscore 1000)
+;;(bfs-continue (bfs-new '(succ pred) (list *test-cases-sqrt*)) #'make-extender-dominators 1)
