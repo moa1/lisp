@@ -14,7 +14,7 @@
 (defun my-search2 (item list &key key (test #'eql))
   (specializing-labels ((helper-with-key ((akey key)))
 			(helper-no-key ((akey nil))))
-      ((list)
+      (rec (list)
        (cond ((null list)
 	      nil)
 	     ((funcall test
@@ -31,7 +31,7 @@
 			(helper-key+test ((akey nil) (atest test)))
 			(helper+key-test ((akey key) (atest nil)))
 			(helper-key-test ((akey nil) (atest nil))))
-      ((list)
+      (rec (list)
        (cond ((null list)
 	      nil)
 	     ((if atest
