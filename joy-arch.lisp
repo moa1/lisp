@@ -2264,11 +2264,6 @@ Return NIL."
 
 ;;;; Breadth-first-search
 
-(define-ltree-type-with-children-array-storage ltree-visited init-ltree-visited make-ltree-visited)
-(defparameter *bfs-joy-ops* (append *joy-ops* '([ ] 0 1)))
-(defparameter *bfs-joy-ops-nobrackets* (remove-if (lambda (x) (find x '(define [ ]))) *bfs-joy-ops*))
-(init-ltree-visited *bfs-joy-ops*)
-
 (defstruct evalled
   (states nil)
   (scores nil :type list))
@@ -2319,25 +2314,17 @@ Return NIL."
   (tree nil) ;tree of already visited joy programs
   )
 
+(define-ltree-type-with-children-array-storage ltree-visited init-ltree-visited make-ltree-visited)
+(defparameter *bfs-joy-ops* (append *joy-ops* '([ ] 0 1)))
+(defparameter *bfs-joy-ops-nobrackets* (remove-if (lambda (x) (find x '(define [ ]))) *bfs-joy-ops*))
+(init-ltree-visited *bfs-joy-ops*)
+
 (defun bfs-new (joy-ops test-cases-list)
   (let ((tree (make-ltree-visited)))
     (multiple-value-bind (evaluator nil-evalled) (make-evaluator (loop for test-cases in test-cases-list append
 								      (make-exam-from-test-cases test-cases)))
       (setf (ltree-value tree) nil-evalled)
       (make-bfs :ops joy-ops :evaluator evaluator :tree tree))))
-
-(defun count-unique (sequence &key (test #'eql))
-  "Return (ELEMENT . COUNT) for the unique (under equality TEST) elements in SEQUENCE."
-  (let ((ht (make-hash-table :test test))
-	(result))
-    (map nil
-	 (lambda (x)
-	   (incf (gethash x ht 0) 1))
-	 sequence)
-    (maphash (lambda (x c)
-	       (push (cons x c) result))
-	     ht)
-    result))
 
 (defun make-extender-bestscore (bfs)
   ;; Greedily extend the best scores
@@ -2367,6 +2354,19 @@ Return NIL."
       (init (bfs-tree bfs))
       (values #'extender #'register))))
 
+(defun count-unique (sequence &key (test #'eql))
+  "Return (ELEMENT . COUNT) for the unique (under equality TEST) elements in SEQUENCE."
+  (let ((ht (make-hash-table :test test))
+	(result))
+    (map nil
+	 (lambda (x)
+	   (incf (gethash x ht 0) 1))
+	 sequence)
+    (maphash (lambda (x c)
+	       (push (cons x c) result))
+	     ht)
+    result))
+
 (defun make-extender-dominators (bfs)
   ;; Extend one of the dominators. If all dominators have been extended, extend a random leaf of a dominator.
   (let ((dominators nil))
@@ -2387,8 +2387,10 @@ Return NIL."
 		      (leaf-count (count-unique leaves :test #'eq))
 		      (max-count (loop for (leaf . count) in leaf-count maximizing count))
 		      (max-leaf-count (remove-if (lambda (x) (/= (cdr x) max-count)) leaf-count)))
-		 (mapcar #'car max-leaf-count))
-	       ))
+		 (if (chance 0.5)
+		     (mapcar #'car max-leaf-count)
+		     leaves)
+	       )))
       (init (bfs-tree bfs))
       (format t "init done. ~A~%" dominators)
       (values #'extender #'register))))
@@ -2398,24 +2400,24 @@ Return NIL."
     (let ((ops (bfs-ops bfs))
 	  (evaluator (bfs-evaluator bfs)))
       (dotimes (i number-extensions)
-	(let* ((best-nodes (funcall extender-fn))
-	       (old-evalleds (mapcar #'ltree-value best-nodes)))
+	(let* ((best-nodes (funcall extender-fn)))
 	  (loop
 	     for best-node in best-nodes
-	     for old-evalled in old-evalleds
 	     do
-	       (format t "~A: extend ~A scores ~A~%" i (ltree-path-from-root best-node) (evalled-scores old-evalled))
+	       (format t "~A: extend ~A scores ~A~%" i (ltree-path-from-root best-node) (evalled-scores (ltree-value best-node)))
 	       (dolist (op ops)
-		 (let* ((evalled (funcall evaluator old-evalled (list op)))
+		 (let* ((evalled (funcall evaluator (ltree-value best-node) (list op)))
 			(child-node (ltree-set-new-child best-node op evalled)))
 		   (funcall register-fn child-node))))))
 ;;      bfs)))
-      (let ((best-nodes (funcall extender-fn)))
-	;;(print (list "best-nodes" best-nodes))
-      	(mapcar (lambda (best-node)
-      		  (list (ltree-path-from-root best-node)
-      			(evalled-scores (ltree-value best-node))))
-      		best-nodes)))))
+      (print (list "best-nodes"
+		   (let ((best-nodes (funcall extender-fn)))
+		     ;;(print (list "best-nodes" best-nodes))
+		     (mapcar (lambda (best-node)
+			       (list (ltree-path-from-root best-node)
+				     (evalled-scores (ltree-value best-node))))
+			     best-nodes))))))
+  bfs)
 
 ;;(bfs-continue (bfs-new *bfs-joy-ops-nobrackets* (list *test-cases-sqrt*)) #'make-extender-bestscore 1000)
 ;;(bfs-continue (bfs-new '(succ pred) (list *test-cases-sqrt*)) #'make-extender-dominators 1)
