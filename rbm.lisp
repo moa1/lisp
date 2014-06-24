@@ -1121,6 +1121,7 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
       (array-array-fun neg-data (array-repeat v-biases (list n-cases) nil) #'+ neg-data)
       (array-fun neg-data (lambda (x) (sigmoid x)) neg-data :a-slice (list cases-dim-slice v-binary) :r-slice (list cases-dim-slice v-binary))
       (softmax-calc-probs n-cases v-softmax neg-data)
+      ;; neg-data is not changed for v-gaussian.
       (array-fun neg-data (lambda (x) (declare (type single-float x)) (max x 0.0)) neg-data :a-slice (list cases-dim-slice v-linear) :r-slice (list cases-dim-slice v-linear))
 ;;      (print (list "neg-data" neg-data))
       (array-array-mul neg-data w neg-h-probs)
@@ -1258,8 +1259,28 @@ RBM is a restricted boltzmann machine as returned by new-rbm or rbm-learn-cd1."
 		  (when (or (null best) (> free-energy best-free-energy))
 		    (setf best da)
 		    (setf best-free-energy free-energy)))))
-	 ;;(prind best))))
 	 best)))
+(defun rpsls-win-accuracy (data output)
+  "DATA is the target, OUTPUT the result returned by rpsls-win."
+  ;; TODO: rewrite this function using the rewritten function rpsls-win
+  (let ((acc 0.0))
+    (loop for i below (length output) do
+	 (let ((same (loop for j below 3 sum (* (aref data i (+ 10 j)) (aref (elt output i) 0 (+ 10 j))))))
+	   (incf acc same)))
+    (/ acc (length output))))
+;; accuracies with different learn-rates LR and number of binary hidden nodes H:
+;; (defparameter *rbm-rpsls* (rbm-learn-minibatch *data-rpsls* (new-rbm 13 H :v-softmax '(5 5 3) :h-binary H) LR .9 .0002 10000))
+;; (rpsls-win-accuracy *data-rpsls* (rpsls-win *data-rpsls* *rbm-rpsls*)) gives one accuracy, calculate 4:
+;; LR=0.01,H=5: acc=0.52,0.64,0.68,0.80
+;; LR=0.64,H=5: acc=0.88,0.76,0.76,0.88
+;; LR=0.01,H=7: acc=0.64,0.48,0.80,0.72
+;; LR=0.64,H=7: acc=0.68,0.80,0.84,0.92
+;; LR=0.01,H=8: acc=0.76,0.76,0.88,0.92
+;; LR=0.64,H=8: acc=0.92,0.92,0.64,0.80
+;; LR=0.01,H=10:acc=0.84,0.80,0.92,0.92
+;; LR=0.64,H=10:acc=1.00,1.00,0.84,0.84
+;; (defparameter *rbm-rpsls* (rbm-learn-minibatch *data-rpsls* (new-rbm 13 10 :v-softmax '(5 5 3) :h-binary 10) 0.01 .9 .0002 20000))
+;; 
 
 (defun rbm-update (rbm w-inc v-biases-inc h-biases-inc learn-rate)
   (let* ((w (rbm-w rbm))
