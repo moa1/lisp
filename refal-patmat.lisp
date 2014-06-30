@@ -54,8 +54,10 @@ Return the unmodified CLOSED if VAR is bound to a value equal to VAL (under equa
 	    'fail))))
 
 (defmacro and-fail-last (fail-form &rest forms)
-  "If one of the FORMS but the last fails, return 'FAIL, otherwise the last form(which can be nil)."
-  ;; TODO: add &key :fail-symbol, which customizes the fail symbol
+  "If one of the FORMS but the last fails (i.e. evaluates to NIL), return the result of evaluating FAIL-FORM, otherwise the last form(which can be NIL)."
+  ;; Couldn't this macro be defined as:
+  ;; `(or (and ,@forms) ,fail-form))
+  ;; No, because (and-fail-last 'fail (1+ 1) nil) should be NIL, not 'FAIL.
   (labels ((rec (forms last)
 	     (if (null forms)
 		 last
@@ -67,6 +69,11 @@ Return the unmodified CLOSED if VAR is bound to a value equal to VAL (under equa
 
 (defun dlist->list* (dlist)
   "Deeply convert the dlist DLIST to a list."
+  ;; Note: this doesn't convert circular lists:
+  ;; (let ((d (dlist 1 2 3)))
+  ;;   (setf (next (dlist-last d)) (dlist-first d))
+  ;;   d)
+  ;; However, the structures possible with a dlist cannot all be represented with lists, circular or not. So maybe we shouldn't handle circularities anyways.
   (declare (type dlist dlist))
   (do ((cur (dlist-last dlist) (prev cur)) (l nil)) ((eq cur nil) l)
     (push (let ((d (data cur)))
@@ -77,6 +84,12 @@ Return the unmodified CLOSED if VAR is bound to a value equal to VAL (under equa
 
 (defun list->dlist (l)
   "Deeply convert list L to a dlist."
+  ;; Note: this hangs on converting circular lists:
+  ;; (let ((*PRINT-CIRCLE* t))
+  ;;   (let ((l (list 1 2 3)))
+  ;;     (setf (cdr (last l)) l)
+  ;;     (print l)
+  ;;     (list->dlist l)))
   (declare (type list l))
   (if (null l)
       nil
@@ -87,7 +100,7 @@ Return the unmodified CLOSED if VAR is bound to a value equal to VAL (under equa
 	(apply #'dlist content))))
 
 (defun dcons->list (dcons-start dcons-stop &key (iterate #'prev))
-  "Iteratively push the elements between DCONS-STOP and DCONS-START onto a newly constructed list and substitute DCONS-STOP with (funcall DIRECTION DCONS-STOP) after each iteration.
+  "Iteratively push the elements between DCONS-STOP and DCONS-START (both inclusively) onto a newly constructed list. Start the pushing with the element at DCONS-STOP and substitute DCONS-STOP with (funcall ITERATE DCONS-STOP) after each iteration.
 If an element is a DLIST, it is converted into a list before pushing it.
 This function returns a list with at least one element."
   (declare (type dcons dcons-start dcons-stop))
@@ -346,3 +359,12 @@ EXP: expression, PAT: pattern, VARS: (svars tvars evars), CLOSED: ((a . value) (
 		       '(c b a (a b x (x y) (x y z)) (a b c) (x y z) (x y) (x) a)
 		       '(e.7 (e.4 (e.5 e.2 e.6)) e.3 (e.2 z) e.1))
 	       '((e.1 . ((x y) (x) a)) (e.3 . ((a b c))) (e.6 . (z)) (e.2 . (x y)) (e.5 . nil) (e.4 . (a b x (x y))) (e.7 . (c b a)))))
+
+;; (patmat '((s.1 s.2) (t.1 t.2) (e.1 e.2 e.3)) '(1 2 3 4) '(s.1)) => ((S.1 . 1)). Is this right?
+;; (patmat '((s.1 s.2) (t.1 t.2) (e.1 e.2 e.3)) '(1 2 3 4) '(t.1)) => ((T.1 . 1)). Is this right?
+;; (patmat '((s.1 s.2) (t.1 t.2) (e.1 e.2 e.3)) '(1 2 3 4) '(1 2 s.1)) => ((S.1 . 3)). Is this right? I think not, since (patmat '((s.1 s.2) (t.1 t.2) (e.1 e.2 e.3)) '(1 2 3 4) '(s.1 3 4)) => FAIL.
+;; (patmat '((s.1 s.2) (t.1 t.2) (e.1 e.2 e.3)) '(1 2 3 4) '(t.1 3 4)) => FAIL. Is this right? I thought t-variables can match symbols or lists?
+;; (patmat '((s.1 s.2) (t.1 t.2) (e.1 e.2 e.3)) '(1 2 1 2) '(t.1 t.1)) => FAIL. Is this right? I thought t-variables can match symbols or lists?
+;; In refal/html/ch_1.3.html it says "A t-variable takes any term as its value (recall that a term is either a symbol or an expression in structure brackets). An e-variable can take any expression as its value.", so I think t-variables differ from e-variables in that they may not bind NIL, but e-variables may. Exercises 1.3(b) and (c) support that: "Write patterns that can be described in words as follows: [(a) ...] (b) an expression which contains at least two identical terms on the top level of structure; (c) a non-empty expression." and their answers (file refal/html/answers.html) are: "(b) e.1 t.X e.2 t.X e.3 ; (c) t.1 e.2 or e.1 t.2".
+;; Chapter 1.3, exercise 1.4(b) says: "Find the results of the following matchings: (a) 'abbab' : e.1 t.X t.X e.2 (b) 'ab(b)ab' : e.1 t.X t.X e.2" and their answers are: "(a) t.X becomes b ; (b) failure;", so I think that t-variables may be either a symbol/number/character or an expression in structure brackets (meaning described as a regexp: "." OR "\(.*\)").
+;; (patmat '((s.1 s.2) (t.1 t.2) (e.1 e.2 e.3)) '(a b b a b) '(e.1 t.1 t.1 e.2)) doesn't evaluate, but raises the error "The value FAIL is not of type LIST."
