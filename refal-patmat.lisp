@@ -173,7 +173,7 @@ OPEN-L and OPEN-R are the open regions on the left and on the right side of the 
   (flet ((recurse (closed)
 	   (declare (type (or (member fail) list) closed)
 		    (values t list))
-	   (if (eq pat-l pat-r)
+	   (if (or (eq pat-l pat-r) (eq closed 'fail))
 	       (values closed (nconc open-l open-r))
 	       ;; the multiple-value-bind is necessary for "Return type not fixed values, so can't use known return convention" to go away.
 	       (multiple-value-bind (c o)
@@ -359,6 +359,10 @@ EXP: expression, PAT: pattern, VARS: (svars tvars evars), CLOSED: ((a . value) (
 		       '(c b a (a b x (x y) (x y z)) (a b c) (x y z) (x y) (x) a)
 		       '(e.7 (e.4 (e.5 e.2 e.6)) e.3 (e.2 z) e.1))
 	       '((e.1 . ((x y) (x) a)) (e.3 . ((a b c))) (e.6 . (z)) (e.2 . (x y)) (e.5 . nil) (e.4 . (a b x (x y))) (e.7 . (c b a)))))
+(assert (equal (patmat '((s.1 s.2) (t.1 t.2) (e.1 e.2 e.3)) '(a b b a b) '(e.1 t.1 t.1 e.2))
+	       '((E.2 A B) (T.1 . B) (E.1 A))))
+(assert (equal (patmat '((s.1 s.2) (t.1 t.2) (e.1 e.2 e.3)) '(a b b a b) '(e.1 s.1 s.1 e.2))
+	       '((E.2 A B) (S.1 . B) (E.1 A))))
 
 ;; (patmat '((s.1 s.2) (t.1 t.2) (e.1 e.2 e.3)) '(1 2 3 4) '(s.1)) => ((S.1 . 1)). Is this right?
 ;; (patmat '((s.1 s.2) (t.1 t.2) (e.1 e.2 e.3)) '(1 2 3 4) '(t.1)) => ((T.1 . 1)). Is this right?
@@ -367,4 +371,3 @@ EXP: expression, PAT: pattern, VARS: (svars tvars evars), CLOSED: ((a . value) (
 ;; (patmat '((s.1 s.2) (t.1 t.2) (e.1 e.2 e.3)) '(1 2 1 2) '(t.1 t.1)) => FAIL. Is this right? I thought t-variables can match symbols or lists?
 ;; In refal/html/ch_1.3.html it says "A t-variable takes any term as its value (recall that a term is either a symbol or an expression in structure brackets). An e-variable can take any expression as its value.", so I think t-variables differ from e-variables in that they may not bind NIL, but e-variables may. Exercises 1.3(b) and (c) support that: "Write patterns that can be described in words as follows: [(a) ...] (b) an expression which contains at least two identical terms on the top level of structure; (c) a non-empty expression." and their answers (file refal/html/answers.html) are: "(b) e.1 t.X e.2 t.X e.3 ; (c) t.1 e.2 or e.1 t.2".
 ;; Chapter 1.3, exercise 1.4(b) says: "Find the results of the following matchings: (a) 'abbab' : e.1 t.X t.X e.2 (b) 'ab(b)ab' : e.1 t.X t.X e.2" and their answers are: "(a) t.X becomes b ; (b) failure;", so I think that t-variables may be either a symbol/number/character or an expression in structure brackets (meaning described as a regexp: "." OR "\(.*\)").
-;; (patmat '((s.1 s.2) (t.1 t.2) (e.1 e.2 e.3)) '(a b b a b) '(e.1 t.1 t.1 e.2)) doesn't evaluate, but raises the error "The value FAIL is not of type LIST."
