@@ -64,3 +64,70 @@ Is used to measure the performance of interrupting joy-eval."
       (joy-time-error-stk c))))
 ;;(timediff (joy-eval-interrupt-speed 100000 1) (joy-eval-interrupt-speed 1 100000) :showtimes t)
 ;;(timediff (joy-eval-interrupt-speed 100000 1) (joy-eval-interrupt-speed 50 2000) :showtimes t) says that evaluating 50 tick counts before signalling a joy-overrun-error makes joy-eval about 2 times slower.
+
+(defun thrower (tag)
+  (throw tag 1))
+(defun throw-catch (tag)
+  (catch 'a
+    (1+ (catch 'b
+	  (thrower tag)))))
+
+(defun a-handler-bind ()
+  (catch 'a
+    (handler-bind ((error (lambda (c)
+			    (declare (ignore c))
+			    (throw 'a 2))))
+      (error "bla"))))
+
+(defun throw-catch-vs-handler-bind ()
+  (timediff (throw-catch 'a) (a-handler-bind) :maxtime 2 :showtimes t))
+
+(defun a-handler-case ()
+  (handler-case (progn (error "bla") 1)
+    (error () 2)))
+
+(defun handler-bind-vs-handler-case ()
+  (timediff (a-handler-bind) (a-handler-case) :maxtime 2 :showtimes t))
+
+(defun make-counter (c)
+  (let ((i c))
+    (lambda ()
+      (decf i)
+      (= i 0))))
+
+(defun plus-return (a b &key (c (make-counter 0)))
+  (if (funcall c)
+      (return-from plus-return 'overrun))
+  (if (= 0 a)
+      b
+      (plus-return (1- a) (1+ b) :c c)))
+
+(defun plus-catch (a b &key (c (make-counter 0)))
+  (if (funcall c)
+      (throw 'overrun 'overrun))
+  (if (= 0 a)
+      b
+      (plus-catch (1- a) (1+ b) :c c)))
+
+(defun timediff-return-vs-catch (&optional (d 1))
+  (let ((v most-positive-fixnum))
+    (timediff (plus-return v 0 :c (make-counter d))
+	      (catch 'overrun (plus-catch v 0 :c (make-counter d)))
+	      :showtimes t
+	      :maxtime 2)))
+
+(defun plus-return-inline (a b &key (c 0))
+  (if (progn
+	(decf c)
+	(= c 0))
+      (return-from plus-return-inline 'overrun))
+  (if (= 0 a)
+      b
+      (plus-return-inline (1- a) (1+ b) :c c)))
+
+(defun timediff-funcall-vs-inline (&optional (d 1))
+  (let ((v most-positive-fixnum))
+    (timediff (plus-return v 0 :c (make-counter d))
+	      (plus-return-inline v 0 :c d)
+	      :showtimes t
+	      :maxtime 2)))
