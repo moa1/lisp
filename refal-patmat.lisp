@@ -37,24 +37,27 @@ Doesn't yet print whether dll has any circularities in it (but detects them alre
 
 (declaim (inline svarp))
 (defun svarp (symbol)
-  (let ((s (symbol-name symbol)))
-    (and (>= (length s) 2)
-	 (eq (elt s 0) #\S)
-	 (eq (elt s 1) #\.))))
+  (and (symbolp symbol)
+       (let ((s (symbol-name symbol)))
+	 (and (>= (length s) 2)
+	      (eq (elt s 0) #\S)
+	      (eq (elt s 1) #\.)))))
 
 (declaim (inline tvarp))
 (defun tvarp (symbol)
-  (let ((s (symbol-name symbol)))
-    (and (>= (length s) 2)
-	 (eq (elt s 0) #\T)
-	 (eq (elt s 1) #\.))))
+  (and (symbolp symbol)
+       (let ((s (symbol-name symbol)))
+	 (and (>= (length s) 2)
+	      (eq (elt s 0) #\T)
+	      (eq (elt s 1) #\.)))))
 
 (declaim (inline evarp))
 (defun evarp (symbol)
-  (let ((s (symbol-name symbol)))
-    (and (>= (length s) 2)
-	 (eq (elt s 0) #\E)
-	 (eq (elt s 1) #\.))))
+  (and (symbolp symbol)
+       (let ((s (symbol-name symbol)))
+	 (and (>= (length s) 2)
+	      (eq (elt s 0) #\E)
+	      (eq (elt s 1) #\.)))))
 
 (declaim (inline var-type))
 (defun var-type (var)
@@ -398,3 +401,260 @@ EXP: expression, PAT: pattern, CLOSED: ((a . value) (b . 1))."
 
 ;; In refal/html/ch_1.3.html it says "A t-variable takes any term as its value (recall that a term is either a symbol or an expression in structure brackets). An e-variable can take any expression as its value.", so I think t-variables differ from e-variables in that they may not bind NIL, but e-variables may. EDIT: I am now pretty sure that t-variables also may not bind to sublists (t-variables bind only if the sublist is in brackets), only e-variables may. Exercises 1.3(b) and (c) support that: "Write patterns that can be described in words as follows: [(a) ...] (b) an expression which contains at least two identical terms on the top level of structure; (c) a non-empty expression." and their answers (file refal/html/answers.html) are: "(b) e.1 t.X e.2 t.X e.3 ; (c) t.1 e.2 or e.1 t.2".
 ;; Chapter 1.3, exercise 1.4(b) says: "Find the results of the following matchings: (a) 'abbab' : e.1 t.X t.X e.2 (b) 'ab(b)ab' : e.1 t.X t.X e.2" and their answers are: "(a) t.X becomes b ; (b) failure;", so I think that t-variables may be either a symbol/number/character or an expression in structure brackets (meaning described as a regexp: "." OR "\(.*\)").
+
+(defun patternp (p)
+  "Examples:
+  ()
+  (1 2 e.1 (s.1 t.1) (a b c))."
+  (or (null p)
+      (let ((h (car p)))
+	(and (or (symbolp h)
+		 (numberp h)
+		 (and (listp h)
+		      (patternp h)))
+	     (patternp (cdr p))))))
+
+(defstruct nest<>
+  (list))
+
+;; boa constrictor = by-order-of-arguments constructor.
+(defun make-nest<>-boa (list)
+  (make-nest<> :list list))
+
+;; TODO: instead of using function nest-brackets, write reader-macros or what they are called (this has the advantage that you can write reader-macros for nested <> [] {} (), which is not possible with nest-brackets.
+(defun nest-brackets (list open-bracket close-bracket nest-function &key (test #'eq))
+  "Return the tree that results from recursively embedding parts of LIST enclosed with OPEN-BRACKET and CLOSE-BRACKET.
+The NEST-FUNCTION is called with the sublist of LIST that will be embedded (and is enclosed by the brackets).
+Returns the resulting tree and a value indicating if LIST was well-formed, i.e. doesn't contain a CLOSE-BRACKETs before OPEN-BRACKET and contains as many OPEN-BRACKETs as CLOSE-BRACKETs.
+TEST is used to compare elements of LIST with the BRACKETs."
+  (labels ((chop ()
+	     (let ((r (car list)))
+	       (setf list (cdr list))
+	       r))
+	   (rec (res open)
+	     "Returns the resulting nested list and the number of not yet closed opening brackets."
+	     (if (null list)
+		 (values (nreverse res) open)
+		 (let ((h (chop)))
+		   (cond
+		     ((funcall test h open-bracket)
+		      (multiple-value-bind (embedded-res embedded-open)
+			  (rec nil (1+ open))
+			(rec (cons embedded-res res) (if (= embedded-open open) open most-positive-fixnum))))
+		     ((funcall test h close-bracket)
+		      (let ((embedded (funcall nest-function (nreverse res))))
+			(values embedded (1- open))))
+		     ((listp h)
+		      (multiple-value-bind (h-res h-accepted)
+			  (nest-brackets h open-bracket close-bracket nest-function :test test)
+			(rec (cons h-res res) (if h-accepted open most-negative-fixnum))))
+		     (t
+		      (rec (cons h res) open)))))))
+    (multiple-value-bind (res open)
+	(rec nil 0)
+      (values res (= 0 open)))))
+
+(assert (equalp (multiple-value-list (nest-brackets '(1 < < 2 (3) > 4 >) '< '> #'make-nest<>-boa))
+		`((1 ,(make-nest<>-boa (list (make-nest<>-boa '(2 (3))) 4))) t)))
+;;	       '((1 #S(NEST<> :LIST (#S(NEST<> :LIST (2 (3))) 4))) t))) ;error I don't understand.
+(assert (null (nth-value 1 (nest-brackets '(1 < 2 (3) > 4 >)
+					  '< '> #'make-nest<>-boa))))
+(assert (null (nth-value 1 (nest-brackets '(1 < < 2 (3) > 4)
+					  '< '> #'make-nest<>-boa))))
+(assert (null (nth-value 1 (nest-brackets '(1 < < 2 (3) (>) 4 >)
+					  '< '> #'make-nest<>-boa))))
+
+(defstruct call
+  (name nil :type symbol :read-only t)
+  (args nil :type t :read-only t))
+
+;; maybe the name should be a symbol instead of not listp, but right now I don't want to preclude numbers or structures from being the name of a function.
+(defun refal-function-name-p (value)
+  (not (listp value)))
+
+(defun parse-result (result)
+  "Examples:
+  ()
+  (1 2 e.1 #S(NEST<> :LIST (function 2 (3))) (a b c))."
+  (labels ((rec (r res)
+	     (if (null r)
+		 (nreverse res)
+		 (let ((h (car r)))
+		   (cond
+		     ((or (symbolp h) (numberp h)) (rec (cdr r) (cons h res)))
+		     ((listp h) (rec (cdr r) (cons (parse-result h) res)))
+		     ((nest<>-p h)
+		      (let ((l (nest<>-list h)))
+			(if (or (null l) (not (refal-function-name-p (car l))))
+			    nil
+			    (let ((call (make-call :name (car l)
+						   :args (parse-result (cdr l)))))
+			      (rec (cdr r) (cons call res))))))
+		     (t nil))))))
+    (if (null result)
+	(values nil t)
+	(let ((res (rec result nil)))
+	  (values res (not (null res)))))))
+
+(assert (equal (multiple-value-list (parse-result '()))
+	       '(() t)))
+(assert (equal (multiple-value-list (parse-result '(1 2 e.1 (3 4) 5)))
+	       '((1 2 e.1 (3 4) 5) t)))
+;;(assert (equal (multiple-value-list (parse-result '(1 #S(NEST<> :LIST (function 2 (3))) 4)))
+;;		'((1 #S(CALL :NAME FUNCTION :ARGS (2 (3))) 4) T)))
+(assert (equalp (multiple-value-list (parse-result `(1 ,(make-nest<>-boa '(function 2 (3))) 4)))
+		`((1 ,(make-CALL :NAME 'FUNCTION :ARGS '(2 (3))) 4) T)))
+
+(defun parse-clause (clause)
+  "CLAUSE == (PATTERN RESULT1 .. RESULTn)"
+  (when (or (not (listp clause)) (null clause))
+    (return-from parse-clause nil))
+  (let ((pattern (car clause))
+	(results (cdr clause)))
+    (when (not (patternp pattern))
+      (return-from parse-clause nil))
+    (multiple-value-bind (presults accepted)
+	(parse-result results)
+      (if accepted
+	  (cons pattern presults)
+	  nil))))
+
+(defun parse-function (function)
+  "PROGRAM == '(NAME CLAUSE1 ... CLAUSEn)"
+  (when (or (not (listp function)) (null function))
+    (return-from parse-function nil))
+  (let ((name (car function))
+	(body (cdr function))
+	(pclauses nil))
+    (when (not (refal-function-name-p name))
+      (return-from parse-function nil))
+    (when (or (not (listp body)) (null body))
+      (return-from parse-function nil))
+    (dolist (clause body)
+      (push (parse-clause clause) pclauses))
+    (cons name (nreverse pclauses))))
+
+(assert (equalp (parse-function (nest-brackets '(ITAL-ENGL ((E.W) < TRANS (E.W) < TABLE > >))
+					       '< '> #'make-nest<>-boa))
+		`(ITAL-ENGL ((E.W) ,(make-CALL :NAME 'TRANS :ARGS `((E.W) ,(make-CALL :NAME 'TABLE :ARGS NIL)))))))
+
+(defun parse-program (program)
+  "Given a refal program as (nested) list PROGRAM, return the parsed representation."
+  (when (or (not (listp program)) (null program))
+    (return-from parse-program nil))
+  (let ((pprogram nil))
+    (dolist (function program)
+      (let ((pfunction (parse-function function)))
+	(when (null pfunction)
+	  (return-from parse-program nil))
+	(let ((name (car pfunction))
+	      (clauses (cdr pfunction)))
+	  (setf pprogram (acons name clauses pprogram)))))
+    (nreverse pprogram)))
+
+(defun parse-program* (program)
+  (multiple-value-bind (r accepted)
+      (nest-brackets program '< '> #'make-nest<>-boa)
+    (if accepted
+	(parse-program r)
+	nil)))
+
+(defparameter *prog-trans-ital-engl*
+  '((ital-engl
+     ((e.W) < Trans (e.W) < Table > >))
+    (table
+     (() ;nil becomes
+      ((cane) dog)
+      ((gatto) cat)
+      ((cavallo) horse)
+      ((rana) frog)
+      ((porco) pig)))
+    (trans
+     (((e.Word) e.1 ((e.Word) e.Trans) e.2) e.Trans)
+     (((e.Word) e.1) ***))))
+
+(assert (not (null (parse-program* *prog-trans-ital-engl*))))
+
+(defun eval-refal (program view)
+  "Input: a parsed refal PROGRAM and a VIEW field.
+Output: the result, when applying the VIEW field to the first function in PROGRAM."
+  (let ((pprogram (parse-program* program))
+	(first-function (caar program)))
+    (if (or (null pprogram) (not (listp view)))
+	'parsing-error
+	(eval-view pprogram nil (make-call :name first-function :args view)))))
+
+;; Idea: A "lazy-evaluating" Refal, which can bind variables to lists with calls in them. That way calls could appear in a pattern, and a program could modify its meaning. Something like:
+;;   Func-a { 0 s.1 = s.1; s.2 s.1 = <Func-a <- s.2 1> <+ s.1 1>> };
+;;   Func-b { <Func-a s.1 s.2> = <+ s.1 s.2> }
+;;   $ENTRY Go { =  <Func-b <Func-a 2 3>>  }
+;; That way Func-b could accelerate calls to Func-a, like compiler-macros in lisp.
+
+(defun eval-view (f b v)
+  "F(unctions), B(indings), V(iew)."
+  ;;(prind "eval-view" v)
+  (if (null v)
+      nil
+      (cond
+	((or (svarp v) (tvarp v))
+	 (list (cdr (assoc v b))))
+	((evarp v)
+	 (cdr (assoc v b)))
+	((or (symbolp v) (numberp v))
+	 (list v))
+	((listp v)
+	 ;; FIXME: if the variable inserted is an e-variable, we need to insert the value instead of collecting it.
+	 (list (loop for i in v
+		  for ie = (eval-view f b i)
+		  when (not (listp ie)) return ie
+		  append ie)))
+	((call-p v)
+	 (let* ((n (call-name v))
+		(a (car (eval-view f b (call-args v)))))
+	   (let ((r (eval-call f n a)))
+	     (if (not (listp r)) r (car r)))))
+	(t 'unknown-type))))
+
+(defun eval-call-userdef (f n a)
+  "Evaluate the call of user-defined function N with arguments A by looking up the function in F(unctions)."
+  ;;(prind "eval-call" n a)
+  (let* ((clauses (assoc n f)))
+    (if (null clauses)
+	'name-error
+	(let ((clauses (cdr clauses)))
+	  ;; find the first matching clause
+	  (loop for (pattern . result) in clauses do
+	     ;;(prind "trying" pattern)
+	       (let ((b (patmat a pattern)))
+		 (when (not (eq b 'fail))
+		   (return-from eval-call-userdef
+		     (eval-view f b result)))))
+	  'recognition-error))))
+
+(defparameter *built-in-functions*
+  `((+ ,(lambda (a) (apply #'+ a)))
+    (- ,(lambda (a) (apply #'- a)))
+    (* ,(lambda (a) (apply #'* a)))
+    (/ ,(lambda (a) (apply #'/ a)))
+    ))
+
+(defun eval-call-builtin (f n a)
+  (let ((builtin (assoc n *built-in-functions*)))
+    (if (null builtin)
+	'name-error
+	(list (list (funcall (cadr builtin) a))))))
+
+(defun eval-call (f n a)
+  "Evaluate the call of function N with arguments A by looking up the function in *built-in-functions* or user-defined F(unctions)."
+  (let ((r (eval-call-userdef f n a)))
+    (if (eq r 'name-error)
+	(eval-call-builtin f n a)
+	r)))
+
+(defparameter *prog-fac*
+  '((fac
+     ((0) 1)
+     ((s.1) < * s.1 < fac < - s.1 1 > > >))))
+
+(assert (equal (eval-refal *prog-trans-ital-engl* '(cane)) '(dog)))
+(assert (equal (eval-refal *prog-fac* '(3)) '(6)))
