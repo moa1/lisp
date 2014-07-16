@@ -793,6 +793,14 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
 	 (new (apply #'mutate-rec joy-ops cross prest)))
     (make-joy-program :program new)))
 
+(define-constant +mut-length-const+ (+ 6 3))
+
+(defun generate-mut (joy-ops)
+  (append
+   (list (random +mut0-max+))
+   (loop for i below (1- +mut-length-const+) collect (random 1.0))
+   (loop for i below (length joy-ops) collect (random 1.0))))
+
 ;; (defun align (exp1 exp2 &optional r)
 ;;   (cond
 ;;     ((and (null exp1) (null exp2)) r)
@@ -1562,21 +1570,14 @@ When KEY is not NIL, it is used to access the scores of SCORES-LIST and NEW-SCOR
 
 ;;;; tournament selection
 
-(define-constant +mut-length-const+ (+ 6 3))
-
 (defun tournament-new-joy (o size cycles test-cases joy-ops max-ticks max-seconds)
   (tournament-new (make-joy-program :program o) size cycles test-cases joy-ops max-ticks max-seconds))
 
 (defmethod tournament-new ((o joy-program) size cycles test-cases joy-ops max-ticks max-seconds)
   (let* ((pop (make-array size :initial-element o))
 	 (mut (make-array size)))
-    (flet ((generate-mut ()
-	     (append
-	      (list (random +mut0-max+))
-	      (loop for i below (1- +mut-length-const+) collect (random 1.0))
-	      (loop for i below (length joy-ops) collect (random 1.0)))))
-      (dotimes (s size) (setf (aref mut s) (generate-mut)))
-      (tournament pop mut cycles test-cases joy-ops max-ticks max-seconds))))
+    (dotimes (s size) (setf (aref mut s) (generate-mut joy-ops)))
+    (tournament pop mut cycles test-cases joy-ops max-ticks max-seconds)))
 
 (defun tournament-res (res cycles test-cases joy-ops max-ticks max-seconds)
   (let* ((size (length res))
