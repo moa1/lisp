@@ -2278,6 +2278,10 @@ Return NIL."
 ;; Are there other approaches for testing program equality? Maybe there's a symbolic approach? Or a test-only-special-values, like if there's an IF, then we only have to test the values that make it execute the true-branch and those values that make it execute the false-branch.
 ;; Maybe most important is to prefer programs that have local variable accesses instead of programs that access variables very deep in the stack. Maybe I should consider implementing an evaluator for The Mill (computer architecture).
 ;; Also prefer programs which minimize maximal memory use. This should be related to prefering variable accesses close to the stack top. (Related in the sense that programs with local variable access also should automatically have lower maximal memory usage.)
+;;;; To cache the results of joy programs, I could use an ltree instead of a hash-table. This should be much more space efficient. However, I don't yet know if it's possible that a joy-result contains cycles. In this case storing an ltree is probably not possible.
+;;;; I could assess the similarity of two joy programs by checking if they have similar stacks at any time. To test for similar stacks, I could flatten the stacks (or not), then sort their values (or sub-trees) lexicographically, keep unique values, and see if they have the same unique sorted values. If they do, they can be transferred into each other by a "trivial" joy program that only duplicates and permutes its values, and are thus similar.
+;; I need a system where programs predict each others outputs. Each program could have a builder part and an approximator. The system works like this: Two programs A and B are selected randomly. A random input (or none at all) is put on the stack of the builder program of A, it computes A builder's output (called X). Program B receives the input (or none at all) and the builder program of A on the stack of the approximator (of B) and computes its output (called Y). Then we need some measure to compute the similarity of the two outputs. But now that I think about it, it probably won't work, because the approximator will just be '(SI) or something like that, and thus be 100% correct. And the builders will just become very complex (one could of course have a fitness value preferring short builders).
+;; I need a system which iteratively improves itself. Since I want it to learn programming, it should improve its understanding of how program code produces outputs from inputs. How to achieve the iterative self-improving? What does it mean to understand program code? What could the fitness function be?
 
 ;;;; Breadth-first-search
 
@@ -2438,3 +2442,5 @@ Return NIL."
 
 ;;(bfs-continue (bfs-new *bfs-joy-ops-nobrackets* (list *test-cases-sqrt*)) #'make-extender-bestscore 1000)
 ;;(bfs-continue (bfs-new '(succ pred) (list *test-cases-sqrt*)) #'make-extender-dominators 1)
+
+;; Arimaa (see wikipedia) might be a good game to learn on.
