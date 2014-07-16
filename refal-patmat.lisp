@@ -639,6 +639,7 @@ Output: the result, when applying the VIEW field to the first function in PROGRA
     ))
 
 (defun eval-call-builtin (f n a)
+  (declare (ignore f))
   (let ((builtin (assoc n *built-in-functions*)))
     (if (null builtin)
 	'name-error
@@ -651,10 +652,26 @@ Output: the result, when applying the VIEW field to the first function in PROGRA
 	(eval-call-builtin f n a)
 	r)))
 
-(defparameter *prog-fac*
-  '((fac
-     ((0) 1)
-     ((s.1) < * s.1 < fac < - s.1 1 > > >))))
+(defparameter *prog-fak*
+  '((fak
+     ((1) 1)
+     ((s.1) < * s.1 < fak < - s.1 1 > > >))))
 
 (assert (equal (eval-refal *prog-trans-ital-engl* '(cane)) '(dog)))
-(assert (equal (eval-refal *prog-fac* '(3)) '(6)))
+(assert (equal (eval-refal *prog-fak* '(3)) '(6)))
+
+(defparameter *prog-fak-unnested*
+  '( { fak
+    { { 1 } 1 }
+    { { s.1 } < * s.1 < fak < - s.1 1 > > > } } ))
+;; Symbols necessary for *prog-fak-unnested*:
+;; (length (unique *prog-fak-unnested*)) == 9
+;; (length *prog-fak-unnested*) == 26
+;; P = 9 ** 26 = 6461081889226673298932241L
+(defparameter *prog-fak-unnested-X*
+  '( X fak ;X means this symbol is the only symbol possible, which means a factor of only 1 in above P-calculation for that position.
+    X X 1 } 1 } ; the } are necessary b/c we need to know when the (parameter-,result-) lists are finished.
+    X X s.1 } < * s.1 < fak < - s.1 1 > > > } } ))
+;; (length (remove 'X *prog-fak-unnested-X*)) == 21
+;; P2 = 9 ** 21 == 109418989131512359209L
+;; i.e. at a speed of 51552.152 calls per second (measured using: (timecps (1000 :stats t :time 5.0) (eval-refal *prog-fak* '(3))) on purasuchikku), we need (round (/ 109418989131512359209 51552 60 60 24 365)) = 67303953 = 67 M years.
