@@ -182,7 +182,7 @@ If the run-time is at least MINTIME, the number of calls per second is returned,
 	(setf elapsed (measure-loop loops))))))
 
 (defvar +patmat-seconds-per-node+ (let ((stk '(((NIL) NIL) ((NIL) NIL))))
-					 (/ (seconds-per-call (lambda () (patmat nil stk stk)) :mintime 0.5) (count-tree-nodes stk))))
+					 (/ (seconds-per-call (lambda () (patmat stk stk)) :mintime 0.5) (count-tree-nodes stk))))
 
 (defun list-replace-symbols (list plist)
   "Recursively replace (non-destructively) all occurrences of the symbols in PLIST in LIST with the values stored in PLIST.
@@ -289,12 +289,12 @@ This function must not modify stk, only copy it (otherwise test values might be 
 	 (nill    (cons nil stk)) ;same as false
 	 (not     (cons (not (car stk)) (cdr stk))) ; can be emulated by branch
 	 (or      (cons (or (car stk) (cadr stk)) (cddr stk)))
-	 (patmat  (let ((vars (caddr stk)) (exp (cadr stk)) (pat (car stk)) (cd-value (funcall cd)))
+	 (patmat  (let ((exp (cadr stk)) (pat (car stk)) (cd-value (funcall cd)))
 		    (if (> (* +patmat-seconds-per-node+ (+ (count-tree-nodes exp) (count-tree-nodes pat)))
 			   cd-value)
 			(error (make-condition 'joy-countdown-error :stk stk :exp exp :heap heap :cd-value cd-value))
 			(cons
-			 (alist-to-plist (patmat vars exp pat))
+			 (alist-to-plist (patmat exp pat))
 			 (cdddr stk)))))
 	 (patsub  (let ((l (car stk)) (bind (cadr stk)) (cd-value (funcall cd)))
 		    (if (> (* +list-replace-symbols-seconds-per-node+ (+ (count-tree-nodes l) (count-tree-nodes bind)))
@@ -369,6 +369,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
   (let ((c-value (funcall c)) (cd-value (funcall cd)))
     ;;(print (list "stk" stk "exp" exp "c-value" c-value "cd-value" cd-value))
     (when (<= c-value 0)
+      ;; FIXME: instead of restart-case I should use throw/catch, b/c it's much faster (see speed.lisp).
       (restart-case
 	  (error (make-condition 'joy-eval-2-counter-error :stk stk :exp exp :stks stks :exps exps :heap heap :time c-value))
 	(continue ()
@@ -444,12 +445,12 @@ This function must not modify stk, only copy it (otherwise test values might be 
 		(nill    (cons nil stk)) ;same as false
 		(not     (cons (not (car stk)) (cdr stk))) ; can be emulated by branch
 		(or      (cons (or (car stk) (cadr stk)) (cddr stk)))
-		(patmat  (let ((vars (caddr stk)) (exp (cadr stk)) (pat (car stk)) (cd-value (funcall cd)))
+		(patmat  (let ((exp (cadr stk)) (pat (car stk)) (cd-value (funcall cd)))
 			   (if (> (* +patmat-seconds-per-node+ (+ (count-tree-nodes exp) (count-tree-nodes pat)))
 				  cd-value)
 			       (error (make-condition 'joy-countdown-error :stk stk :exp exp :heap heap :cd-value cd-value))
 			       (cons
-				(alist-to-plist (patmat vars exp pat))
+				(alist-to-plist (patmat exp pat))
 				(cdddr stk)))))
 		(patsub  (let ((l (car stk)) (bind (cadr stk)) (cd-value (funcall cd)))
 			   (if (> (* +list-replace-symbols-seconds-per-node+ (+ (count-tree-nodes l) (count-tree-nodes bind)))
@@ -829,7 +830,7 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
     (nill    () (list))
     (not     (t) (boolean))
     (or      (t t) (boolean))
-    (patmat  (list list list) (list))
+    (patmat  (list list) (list))
     (patsub  (list list) (list))
     (pop     (t) nil)
     (pred    (number) (number))
