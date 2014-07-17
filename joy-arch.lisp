@@ -666,6 +666,9 @@ This function must not modify stk, only copy it (otherwise test values might be 
 (defstruct joy-program
   (program))
 
+(defstruct refal-program
+  (program))
+
 (define-constant +mut0-max+ 0.8)
 
 (defun mutate (joy-ops exp debranch-p p1 p2 p3 p4 p5 p6
@@ -792,6 +795,16 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
 	 (cross (crossover exp1 exp2 p1 p2))
 	 (new (apply #'mutate-rec joy-ops cross prest)))
     (make-joy-program :program new)))
+
+(defmethod crossover-and-mutate (joy-ops (prg1 refal-program) (prg2 refal-program) &rest probs)
+  (let* ((p1 (elt probs 1))
+	 (p2 (elt probs 2))
+	 (prest (cons (car probs) (cdddr probs)))
+	 (exp1 (refal-program-program prg1))
+	 (exp2 (refal-program-program prg2))
+	 (cross (crossover exp1 exp2 p1 p2))
+	 (new (apply #'mutate-rec joy-ops cross prest)))
+    (make-refal-program :program new)))
 
 (define-constant +mut-length-const+ (+ 6 3))
 
@@ -987,6 +1000,16 @@ As a second value, the remainder of stk is returned, or :error if the stack didn
        sum
 	 (let* ((r (joy-eval-handler nil (append test exp) :c (make-counter max-ticks) :cd (make-countdown max-seconds)))
 		(fit (funcall score-fn r goal exp)))
+	   fit))))
+
+(defmethod score-exam-helper (score-fn test-goal-values (prg refal-program) max-ticks max-seconds)
+  (let ((prg (refal-program-program prg)))
+    (format *debug-stream* "~A~%" max-ticks)
+    (loop for (test . goal) in test-goal-values
+       sum
+	 (let* ((r (refal-eval prg test :c (make-counter max-ticks)))
+		(fit (funcall score-fn r goal prg)))
+	   ;;(print (list prg test goal r fit))
 	   fit))))
 
 (defun score-exam (test-cases test-goal-values exp max-ticks max-seconds)
@@ -1573,7 +1596,10 @@ When KEY is not NIL, it is used to access the scores of SCORES-LIST and NEW-SCOR
 (defun tournament-new-joy (o size cycles test-cases joy-ops max-ticks max-seconds)
   (tournament-new (make-joy-program :program o) size cycles test-cases joy-ops max-ticks max-seconds))
 
-(defmethod tournament-new ((o joy-program) size cycles test-cases joy-ops max-ticks max-seconds)
+(defun tournament-new-refal (o size cycles test-cases joy-ops max-ticks max-seconds)
+  (tournament-new (make-refal-program :program o) size cycles test-cases joy-ops max-ticks max-seconds))
+
+(defun tournament-new (o size cycles test-cases joy-ops max-ticks max-seconds)
   (let* ((pop (make-array size :initial-element o))
 	 (mut (make-array size)))
     (dotimes (s size) (setf (aref mut s) (generate-mut joy-ops)))
@@ -1588,6 +1614,12 @@ When KEY is not NIL, it is used to access the scores of SCORES-LIST and NEW-SCOR
 (defmethod valid-program ((program joy-program))
   (let ((exp (joy-program-program program)))
     (and (listp exp) (valid-joy-exp exp '(:any)))))
+
+(defmethod valid-program ((program refal-program))
+  ;; parsing is done by refal-eval, so just return T here.
+  ;; (let ((exp (refal-program-program program)))
+  ;;   (not (null (parse-program* exp)))))
+  t)
 
 (defun tournament (pop mut cycles test-cases joy-ops max-ticks max-seconds)
   (assert (= (length pop) (length mut)))
