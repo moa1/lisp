@@ -1597,6 +1597,8 @@ When KEY is not NIL, it is used to access the scores of SCORES-LIST and NEW-SCOR
   (tournament-new (make-joy-program :program o) size cycles test-cases joy-ops max-ticks max-seconds))
 
 (defun tournament-new-refal (o size cycles test-cases joy-ops max-ticks max-seconds)
+  "Example: (tournament-new-refal '((gv (() < + 1 1 >))) 200 1000000 *test-cases-golden-ratio-value* '(1 + / 2 < >) 100 0)
+However this doesn't find any better solution."
   (tournament-new (make-refal-program :program o) size cycles test-cases joy-ops max-ticks max-seconds))
 
 (defun tournament-new (o size cycles test-cases joy-ops max-ticks max-seconds)
