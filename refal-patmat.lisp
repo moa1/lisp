@@ -2,6 +2,17 @@
 (ql:quickload :dlist)
 (use-package :dlist)
 
+;; necessary here, b/c otherwise compilation of refal-eval fails.
+(defun make-counter (&optional (counter 0))
+  (declare (type fixnum counter))
+  (if (<= counter 0)
+      (values (lambda () 1)
+	      (lambda (counter-delta) (declare (ignore counter-delta))))
+      (let ((c counter))
+	(check-type c fixnum)
+	(values (lambda () (decf c))
+		(lambda (counter-delta) (incf c counter-delta))))))
+
 (defun print-dcons (dcons stream depth)
   "Print a doubly linked list.
 Doesn't yet print whether dll has any circularities in it (but detects them already)."
@@ -70,13 +81,15 @@ Doesn't yet print whether dll has any circularities in it (but detects them alre
     (t nil)))
 
 (declaim (inline bind-closed))
-(defun bind-closed (var val closed &key (test #'equal))
+(defun bind-closed (var val closed &key (test #'equal)) ;; (c (make-counter)))
   "Return an object representing the variables and their values bound in CLOSED, and the variable named VAR bound to VAL.
 Return 'FAIL if the variable VAR is already bound to another value than VAL.
 Return the unmodified CLOSED if VAR is bound to a value equal to VAL (under equality test TEST)."
   (declare (type symbol var)
 	   (type list closed))
   ;; NOTE: this function must not modify CLOSED, since OPEN-VAR depends on an unmodified CLOSED.
+  ;;(when (<= (funcall c) 0)
+  ;;  (throw 'overrun nil))
   (let ((acons (assoc var closed)))
     (if (null acons)
 	(acons var val closed)
@@ -407,12 +420,13 @@ EXP: expression, PAT: pattern, CLOSED: ((a . value) (b . 1))."
   ()
   (1 2 e.1 (s.1 t.1) (a b c))."
   (or (null p)
-      (let ((h (car p)))
-	(and (or (symbolp h)
-		 (numberp h)
-		 (and (listp h)
-		      (patternp h)))
-	     (patternp (cdr p))))))
+      (and (listp p)
+	   (let ((h (car p)))
+	     (and (or (symbolp h)
+		      (numberp h)
+		      (and (listp h)
+			   (patternp h)))
+		  (patternp (cdr p)))))))
 
 (defstruct nest<>
   (list))
@@ -421,7 +435,7 @@ EXP: expression, PAT: pattern, CLOSED: ((a . value) (b . 1))."
 (defun make-nest<>-boa (list)
   (make-nest<> :list list))
 
-;; TODO: instead of using function nest-brackets, write reader-macros or what they are called (this has the advantage that you can write reader-macros for nested <> [] {} (), which is not possible with nest-brackets.
+;; TODO: instead of using function nest-brackets, write reader-macros or what they are called (this has the advantage that you can write reader-macros for nested <> [] {} (), which is not possible with nest-brackets).
 (defun nest-brackets (list open-bracket close-bracket nest-function &key (test #'eq))
   "Return the tree that results from recursively embedding parts of LIST enclosed with OPEN-BRACKET and CLOSE-BRACKET.
 The NEST-FUNCTION is called with the sublist of LIST that will be embedded (and is enclosed by the brackets).
@@ -468,9 +482,8 @@ TEST is used to compare elements of LIST with the BRACKETs."
   (name nil :type symbol :read-only t)
   (args nil :type t :read-only t))
 
-;; maybe the name should be a symbol instead of not listp, but right now I don't want to preclude numbers or structures from being the name of a function.
 (defun refal-function-name-p (value)
-  (not (listp value)))
+  (symbolp value))
 
 (defun parse-result (result)
   "Examples:
@@ -520,7 +533,7 @@ TEST is used to compare elements of LIST with the BRACKETs."
 	  nil))))
 
 (defun parse-function (function)
-  "PROGRAM == '(NAME CLAUSE1 ... CLAUSEn)"
+  "FUNCTION == '(NAME CLAUSE1 ... CLAUSEn)"
   (when (or (not (listp function)) (null function))
     (return-from parse-function nil))
   (let ((name (car function))
@@ -553,11 +566,13 @@ TEST is used to compare elements of LIST with the BRACKETs."
     (nreverse pprogram)))
 
 (defun parse-program* (program)
-  (multiple-value-bind (r accepted)
-      (nest-brackets program '< '> #'make-nest<>-boa)
-    (if accepted
-	(parse-program r)
-	nil)))
+  (if (listp program)
+      (multiple-value-bind (r accepted)
+	  (nest-brackets program '< '> #'make-nest<>-boa)
+	(if accepted
+	    (parse-program r)
+	    nil))
+      nil))
 
 (defparameter *prog-trans-ital-engl*
   '((ital-engl
@@ -575,14 +590,15 @@ TEST is used to compare elements of LIST with the BRACKETs."
 
 (assert (not (null (parse-program* *prog-trans-ital-engl*))))
 
-(defun eval-refal (program view)
+(defun refal-eval (program view &key (c (make-counter)))
   "Input: a parsed refal PROGRAM and a VIEW field.
 Output: the result, when applying the VIEW field to the first function in PROGRAM."
-  (let ((pprogram (parse-program* program))
-	(first-function (caar program)))
+  (let ((pprogram (parse-program* program)))
     (if (or (null pprogram) (not (listp view)))
 	'parsing-error
-	(eval-view pprogram nil (make-call :name first-function :args view)))))
+	(catch 'refal-eval-error
+	  (let ((first-function (caar program)))
+	    (eval-view pprogram nil (make-call :name first-function :args view) :c c))))))
 
 ;; Idea: A "lazy-evaluating" Refal, which can bind variables to lists with calls in them. That way calls could appear in a pattern, and a program could modify its meaning. Something like:
 ;;   Func-a { 0 s.1 = s.1; s.2 s.1 = <Func-a <- s.2 1> <+ s.1 1>> };
@@ -590,9 +606,12 @@ Output: the result, when applying the VIEW field to the first function in PROGRA
 ;;   $ENTRY Go { =  <Func-b <Func-a 2 3>>  }
 ;; That way Func-b could accelerate calls to Func-a, like compiler-macros in lisp.
 
-(defun eval-view (f b v)
+(defun eval-view (f b v &key c)
   "F(unctions), B(indings), V(iew)."
   ;;(prind "eval-view" v)
+  (let ((c-value (funcall c)))
+    (when (<= c-value 0)
+      (throw 'refal-eval-error 'overrun)))
   (if (null v)
       nil
       (cond
@@ -603,21 +622,18 @@ Output: the result, when applying the VIEW field to the first function in PROGRA
 	((or (symbolp v) (numberp v))
 	 (list v))
 	((listp v)
-	 ;; FIXME: if the variable inserted is an e-variable, we need to insert the value instead of collecting it.
 	 (list (loop for i in v
-		  for ie = (eval-view f b i)
-		  when (not (listp ie)) return ie
+		  for ie = (eval-view f b i :c c)
 		  append ie)))
 	((call-p v)
 	 (let* ((n (call-name v))
-		(a (car (eval-view f b (call-args v)))))
-	   (let ((r (eval-call f n a)))
-	     (if (not (listp r)) r (car r)))))
-	(t 'unknown-type))))
+		(a (car (eval-view f b (call-args v) :c c))))
+	   (car (eval-call f n a :c c))))
+	(t (error "unknown type")))))
 
-(defun eval-call-userdef (f n a)
+(defun eval-call-userdef (f n a &key c)
   "Evaluate the call of user-defined function N with arguments A by looking up the function in F(unctions)."
-  ;;(prind "eval-call" n a)
+  ;;(prind "eval-call-userdef" n a)
   (let* ((clauses (assoc n f)))
     (if (null clauses)
 	'name-error
@@ -628,14 +644,22 @@ Output: the result, when applying the VIEW field to the first function in PROGRA
 	       (let ((b (patmat a pattern)))
 		 (when (not (eq b 'fail))
 		   (return-from eval-call-userdef
-		     (eval-view f b result)))))
-	  'recognition-error))))
+		     (eval-view f b result :c c)))))
+	  (throw 'refal-eval-error 'recognition-error)))))
+
+(defun numeric-list-p (a)
+  (and (listp a)
+       (loop for i in a always (numberp i))))
 
 (defparameter *built-in-functions*
-  `((+ ,(lambda (a) (apply #'+ a)))
-    (- ,(lambda (a) (apply #'- a)))
-    (* ,(lambda (a) (apply #'* a)))
-    (/ ,(lambda (a) (apply #'/ a)))
+  `((+ ,(lambda (a) (if (numeric-list-p a) (apply #'+ a) (throw 'refal-eval-error 'numeric-error))))
+    (- ,(lambda (a) (if (and (numeric-list-p a) (not (null a))) (apply #'- a) (throw 'refal-eval-error 'numeric-error))))
+    (* ,(lambda (a) (if (numeric-list-p a) (apply #'* a) (throw 'refal-eval-error 'numeric-error))))
+    (/ ,(lambda (a) (if (and (numeric-list-p a)
+			     (not (null a))
+			     (loop for i in (cdr a) always (not (= i 0))))
+			(apply #'/ a)
+			(throw 'refal-eval-error 'numeric-error))))
     ))
 
 (defun eval-call-builtin (f n a)
@@ -645,11 +669,15 @@ Output: the result, when applying the VIEW field to the first function in PROGRA
 	'name-error
 	(list (list (funcall (cadr builtin) a))))))
 
-(defun eval-call (f n a)
+(defun eval-call (f n a &key c)
   "Evaluate the call of function N with arguments A by looking up the function in *built-in-functions* or user-defined F(unctions)."
-  (let ((r (eval-call-userdef f n a)))
+  ;;(print (list "f" f "n" n "a" a))
+  (let ((r (eval-call-userdef f n a :c c)))
     (if (eq r 'name-error)
-	(eval-call-builtin f n a)
+	(let ((r (eval-call-builtin f n a)))
+	  (if (eq r 'name-error)
+	      (throw 'refal-eval-error 'name-error)
+	      r))
 	r)))
 
 (defparameter *prog-fak*
@@ -657,8 +685,8 @@ Output: the result, when applying the VIEW field to the first function in PROGRA
      ((1) 1)
      ((s.1) < * s.1 < fak < - s.1 1 > > >))))
 
-(assert (equal (eval-refal *prog-trans-ital-engl* '(cane)) '(dog)))
-(assert (equal (eval-refal *prog-fak* '(3)) '(6)))
+(assert (equal (refal-eval *prog-trans-ital-engl* '(cane)) '(dog)))
+(assert (equal (refal-eval *prog-fak* '(3)) '(6)))
 
 (defparameter *prog-fak-unnested*
   '( { fak
@@ -674,4 +702,4 @@ Output: the result, when applying the VIEW field to the first function in PROGRA
     X X s.1 } < * s.1 < fak < - s.1 1 > > > } } ))
 ;; (length (remove 'X *prog-fak-unnested-X*)) == 21
 ;; P2 = 9 ** 21 == 109418989131512359209L
-;; i.e. at a speed of 51552.152 calls per second (measured using: (timecps (1000 :stats t :time 5.0) (eval-refal *prog-fak* '(3))) on purasuchikku), we need (round (/ 109418989131512359209 51552 60 60 24 365)) = 67303953 = 67 M years.
+;; i.e. at a speed of 51552.152 calls per second (measured using: (timecps (1000 :stats t :time 5.0) (refal-eval *prog-fak* '(3))) on purasuchikku), we need (round (/ 109418989131512359209 51552 60 60 24 365)) = 67303953 = 67 M years.
