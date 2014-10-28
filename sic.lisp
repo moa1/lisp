@@ -35,7 +35,7 @@ This function doesn't handle programs that have or create writes outside the mem
   "See Wikipedia article 'One instruction set computer', paragraph 'Reverse subtract and skip if borrow' (rssb). MEM must be a simple array that contains the memory values, steps is the number of steps that are to be executed.
 Note that the instruction pointer is memory-mapped to memory position 0, and the accumulator is memory-mapped to memory position 1.
 This function never lets the value of any memory position exceed the range [0;MEM size). It does this by taking the modulus of the value and the memory size and only storing the result. Note that the initial values of MEM may not exceed the range [0;MEM size)."
-  ;; TODO: check that all values of MEM are inside [0;mem size).
+  ;; TODO: check that all initial values of MEM are inside [0;mem size).
   (let ((n (array-dimension mem 0)))
     (symbol-macrolet ((ip (svref mem 0))
 		      (acc (svref mem 1)))
@@ -45,13 +45,14 @@ This function never lets the value of any memory position exceed the range [0;ME
 	       (rssb ()
 		 (let* ((m (svref mem ip))
 			(v (svref mem m))
-			(d (mod (- v acc) n)))
+			(d (- v acc)))
 ;;		   (print mem)
 ;;		   (print (list "ip" ip "m" m "v" v "d" d))
 		   (when (< d 0)
 		     (inc-ip))
-		   (setf (svref mem m) d)
-		   (setf acc d))))
+		   (let ((d (mod d n)))
+		     (setf (svref mem m) d)
+		     (setf acc d)))))
 	(dotimes (step steps)
 	  (rssb)
 	  (inc-ip))
@@ -84,7 +85,7 @@ This function handles writes(reads) outside the memory by taking the modulus of 
 Note that the instruction pointer is memory-mapped to memory position 0, and the accumulator is memory-mapped to memory position 1.
 This function handles writes outside the memory by never letting the number in any memory position fall outside the range [0;MEM size). For this to work, the memory size must be a power of 2."
   ;; TODO: check that MEM size is a power of 2.
-  ;; TODO: check that all values of MEM are inside [0;MEM size).
+  ;; TODO: check that all initial values of MEM are inside [0;MEM size).
   (let ((n (1- (array-dimension mem 0))))
     (symbol-macrolet ((ip (svref mem 0))
 		      (acc (svref mem 1)))
@@ -94,13 +95,14 @@ This function handles writes outside the memory by never letting the number in a
 	       (rssb ()
 		 (let* ((m (svref mem ip))
 			(v (svref mem m))
-			(d (logand (- v acc) n)))
+			(d (- v acc)))
 ;;		   (print mem)
 ;;		   (print (list "ip" ip "m" m "v" v "d" d))
 		   (when (< d 0)
 		     (inc-ip))
-		   (setf (svref mem m) d)
-		   (setf acc d))))
+		   (let ((d (logand d n)))
+		     (setf (svref mem m) d)
+		     (setf acc d)))))
 	(dotimes (step steps)
 	  (rssb)
 	  (inc-ip))
@@ -129,7 +131,8 @@ This function handles writes(reads) outside the memory by taking the logical AND
 	  (incf ip))
 	mem))))
 
-(defun rssb-wikipedia-example (&key (y-val 2) (z-val 1))
+(defun rssb-wikipedia-example (&key (rssb-function #'rssb) (y-val 2) (z-val 1))
+  "The return value should be equal to (- Y Z)."
   (let ((temp 31)
 	(x 30)
 	(y 29)
@@ -148,8 +151,17 @@ This function handles writes(reads) outside the memory by taking the logical AND
       (setf (svref mem z) z-val)
       (setf (svref mem temp) 15)
       (setf (svref mem x) 7)
-      (rssb mem 15)
+      (funcall rssb-function mem 15)
       (svref mem x))))
+
+;;CL-USER> (rssb-wikipedia-example :y-val 1 :z-val 2 :rssb-function #'rssb-2power)
+;;31
+;;CL-USER> (rssb-wikipedia-example :y-val 1 :z-val 2 :rssb-function #'rssb-2power-2)
+;;-1
+;;CL-USER> (rssb-wikipedia-example :y-val 1 :z-val 2 :rssb-function #'rssb-mod)
+;;31
+;;CL-USER> (rssb-wikipedia-example :y-val 1 :z-val 2 :rssb-function #'rssb-mod-2)
+;;-1
 
 (defun rssb-example-random-mem (mem-size rssb-function steps)
   (let ((mem (make-array mem-size :element-type 'integer :initial-element 0)))
