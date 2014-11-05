@@ -1,14 +1,9 @@
 (load "~/quicklisp/setup.lisp")
 (asdf:oos 'asdf:load-op 'utils)
+(load "~/lisp/multitree.lisp")
 
-;;(defstruct
-;;   
-;;
-;;(defun make-sic (l)
-;;  (loop repeat l collect (gensym)))
-;;
-;;(defmacro sic ()
-;;go
+(define-custom-hash-table-constructor make-lsxhash-equalp-hash-table
+    :test equalp :hash-function lsxhash)
 
 (defun rssb (mem steps)
   "See Wikipedia article 'One instruction set computer', paragraph 'Reverse subtract and skip if borrow' (rssb). MEM must be a simple array that contains the memory values, steps is the number of steps that are to be executed.
@@ -196,3 +191,87 @@ This function handles writes(reads) outside the memory by taking the logical AND
 ;;(79/64000 0.001234375d0 64 73/64000 0.001140625d0 64)
 ;;(rssb-compare-speeds #'rssb-mod #'rssb-mod-2 32 10000 :init-random t)
 ;;(43/32000 0.00134375d0 64 11/1600 0.006875d0 8)
+
+(defun enumerate-mem (mem-size function)
+  "Assume a memory size of MEM-SIZE and call FUNCTION with all possible memory assignments, one after the other. The passed memory assignment may not be modified by FUNCTION."
+  ;; test this function with (enumerate-mem 3 #'print)
+  (let ((mem (make-array mem-size :element-type 'integer)))
+    (labels ((fill (fill-position fill-value)
+;;	       (print (list "fill-position" fill-position "fill-value" fill-value))
+	       (if (>= fill-position mem-size)
+		   (funcall function mem) ;memory filled, so call.
+		   (if (>= fill-value (1- mem-size))
+		       (progn
+			 (setf (svref mem fill-position) fill-value)
+			 (fill (1+ fill-position) 0))
+		       (progn
+			 (setf (svref mem fill-position) fill-value)
+			 (fill (1+ fill-position) 0)
+			 (fill fill-position (1+ fill-value)))))))
+      (fill 0 0))))
+
+(defun systematic-mapping-to-hash-table (mem-size rssb-function)
+  "Return a hash-table that contains all possible memory configurations and their 1-step result obtained after passing the configuratio to RSSB-FUNCTION."
+  (let ((mem-cache (make-lsxhash-equalp-hash-table)))
+    (labels ((fill (mem)
+	       (let* ((mem-1 (funcall rssb-function (copy-array mem) 1))
+		      (mem-0 (copy-array mem)))
+		 (multiple-value-bind (value present) (gethash mem-0 mem-cache)
+		   (declare (ignore value))
+		   (if (not present)
+		     (progn
+		       (setf (gethash mem-0 mem-cache) mem-1)
+		       (fill mem-1))
+		     nil)))))
+      (enumerate-mem mem-size #'fill)
+      mem-cache)))
+
+(defun rssb-memory-to-rssb-index (mem)
+  "Convert memory configuration MEM to a single number."
+  (let ((size (array-dimension mem 0))
+	(rssb-index 0))
+    (loop for i below size do
+	 (incf rssb-index (* (svref mem i) (expt size i))))
+    rssb-index))
+
+(defun rssb-index-to-rssb-memory (rssb-index mem-size)
+  "Convert the single number RSSB-INDEX, which is an rssb-index, to a memory configuration with MEM-SIZE being the number of elements of the memory configuration."
+  (let ((mem (make-array mem-size)))
+    (loop for i from (1- mem-size) downto 0
+       for pow = (expt mem-size i) do
+	 (let ((whole (floor (/ rssb-index pow)))
+	       (rem (mod rssb-index pow)))
+	   (setf (svref mem i) whole)
+	   (setf rssb-index rem)))
+    mem))
+
+(defun systematic-mapping-to-array (mem-size rssb-function)
+  "Return an array that contains all possible memory configurations and their 1-step result obtained after passing the configuratio to RSSB-FUNCTION."
+  (let* ((possibilities (expt mem-size mem-size))
+	 (mem-cache (make-array possibilities :initial-element -1)))
+    (labels ((fill (mem-0-index mem-0)
+	       (let* ((mem-1 (funcall rssb-function mem-0 1))
+		      (mem-1-index (rssb-memory-to-rssb-index mem-1)))
+		 ;; Note that (eq mem-0 mem-1)
+		 (let ((value (svref mem-cache mem-0-index)))
+		   (if (= -1 value)
+		     (progn
+		       (setf (svref mem-cache mem-0-index) mem-1-index)
+		       (fill mem-1-index mem-1))
+		     nil)))))
+      (loop for index below possibilities do
+	   (let ((mem-0 (rssb-index-to-rssb-memory index mem-size)))
+	     (fill index mem-0)))
+      mem-cache)))
+
+;; (systematic-mapping-to-array 2 #'rssb-mod)
+;; #(1 2 2 0)
+;;
+;; (let ((ht (systematic-mapping 2 #'rssb-mod)))
+;;   (maphash (lambda (k v) (print (list "k" k "v" v))) ht)
+;;   ht)
+;; ("k" #(0 0) "v" #(1 0)) 
+;; ("k" #(1 0) "v" #(0 1)) 
+;; ("k" #(0 1) "v" #(0 1)) 
+;; ("k" #(1 1) "v" #(0 0)) 
+;; #<HASH-TABLE :TEST EQUALP :COUNT 4 {13B39A81}>

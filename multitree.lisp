@@ -84,7 +84,26 @@ X, (car X), and (cdr X) may be a list, a symbol, or a number."
 		  ;; use logxor for speed and so that the order of key/value pairs does not matter
 		  (maphash (lambda (k v) (setf ret (logxor ret (mix (lsxhash k) (lsxhash v)))))
 			   x)
-		  ret))))
+		  ret))
+    (simple-array (let* ((size (array-total-size x))
+			 (dim (array-dimensions x))
+			 (type (array-element-type x))
+			 (ret 518591303))
+		    (declare (type (and fixnum unsigned-byte) ret))
+		    (setf ret (mix (mix ret (sxhash type))
+				   (lsxhash dim)))
+		    (ecase type
+		      ((fixnum)
+		       (loop for i below size do
+			    (let ((e (row-major-aref x i)))
+			      (declare (type fixnum e))
+			      (setf ret (mix ret (sxhash e))))))
+		      ((t)
+		       (loop for i below size do
+			    (let ((e (row-major-aref x i)))
+			      (setf ret (mix ret (lsxhash e))))))
+		      )
+		    ret))))
 
 (define-custom-hash-table-constructor make-lsxhash-equal-hash-table
     ;; equalp required when hashing hash tables
