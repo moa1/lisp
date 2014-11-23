@@ -2270,35 +2270,6 @@ Signal the same errors that JOY-EVAL would."
     (format logstream "~%"))
   (finish-output logstream))
 
-;;;; ltree auxiliary functions
-
-(defun ltree-reduce-leaves (ltree reduce-function initial-value &key sort-children-predicate)
-  "Visit the leaves of LTREE.
-Initialize VALUE with INITIAL-VALUE.
-For each leaf, call REDUCE-FUNCTION with the current leaf and VALUE, and set VALUE to the result.
-Iterate until all leaves are visited, and return VALUE."
-  (flet ((node-function (node children-value)
-	   (when children-value ;non-leaves are constantly nil
-	     (setf initial-value (funcall reduce-function node initial-value)))))
-   (ltree-reduce ltree (constantly nil) t #'node-function :sort-children-predicate sort-children-predicate))
-  initial-value)
-
-(defun ltree-leaves (ltree &key sort-children-predicate)
-  (let ((leaves nil))
-    (flet ((reduce-function (node v)
-	     (declare (ignore v))
-	     (push node leaves)))
-      (ltree-reduce-leaves ltree
-			   #'reduce-function
-			   nil
-			   :sort-children-predicate sort-children-predicate)
-      leaves)))
-
-(defun ltree-visit-nodes (ltree node-function)
-  "Visit all the nodes of LTREE in arbitrary order, calling NODE-FUNCTION on each.
-Return NIL."
-  (ltree-reduce ltree (constantly nil) nil (lambda (node value) (declare (ignore value)) (funcall node-function node))))
-
 ;; TODO: search through the joy tree of possible programs. Only extend the currently fastest program by all possible extensions. This needs rewriting joy trees as lists using tree-to-list and list-to-tree (see learner-joy-rbm.lisp).
 ;; TODO: search through the joy tree of possible programs. Only extend the currently best-scoring programs by all possible extensions.
 ;; TODO: think hard about how to find out if two joy programs are equivalent. Use this to reduce the search space for joy programs. this might be related to caching implemented in systematicmapping, but also might not.
@@ -2432,7 +2403,7 @@ Return NIL."
 	     (extender ()
 	       ;;TODO: "Return the leaves of the dominators that have the shortest distance from its dominator root."
 	       ;;(print (list "extender" "dominators" dominators))
-	       (let* ((leaves (apply #'nconc (mapcar #'ltree-leaves dominators)))
+	       (let* ((leaves (apply #'nconc (mapcar #'ltree-list-leaves dominators)))
 		      (leaf-count (count-unique leaves :test #'eq))
 		      (max-count (loop for (leaf . count) in leaf-count maximizing count))
 		      (max-leaf-count (remove-if (lambda (x) (/= (cdr x) max-count)) leaf-count)))
