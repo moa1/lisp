@@ -3,6 +3,8 @@
 (ql:quickload :dlist)
 (use-package :cl-custom-hash-table)
 (use-package :dlist)
+(ql:quickload :alexandria)
+(use-package :alexandria)
 
 (defstruct multitree-type
   ;; Takes the multitree, a key, and a value. Destructively add the value or change the value stored below the key in the multitree. Returns the modified multitree and a boolean indicating if the key was changed (and not added).
@@ -84,7 +86,26 @@ X, (car X), and (cdr X) may be a list, a symbol, or a number."
 		  ;; use logxor for speed and so that the order of key/value pairs does not matter
 		  (maphash (lambda (k v) (setf ret (logxor ret (mix (lsxhash k) (lsxhash v)))))
 			   x)
-		  ret))))
+		  ret))
+    (simple-array (let* ((size (array-total-size x))
+			 (dim (array-dimensions x))
+			 (type (array-element-type x))
+			 (ret 518591303))
+		    (declare (type (and fixnum unsigned-byte) ret))
+		    (setf ret (mix (mix ret (sxhash type))
+				   (lsxhash dim)))
+		    (ecase type
+		      ((fixnum)
+		       (loop for i below size do
+			    (let ((e (row-major-aref x i)))
+			      (declare (type fixnum e))
+			      (setf ret (mix ret (sxhash e))))))
+		      ((t)
+		       (loop for i below size do
+			    (let ((e (row-major-aref x i)))
+			      (setf ret (mix ret (lsxhash e))))))
+		      )
+		    ret))))
 
 (define-custom-hash-table-constructor make-lsxhash-equal-hash-table
     ;; equalp required when hashing hash tables
@@ -266,7 +287,7 @@ Returns NIL if plist has an odd length."
 (defstruct dllist
   "An element of a doubly linked list.
 To clarify the nomenclature of 'element' and 'object' for DLLIST, the object of this element is OBJ."
-  (:print-function #'print-dllist)
+  (:print-function 'print-dllist)
   (obj nil :type t)
   (bdr nil :type (or null dllist))
   (cdr nil :type (or null dllist)))
@@ -360,12 +381,6 @@ Returns the dllist pointing to the newly inserted element, or a newly constructe
 	  (unless (null cdr)
 	    (setf (dllist-bdr cdr) new-dll))
 	  new-dll))))
-
-;; in alexandria
-;; (defmacro with-gensyms (symbols &body body)
-;;   ;;(declare (type unique-list symbols))
-;;   `(let ,(loop for symbol in symbols collect `(,symbol (gensym)))
-;;      ,@body))
 
 (defmacro specializing-if (test then &optional else)
   "If TEST is T, only insert THEN, if TEST is NIL, only ELSE, otherwise the if-statement (if ,test ,then ,else)."
