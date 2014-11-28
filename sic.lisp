@@ -1,6 +1,4 @@
 (load "~/quicklisp/setup.lisp")
-;;(asdf:oos 'asdf:load-op 'utils)
-;;(use-package 'utils)
 (load "~/lisp/multitree.lisp")
 (ql:quickload 'hu.dwim.serializer)
 
