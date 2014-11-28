@@ -111,7 +111,7 @@ Is used to measure the performance of interrupting joy-eval."
 
 (defun timediff-return-vs-catch (&optional (d 1))
   (let ((v most-positive-fixnum))
-    (timediff (plus-return v 0 :c (make-counter d))
+    (timediff (eq (plus-return v 0 :c (make-counter d)) 'overrun)
 	      (catch 'overrun (plus-catch v 0 :c (make-counter d)))
 	      :showtimes t
 	      :maxtime 2)))
