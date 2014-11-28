@@ -358,36 +358,25 @@ This function must not modify stk, only copy it (otherwise test values might be 
   (declare (ignore stk exp stks exps heap))
   (error (make-condition 'unknown-op-error :op op)))
 
-(defun joy-eval-2 (stk exp stks exps &key (heap (make-hash-table)) (c (make-counter 0)) (cd (make-countdown 0.0)) (no-op #'default-no-op))
+(defun joy-eval-2-core (stk exp stks exps &key (heap (make-hash-table)) (c most-positive-fixnum) (no-op #'default-no-op))
   (declare (optimize (debug 3) (compilation-speed 0) (speed 3) (space 0))
-	   (type (function () fixnum) c cd))
+	   (type fixnum c))
   "Note that this function does not fail for the same inputs as the joy implementation by Manfred von Thun, e.g. '(branch) returns nil, but would fail for the real implementation.
 However, it should raise an error for cases when the stack becomes a non-list.
 This function must not modify stk, only copy it (otherwise test values might be modified)."
   ;; A restart-case form which allows setting the result of the case statements below in case of error would be nice here. However, such a restart is much too slow. (see restart-vs-no-restart in speed.lisp.)
   ;;(print (list "stk" stk "exp" exp "stks" stks "exps" exps))
-  (let ((c-value (funcall c)) (cd-value (funcall cd)))
-    ;;(print (list "stk" stk "exp" exp "c-value" c-value "cd-value" cd-value))
-    (when (<= c-value 0)
-      ;; FIXME: instead of restart-case I should use throw/catch, b/c it's much faster (see speed.lisp).
-      (restart-case
-	  (error (make-condition 'joy-eval-2-counter-error :stk stk :exp exp :stks stks :exps exps :heap heap :time c-value))
-	(continue ()
-	  :report "Continue, ignoring the counter overrun this evaluation step.")))
-    (when (<= cd-value 0.0) ;if this check doesn't do what it is supposed to, check the output type of (funcall cd) and whether it is identical to the cd type declaration of joy-eval!
-      (restart-case
-	  (error (make-condition 'joy-eval-2-countdown-error :stk stk :exp exp :stks stks :exps exps :heap heap :time cd-value))
-	(continue ()
-	  :report "Continue, ignoring the countdown timeout this evaluation step."))))
+  ;; returning multiple values is faster than returning lists, and decrementing a counter is faster than calling a counter function.
+  (when (<= c 0)
+    (return-from joy-eval-2-core (values 'counter-error stk exp stks exps heap c no-op)))
   (macrolet ((rec (stk exp stks exps)
-	       `(joy-eval-2 ,stk ,exp ,stks ,exps :heap heap :c c :cd cd :no-op no-op)))
+	       `(joy-eval-2-core ,stk ,exp ,stks ,exps :heap heap :c (1- c) :no-op no-op)))
     (if (null exp)
 	(if (null exps)
 	    (progn
 	      (assert (null stks))
-	      stk)
+	      (values 'halt stk exp stks exps heap c no-op))
 	    (ecase (car exps)
-	      ;;(branch) is completely handled below.
 	      (dip    (rec (cons (car stks) stk) (cadr exps) (cdr stks) (cddr exps)))
 	      (i      (rec stk (cadr exps) stks (cddr exps)))
 	      (ifte   (if (car stk)
@@ -445,29 +434,12 @@ This function must not modify stk, only copy it (otherwise test values might be 
 		(nill    (cons nil stk)) ;same as false
 		(not     (cons (not (car stk)) (cdr stk))) ; can be emulated by branch
 		(or      (cons (or (car stk) (cadr stk)) (cddr stk)))
-		(patmat  (let ((exp (cadr stk)) (pat (car stk)) (cd-value (funcall cd)))
-			   (if (> (* +patmat-seconds-per-node+ (+ (count-tree-nodes exp) (count-tree-nodes pat)))
-				  cd-value)
-			       (error (make-condition 'joy-countdown-error :stk stk :exp exp :heap heap :cd-value cd-value))
-			       (cons
-				(alist-to-plist (patmat exp pat))
-				(cdddr stk)))))
-		(patsub  (let ((l (car stk)) (bind (cadr stk)) (cd-value (funcall cd)))
-			   (if (> (* +list-replace-symbols-seconds-per-node+ (+ (count-tree-nodes l) (count-tree-nodes bind)))
-				  cd-value)
-			       (error (make-condition 'joy-countdown-error :stk stk :exp exp :heap heap :cd-value cd-value))
-			       (cons (list-replace-symbols l bind) (cddr stk)))))
+		(patmat  (error "patmat not implemented"))
+		(patsub  (error "patsub not implemented"))
 		(pop     (cdr stk))
 		(pred    (cons (1- (car stk)) (cdr stk)))
 		(quote   (cons (list (car stk)) (cdr stk)))
 		(rem     (cons (mod (cadr stk) (car stk)) (cddr stk)))
-		;; #+sbcl
-		;; (if (= 0.0 (car stk)) ;work around SBCL bug (mod 1.0 0.0)
-		;;     (error (make-condition 'divison-by-zero :operands (list (cadr stk) (car stk))))
-		;;     (cons (mod (cadr stk) (car stk)) (cddr stk)))
-		;; #-sbcl
-		;; (cons (mod (cadr stk) (car stk)) (cddr stk))
-		;; )
 		(sample  (cons (sample (car stk)) (cdr stk)))
 		(<       (cons (< (cadr stk) (car stk)) (cddr stk))) ;smaller
 		(stack   (cons stk stk))
@@ -502,6 +474,28 @@ This function must not modify stk, only copy it (otherwise test values might be 
 			     (setf heap new-heap)
 			     stk))))))
 	      (cdr exp) stks exps))))))
+
+(defun joy-eval-2 (stk exp stks exps &key (heap (make-hash-table)) (c (make-counter 0)) (cd (make-countdown 0.0)) (no-op #'default-no-op))
+  (let ((status nil))
+    (loop until (eq status 'halt) do
+	 (let ((c-value (funcall c)) (cd-value (funcall cd)))
+	   ;;(print (list "stk" stk "exp" exp "c-value" c-value "cd-value" cd-value))
+	   (when (<= c-value 0)
+	     ;; FIXME: instead of restart-case I should use throw/catch, b/c it's much faster (see speed.lisp).
+	     (restart-case
+		 (error (make-condition 'joy-eval-2-counter-error :stk stk :exp exp :stks stks :exps exps :heap heap :time c-value))
+	       (continue ()
+		 :report "Continue, ignoring the counter overrun this evaluation step.")))
+	   (when (<= cd-value 0.0) ;if this check doesn't do what it is supposed to, check the output type of (funcall cd) and whether it is identical to the cd type declaration of joy-eval!
+	     (restart-case
+		 (error (make-condition 'joy-eval-2-countdown-error :stk stk :exp exp :stks stks :exps exps :heap heap :time cd-value))
+	       (continue ()
+		 :report "Continue, ignoring the countdown timeout this evaluation step."))))
+	 (multiple-value-bind (status2 stk2 exp2 stks2 exps2 heap2 c2 no-op2)
+	     (joy-eval-2-core stk exp stks exps :heap heap :c 1 :no-op no-op)
+	   (declare (ignore c2))
+	   (setf status status2 stk stk2 exp exp2 stks stks2 exps exps2 heap heap2 no-op no-op2))))
+  stk)
 
 ;; For example, the step combinator can be used to access all elements of an aggregate in sequence. For strings and lists this means the order of their occurrence, for sets it means the underlying order. The following will step through the members of the second list and swons them into the initially empty first list. The effect is to reverse the non-empty list, yielding [5 6 3 8 2].  
 ;;        []  [2 8 3 6 5]  [swons]  step
@@ -574,7 +568,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 (joy-test nil '(3 4 *) '(12))
 (joy-test nil '(nill) '(()))
 (joy-test nil '(true not) '(nil))
-(joy-test nil '((a 1 b 2) (a c) patsub) '((1 c)))
+;;(joy-test nil '((a 1 b 2) (a c) patsub) '((1 c)))
 ;;(joy-test nil '(((a) (b) (c)) (1 2) (a b c) patmat) '((c nil b 2 a 1)))
 (joy-test nil '(nill 5 or) '(5))
 (joy-test nil '(nill nill or) '(nil))
@@ -2276,35 +2270,6 @@ Signal the same errors that JOY-EVAL would."
     (format logstream "~%"))
   (finish-output logstream))
 
-;;;; ltree auxiliary functions
-
-(defun ltree-reduce-leaves (ltree reduce-function initial-value &key sort-children-predicate)
-  "Visit the leaves of LTREE.
-Initialize VALUE with INITIAL-VALUE.
-For each leaf, call REDUCE-FUNCTION with the current leaf and VALUE, and set VALUE to the result.
-Iterate until all leaves are visited, and return VALUE."
-  (flet ((node-function (node children-value)
-	   (when children-value ;non-leaves are constantly nil
-	     (setf initial-value (funcall reduce-function node initial-value)))))
-   (ltree-reduce ltree (constantly nil) t #'node-function :sort-children-predicate sort-children-predicate))
-  initial-value)
-
-(defun ltree-leaves (ltree &key sort-children-predicate)
-  (let ((leaves nil))
-    (flet ((reduce-function (node v)
-	     (declare (ignore v))
-	     (push node leaves)))
-      (ltree-reduce-leaves ltree
-			   #'reduce-function
-			   nil
-			   :sort-children-predicate sort-children-predicate)
-      leaves)))
-
-(defun ltree-visit-nodes (ltree node-function)
-  "Visit all the nodes of LTREE in arbitrary order, calling NODE-FUNCTION on each.
-Return NIL."
-  (ltree-reduce ltree (constantly nil) nil (lambda (node value) (declare (ignore value)) (funcall node-function node))))
-
 ;; TODO: search through the joy tree of possible programs. Only extend the currently fastest program by all possible extensions. This needs rewriting joy trees as lists using tree-to-list and list-to-tree (see learner-joy-rbm.lisp).
 ;; TODO: search through the joy tree of possible programs. Only extend the currently best-scoring programs by all possible extensions.
 ;; TODO: think hard about how to find out if two joy programs are equivalent. Use this to reduce the search space for joy programs. this might be related to caching implemented in systematicmapping, but also might not.
@@ -2438,7 +2403,7 @@ Return NIL."
 	     (extender ()
 	       ;;TODO: "Return the leaves of the dominators that have the shortest distance from its dominator root."
 	       ;;(print (list "extender" "dominators" dominators))
-	       (let* ((leaves (apply #'nconc (mapcar #'ltree-leaves dominators)))
+	       (let* ((leaves (apply #'nconc (mapcar #'ltree-list-leaves dominators)))
 		      (leaf-count (count-unique leaves :test #'eq))
 		      (max-count (loop for (leaf . count) in leaf-count maximizing count))
 		      (max-leaf-count (remove-if (lambda (x) (/= (cdr x) max-count)) leaf-count)))

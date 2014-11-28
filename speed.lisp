@@ -131,3 +131,45 @@ Is used to measure the performance of interrupting joy-eval."
 	      (plus-return-inline v 0 :c d)
 	      :showtimes t
 	      :maxtime 2)))
+
+(defun return-list (d)
+  (labels ((f1 (d a1 a2 a3 a4 a5 a6 a7 a8)
+	     (list (1- d) a1 a2 a3 a4 a5 a6 a7 a8))
+	   (f2 (d)
+	     (let ((l (list d 1 2 3 4 5 6 7 8)))
+	       (loop until (<= (car l) 0) do
+		    (setf l (apply #'f1 l))))))
+    (f2 d)))
+
+(defun return-values-list (d)
+  (labels ((f1 (d a1 a2 a3 a4 a5 a6 a7 a8)
+	     (values (1- d) a1 a2 a3 a4 a5 a6 a7 a8))
+	   (f2 (d)
+	     (let ((l (list d 1 2 3 4 5 6 7 8)))
+	       (loop until (<= (car l) 0) do
+		    (setf l (multiple-value-list (apply #'f1 l)))))))
+    (f2 d)))
+
+(defun return-values-bind (d)
+  (labels ((f1 (d a1 a2 a3 a4 a5 a6 a7 a8)
+	     (values (1- d) a1 a2 a3 a4 a5 a6 a7 a8))
+	   (f2 (d)
+	     (let ((a1 1) (a2 2) (a3 3) (a4 4) (a5 5) (a6 6) (a7 7) (a8 8))
+	       (loop until (<= d 0) do
+		    (multiple-value-bind (r b1 b2 b3 b4 b5 b6 b7 b8)
+			(f1 d a1 a2 a3 a4 a5 a6 a7 a8)
+		      (setf d r a1 b1 a2 b2 a3 b3 a4 b4 a5 b5 a6 b6 a7 b7 a8 b8)
+		      )))))
+    (f2 d)))
+
+(defun timediff-return-list-vs-return-values-list (&optional (d 1))
+  (timediff (return-list d)
+	    (return-values-list d)
+	    :showtimes t
+	    :maxtime 2))
+
+(defun timediff-return-values-list-vs-return-values-bind (&optional (d 1))
+  (timediff (return-values-list d)
+	    (return-values-bind d)
+	    :showtimes t
+	    :maxtime 2))
