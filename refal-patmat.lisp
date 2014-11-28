@@ -703,3 +703,8 @@ Output: the result, when applying the VIEW field to the first function in PROGRA
 ;; (length (remove 'X *prog-fak-unnested-X*)) == 21
 ;; P2 = 9 ** 21 == 109418989131512359209L
 ;; i.e. at a speed of 51552.152 calls per second (measured using: (timecps (1000 :stats t :time 5.0) (refal-eval *prog-fak* '(3))) on purasuchikku), we need (round (/ 109418989131512359209 51552 60 60 24 365)) = 67303953 = 67 M years.
+
+;; add the function "< quote ... >", which evaluates to "...".
+;; add the function "< selfquote ... >", which evaluates to "< selfquote ... >". Also add function "< unquote ... >", which, if inside selfquote or quote, evaluates "..." and inserts it at the position that unquote was at. Make selfquote and quote be allowed to be nested, and evaluation of unquote only takes place when there are equally many nested unquotes as there were nested quotes/selfquotes before.
+;; Is it possible to write a self-replicating or self-modifying program using these functions?
+;; (fak ((s.1) < selfquote < unquote < + s.1 1 > >
