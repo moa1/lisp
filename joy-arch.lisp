@@ -93,6 +93,8 @@ The second, called with a number of seconds, postpones the timer by the number o
   (let ((m (mean seq)))
     (mean (mapcar (lambda (x) (abs (- x m))) seq))))
 
+;; TODO: implement median and use it to display the median fitness/energy.
+
 (defun deterministic-fun-cacher (fun slots)
   (let ((ht (make-hash-table :test 'equal :size (* 3/2 slots))))
     (lambda (&rest rest)
@@ -496,6 +498,20 @@ This function must not modify stk, only copy it (otherwise test values might be 
 	   (declare (ignore c2))
 	   (setf status status2 stk stk2 exp exp2 stks stks2 exps exps2 heap heap2 no-op no-op2))))
   stk)
+
+(defun joy-eval-2-handler (stk exp stks exps &key (heap (make-hash-table)) (c most-positive-fixnum) (no-op #'default-no-op))
+  ;; TODO: replace this handler-case by a (catch 'error (joy-eval-2-core ...)) and modify joy-eval-2-core to (throw 'error (values stk exp stks ...)) in all detected type errors or division by zero (by adding lot of ifs). This is tedious but faster than handler-case, and we can return the state that led to the error.
+  (handler-case (joy-eval-2-core stk exp stks exps :heap heap :c c :no-op no-op)
+    (unknown-op-error () 'unknown-op-error)
+    #+CMU (simple-error () 'error)
+    #+CMU (arithmetic-error () 'error)
+    (simple-type-error () 'error)
+    (type-error () 'error)
+    (division-by-zero () 'error)
+    (floating-point-invalid-operation () 'error)
+    (floating-point-overflow () 'error)
+    #+SBCL (SB-KERNEL::ARG-COUNT-ERROR () 'error)))
+
 
 ;; For example, the step combinator can be used to access all elements of an aggregate in sequence. For strings and lists this means the order of their occurrence, for sets it means the underlying order. The following will step through the members of the second list and swons them into the initially empty first list. The effect is to reverse the non-empty list, yielding [5 6 3 8 2].  
 ;;        []  [2 8 3 6 5]  [swons]  step
@@ -2110,8 +2126,9 @@ Signal the same errors that JOY-EVAL would."
 
 (defparameter *joy-competition-ops* (append '(offspring give score claim send receive) (remove 'while *joy-ops*)))
 
-(defun valid-genome (genome)
-  (and (listp genome) (valid-joy-exp genome)))
+(defun valid-genome (joy-program)
+  (let ((genome (joy-program-program joy-program)))
+    (and (listp genome) (valid-joy-exp genome))))
 
 (defun valid-mut (mut length-joy-ops)
   (and (listp mut)
@@ -2443,3 +2460,190 @@ Signal the same errors that JOY-EVAL would."
 ;;(bfs-continue (bfs-new '(succ pred) (list *test-cases-sqrt*)) #'make-extender-dominators 1)
 
 ;; Arimaa (see wikipedia) might be a good game to learn on.
+
+;;;; walker: like competition, but simpler, with hardcoded terrain etc.
+
+(defmacro incf/mod (symbol value divisor)
+  (with-unique-names (v d)
+    `(let* ((,v ,value)
+	    (,d ,divisor))
+       (setf ,symbol (mod (+ ,symbol ,v) ,d)))))
+
+(defstruct walker
+  (genome nil :type t)
+  (mut nil :type list)
+  (stk nil :type list)
+  (exp nil :type list)
+  (stks nil :type list)
+  (exps nil :type list)
+  (heap nil :type t)
+  (msgs (dlist) :type t)
+  (energy 0.0 :type number)
+  (x 0 :type integer)
+  (y 0 :type integer)
+  (id -1 :type integer))
+
+(defparameter *walker-id-next* 0 "id of the next walker")
+
+(defun make-organism (o joy-ops plane-x plane-y)
+  (make-walker :genome (make-joy-program :program o)
+;;	       :mut (generate-mut joy-ops)
+	       :mut (loop for i in (generate-mut joy-ops) collect 0.001)
+	       :stk nil
+	       :exp o
+	       :stks nil
+	       :exps nil
+	       :heap (make-hash-table)
+	       :msgs nil
+	       :energy 49
+	       :x (random plane-x)
+	       :y (random plane-y)
+	       :id (incf *walker-id-next*)))
+
+(defparameter *last-organisms* nil)
+(defparameter *last-plane* nil)
+
+(defun test (random-state iterations)
+  (setf *walker-id-next* 0)
+  (let ((plane-x 20)
+	(plane-y 40))
+    (if (null random-state)
+	(defparameter previous-random-state (make-random-state))
+	(setf *random-state* (make-random-state random-state)))
+    (let* ((joy-ops '(1 0 + - * walk-x walk-y))
+	   (organisms (loop for i below 1 collect (make-organism '((1 walk-y 1 walk-y 1 walk-x a) (a) define a) joy-ops plane-x plane-y)))
+	   (plane (make-array (list plane-x plane-y) :initial-element 2.0)))
+      (multiple-value-bind (organisms plane)
+	  (planeswalker organisms plane iterations joy-ops 50 plane-x plane-y)
+	(setf *last-organisms* organisms *last-plane* plane)
+      nil))))
+
+(defun planeswalker (organisms plane iterations joy-ops clone-min-energy plane-x plane-y)
+  (dotimes (iter iterations)
+    (print (list "iter" iter))
+    ;; randomly add energy to the plane
+    (loop for i below 40 do
+	 (incf (aref plane (random plane-x) (random plane-y)) 0.5))
+    ;;(print plane)
+    ;; print organism stats
+    (let* ((energies (loop for org in organisms collect (walker-energy org)))
+	   (n (length energies)))
+      (print (list "organisms" (length organisms)
+		   "energies: max" (if (>= n 1) (float (apply #'max energies)) nil)
+		   "mean" (if (>= n 1) (float (mean energies)) nil)
+		   "stddev" (if (>= n 2) (stddev-corr energies) nil))))
+    ;; print plane stats
+    (when (= 0 (mod iter 1))
+      (let ((energies (loop for i below (apply #'* (array-dimensions plane)) collect (row-major-aref plane i))))
+	(let ((fit-max (apply #'max energies))
+	      (fit-mean (mean energies))
+	      (fit-stddev (stddev-corr energies)))
+	  (print (list "plane energies: max" (float fit-max) "mean" (float fit-mean) "stddev" fit-stddev)))))
+    ;; absorb energy in organism
+    (dolist (org organisms)
+      (let* ((x (walker-x org))
+	     (y (walker-y org))
+	     (e (aref plane x y)))
+	;;(print (list "e" e))
+	(incf (walker-energy org) e)
+	(decf (aref plane x y) e)))
+    (let ((new-organisms nil))
+      (dolist (org organisms)
+	;; evaluate the organisms
+	;;(print (list "org0" org))
+	(flet ((new-ops (op stk exp stks exps heap)
+		 (values
+		  (case op
+		    ((walk-x) (let ((offset (car stk)))
+				(and (integerp offset)
+				     (incf/mod (walker-x org) offset plane-x)
+				     (decf (walker-energy org) (abs offset)))
+				(cdr stk)))
+		    ((walk-y) (let ((offset (car stk)))
+				(and (integerp offset)
+				     (incf/mod (walker-y org) offset plane-y)
+				     (decf (walker-energy org) (abs offset)))
+				(cdr stk)))
+		    ;; (offspring (cons (funcall offspring-fun (car stk) (cadr stk)) (cddr stk)))
+		    ;; (give      (funcall give-fun (cadr stk) (car stk)) (cddr stk))
+		    ;; (score     (cons (funcall score-fun (car stk)) (cdr stk)))
+		    ;; (claim     (funcall claim-fun (car stk)) (cdr stk))
+		    ;; (send      (funcall send-fun (car stk)) (cdr stk))
+		    ;; (receive   (multiple-value-bind (msg-p msg) (funcall receive-fun)
+		    ;; 	     (cons msg-p (cons msg stk))))
+		    (t (default-no-op op stk exp stks exps heap)))
+		  exp stks exps heap)))
+	  (let ((stk (walker-stk org))
+		(exp (walker-exp org))
+		(stks (walker-stks org))
+		(exps (walker-exps org))
+		(heap (walker-heap org)))
+	    ;;(print (list "stk" stk "exp" exp "stks" stks "exps" exps))
+	    (multiple-value-bind (status stk exp stks exps heap c no-op)
+		(joy-eval-2-handler stk exp stks exps :heap heap :c 2 :no-op #'new-ops)
+	      (declare (ignore c no-op))
+	      (flet ((survive ()
+		       ;; update state of the organism	
+		       (setf (walker-stk org) stk
+			     (walker-exp org) exp
+			     (walker-stks org) stks
+			     (walker-exps org) exps
+			     (walker-heap org) heap)
+		       ;;(print (list "survive" c "exp" (joy-error-exp c)))
+		       (decf (walker-energy org) .2)
+		       (when (> (walker-energy org) 0)
+			 (push org new-organisms)))
+		     (die ()
+		       ;; leave energy of organism behind
+		       (let ((e (walker-energy org)))
+			 (when (> e 0)
+			   ;;(incf (aref plane (walker-x org) (walker-y org)) e)
+			   (decf (walker-energy org) e)))))
+		(ecase status
+		  ((counter-error) (survive))
+		  ((halt) (die))
+		  ((error) (die))
+		  ((unknown-op-error) (die)))))))
+	;;(print (list "org1" org))
+	;; duplicate an organism with high enough energy
+	;; TODO: the cloning of organisms requires that we know their genome. however, if organisms would reproduce themselves, this would not be required, so probably I should at some point in time drop cloning, and instead mutate the memory that an organism holds.
+	(let ((e (walker-energy org)))
+	  (when (> e clone-min-energy)
+	    (let* ((mut1 (walker-mut org))
+		   (mut2 (walker-mut org))
+		   (new-mut (mutate-mutate .1 (mutate-crossover mut1 mut2)))
+		   (genome1 (walker-genome org))
+		   (genome2 (walker-genome org))
+		   (new (apply #'crossover-and-mutate joy-ops genome1 genome2 new-mut))
+		   (energy/2 (* e 0.5)))
+	      (when (and (valid-genome new) (valid-mut new-mut (length joy-ops)))
+		;;(print (list "new" new "new-mut" new-mut))
+		(setf (walker-energy org) energy/2)
+		(push (make-walker :genome new
+				   :mut new-mut
+				   :stk nil
+				   :exp (joy-program-program new)
+				   :stks nil
+				   :exps nil
+				   :heap (make-hash-table)
+				   :msgs nil
+				   :energy energy/2
+				   :x (walker-x org)
+				   :y (walker-y org)
+				   :id (incf *walker-id-next*))
+		      new-organisms)))))
+	)
+      ;; print best organisms
+      (let* ((m (loop for org in organisms maximizing (walker-energy org)))
+	     (best (loop for org in organisms when (= (walker-energy org) m) collect org)))
+	;;(print (list "best" (loop for org in best collect (walker-genome org))))
+	;;(print (list "best" (loop for org in best collect org)))
+	;;(print (list "best" (loop for org in best collect (list "genome" (walker-genome org) "x" (walker-x org) "y" (walker-y org) "id" (walker-id org)))))
+	;;(print (list "best" (loop for org in best collect (list "x" (walker-x org) "y" (walker-y org) "id" (walker-id org)))))
+	)
+      (setf organisms (reverse new-organisms)))
+    )
+  (values organisms plane))
+
+
+;;(test nil 6000)
