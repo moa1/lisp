@@ -2469,6 +2469,12 @@ Signal the same errors that JOY-EVAL would."
 	    (,d ,divisor))
        (setf ,symbol (mod (+ ,symbol ,v) ,d)))))
 
+(defmacro incf/clamp (symbol value max)
+  (with-unique-names (v m)
+    `(let* ((,v ,value)
+	    (,m (1- ,max)))
+       (setf ,symbol (clamp (+ ,symbol ,v) 0 ,m)))))
+
 (defstruct walker
   (genome nil :type t)
   (mut nil :type list)
@@ -2503,26 +2509,110 @@ Signal the same errors that JOY-EVAL would."
 (defparameter *last-organisms* nil)
 (defparameter *last-plane* nil)
 
+(ql:quickload 'ltk)
+
+;; (defun make-ltk-image ()
+;;   (let ((image-ret nil))
+;;     (ltk:with-ltk (:serve-event t)
+;;       (let* ((sc (make-instance 'ltk:scrolled-canvas))
+;; 	     (c (ltk:canvas sc))
+;; 	     (text (ltk:create-text c 260 250 "Canvas test"))
+;; 	     (image (ltk:make-image))
+;; 	     (image-1 (ltk:create-image c 0 0 :image image)))
+;; 	(ltk:pack sc :expand 1 :fill :both)
+;; 	(ltk:scrollregion c 0 0 800 800)
+;; 	(setf image-ret image)))
+;;     image-ret))
+
+(defparameter *draw-image* t "Whether to draw the plane image")
+
+(defun make-ltk-image-2 ()
+  (ltk:with-ltk ()
+    (let* ((f (make-instance 'ltk:frame))
+	   (sc (make-instance 'ltk:scrolled-canvas
+			      :master f))
+	   (c (ltk:canvas sc))
+	   (text (ltk:create-text c 260 250 "Canvas test"))
+	   (button-draw-image
+	    (make-instance 'ltk:button
+			   :master f
+			   :text "Toggle draw"
+			   :command (lambda ()
+				      (print (list "*draw-image*" *draw-image*))
+				      (setf *draw-image*
+					    (if *draw-image* nil t)))))
+	   (image (ltk:make-image))
+	   (image-1 (ltk:create-image c 0 0 :image image)))
+      (ltk:pack f)
+      (ltk:pack sc :side :left :expand 1 :fill :both)
+      ;;(ltk:pack sc :expand 1 :fill :both)
+      (ltk:pack button-draw-image :side :right)
+      (ltk:scrollregion c 0 0 800 800))))
+
+(defun make-ltk-image ()
+  (ltk:start-wish)
+  (let* ((f (make-instance 'ltk:frame))
+	 (sc (make-instance 'ltk:scrolled-canvas
+			    :master f))
+	 (c (ltk:canvas sc))
+	 (text (ltk:create-text c 260 250 "Canvas test"))
+	 (button-draw-image
+	  (make-instance 'ltk:button
+			 :master f
+			 :text "Toggle draw"
+			 ;; :command (lambda ()
+			 ;; 	    (print (list "*draw-image*" *draw-image*))
+			 ;; 	    (setf *draw-image*
+			 ;; 		  (if *draw-image* nil t)))))
+			 :command (lambda ()
+				    ;; for some reason, this never executes:
+				    (with-open-file (s "/tmp/bla.txt" :direction :output :if-exists :overwrite :if-does-not-exist :create)
+				      (format s "written")))))
+	 (image (ltk:make-image))
+	 (image-1 (ltk:create-image c 0 0 :image image)))
+    (ltk:pack f)
+    (ltk:pack sc :side :left :expand 1 :fill :both)
+    ;;(ltk:pack sc :expand 1 :fill :both)
+    (ltk:pack button-draw-image :side :right)
+    (ltk:scrollregion c 0 0 800 800)
+    (ltk:mainloop :serve-event t)
+    image))
+
+(defun update-ltk-image (image plane max-energy)
+  (print (list "*draw-image*" *draw-image*))
+  (when *draw-image*
+    (let* ((w (array-dimension plane 0))
+	   (h (array-dimension plane 1))
+	   (f (/ 255 max-energy))
+	   (data (loop for y below h collect
+		      (loop for x below w collect
+			   (let ((i (floor (* f (aref plane x y)))))
+			     (when (> i 255) (setf i 255))
+			     (list i i i))))))
+      (ltk:image-setpixel image data 0 0 w h))))
+
 (defun test (random-state iterations)
   (setf *walker-id-next* 0)
-  (let ((plane-x 20)
-	(plane-y 40))
+  (let ((plane-x 100)
+	(plane-y 80))
     (if (null random-state)
-	(defparameter previous-random-state (make-random-state))
+	(defparameter *previous-random-state* (make-random-state) "last (test) random-state")
 	(setf *random-state* (make-random-state random-state)))
-    (let* ((joy-ops '(1 0 + - * walk-x walk-y))
-	   (organisms (loop for i below 1 collect (make-organism '((1 walk-y 1 walk-y 1 walk-x a) (a) define a) joy-ops plane-x plane-y)))
-	   (plane (make-array (list plane-x plane-y) :initial-element 2.0)))
+    (let* ((joy-ops '(1 0 -1 + - * dup walk-x walk-y))
+	   (organisms (loop for i below 40 collect (make-organism '((1 walk-x 1 walk-y 1 walk-y 1 walk-x 1 walk-x 0 1 - dup dup dup walk-y walk-y walk-x walk-x a) (a) define a) joy-ops plane-x plane-y)))
+	   (plane (make-array (list plane-x plane-y) :initial-element 2.0))
+	   (image (make-ltk-image)))
+      (print (list "image" image))
       (multiple-value-bind (organisms plane)
-	  (planeswalker organisms plane iterations joy-ops 50 plane-x plane-y)
+	  (planeswalker organisms plane image joy-ops iterations 50 plane-x plane-y)
 	(setf *last-organisms* organisms *last-plane* plane)
       nil))))
 
-(defun planeswalker (organisms plane iterations joy-ops clone-min-energy plane-x plane-y)
+(defun planeswalker (organisms plane image joy-ops iterations clone-min-energy plane-x plane-y)
   (dotimes (iter iterations)
     (print (list "iter" iter))
     ;; randomly add energy to the plane
-    (loop for i below 40 do
+    (loop for i below 400 do
 	 (incf (aref plane (random plane-x) (random plane-y)) 0.5))
     ;;(print plane)
     ;; print organism stats
@@ -2556,12 +2646,12 @@ Signal the same errors that JOY-EVAL would."
 		  (case op
 		    ((walk-x) (let ((offset (car stk)))
 				(and (integerp offset)
-				     (incf/mod (walker-x org) offset plane-x)
+				     (incf/clamp (walker-x org) offset plane-x)
 				     (decf (walker-energy org) (abs offset)))
 				(cdr stk)))
 		    ((walk-y) (let ((offset (car stk)))
 				(and (integerp offset)
-				     (incf/mod (walker-y org) offset plane-y)
+				     (incf/clamp (walker-y org) offset plane-y)
 				     (decf (walker-energy org) (abs offset)))
 				(cdr stk)))
 		    ;; (offspring (cons (funcall offspring-fun (car stk) (cadr stk)) (cddr stk)))
@@ -2641,6 +2731,7 @@ Signal the same errors that JOY-EVAL would."
 	;;(print (list "best" (loop for org in best collect (list "genome" (walker-genome org) "x" (walker-x org) "y" (walker-y org) "id" (walker-id org)))))
 	;;(print (list "best" (loop for org in best collect (list "x" (walker-x org) "y" (walker-y org) "id" (walker-id org)))))
 	)
+      (update-ltk-image image plane 10)
       (setf organisms (reverse new-organisms)))
     )
   (values organisms plane))
