@@ -679,7 +679,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 (defstruct refal-program
   (program))
 
-(define-constant +mut0-max+ 0.8)
+(define-constant +mut0-max+ 0.5)
 
 (defun mutate (joy-ops exp debranch-p p1 p2 p3 p4 p5 p6
 	       &rest ops-p)
@@ -2487,7 +2487,8 @@ Signal the same errors that JOY-EVAL would."
   (energy 0.0 :type number)
   (x 0 :type integer)
   (y 0 :type integer)
-  (id -1 :type integer))
+  (id -1 :type integer)
+  (n-offspring 0 :type integer))
 
 (defparameter *walker-id-next* 0 "id of the next walker")
 
@@ -2504,7 +2505,8 @@ Signal the same errors that JOY-EVAL would."
 	       :energy 49
 	       :x (random plane-x)
 	       :y (random plane-y)
-	       :id (incf *walker-id-next*)))
+	       :id (incf *walker-id-next*)
+	       :n-offspring 0))
 
 (defparameter *last-organisms* nil)
 (defparameter *last-plane* nil)
@@ -2598,8 +2600,8 @@ Signal the same errors that JOY-EVAL would."
     (if (null random-state)
 	(defparameter *previous-random-state* (make-random-state) "last (test) random-state")
 	(setf *random-state* (make-random-state random-state)))
-    (let* ((joy-ops '(1 0 -1 + - * dup walk-x walk-y))
-	   (organisms (loop for i below 40 collect (make-organism '((1 walk-x 1 walk-y 1 walk-y 1 walk-x 1 walk-x 0 1 - dup dup dup walk-y walk-y walk-x walk-x a) (a) define a) joy-ops plane-x plane-y)))
+    (let* ((joy-ops '(1 0 -1 + - * dup si i < branch eat walk-x walk-y where-x where-y))
+	   (organisms (loop for i below 40 collect (make-organism '((1 walk-x eat 1 walk-y eat 1 walk-y eat 1 walk-x eat 1 walk-x eat 0 1 - dup dup dup walk-y eat walk-y eat walk-x eat walk-x eat a) (a) define a) joy-ops plane-x plane-y)))
 	   (plane (make-array (list plane-x plane-y) :initial-element 2.0))
 	   (image (make-ltk-image)))
       (print (list "image" image))
@@ -2617,11 +2619,13 @@ Signal the same errors that JOY-EVAL would."
     ;;(print plane)
     ;; print organism stats
     (let* ((energies (loop for org in organisms collect (walker-energy org)))
-	   (n (length energies)))
+	   (n (length energies))
+	   (n-offspring (loop for org in organisms collect (walker-n-offspring org))))
       (print (list "organisms" (length organisms)
 		   "energies: max" (if (>= n 1) (float (apply #'max energies)) nil)
 		   "mean" (if (>= n 1) (float (mean energies)) nil)
-		   "stddev" (if (>= n 2) (stddev-corr energies) nil))))
+		   "stddev" (if (>= n 2) (stddev-corr energies) nil)
+		   "n-offspring: max" (if (>= n 1) (apply #'max n-offspring)))))
     ;; print plane stats
     (when (= 0 (mod iter 1))
       (let ((energies (loop for i below (apply #'* (array-dimensions plane)) collect (row-major-aref plane i))))
@@ -2629,21 +2633,21 @@ Signal the same errors that JOY-EVAL would."
 	      (fit-mean (mean energies))
 	      (fit-stddev (stddev-corr energies)))
 	  (print (list "plane energies: max" (float fit-max) "mean" (float fit-mean) "stddev" fit-stddev)))))
-    ;; absorb energy in organism
-    (dolist (org organisms)
-      (let* ((x (walker-x org))
-	     (y (walker-y org))
-	     (e (aref plane x y)))
-	;;(print (list "e" e))
-	(incf (walker-energy org) e)
-	(decf (aref plane x y) e)))
     (let ((new-organisms nil))
       (dolist (org organisms)
 	;; evaluate the organisms
 	;;(print (list "org0" org))
+	;;(print (list "execute" (walker-id org)))
 	(flet ((new-ops (op stk exp stks exps heap)
 		 (values
 		  (case op
+		    ((eat) (let* ((x (walker-x org))
+				  (y (walker-y org))
+				  (e (aref plane x y)))
+			     ;;(print (list "e" e))
+			     (incf (walker-energy org) e)
+			     (decf (aref plane x y) e)
+			     stk))
 		    ((walk-x) (let ((offset (car stk)))
 				(and (integerp offset)
 				     (incf/clamp (walker-x org) offset plane-x)
@@ -2654,6 +2658,8 @@ Signal the same errors that JOY-EVAL would."
 				     (incf/clamp (walker-y org) offset plane-y)
 				     (decf (walker-energy org) (abs offset)))
 				(cdr stk)))
+		    ((where-x) (cons (walker-x org) stk))
+		    ((where-y) (cons (walker-y org) stk))
 		    ;; (offspring (cons (funcall offspring-fun (car stk) (cadr stk)) (cddr stk)))
 		    ;; (give      (funcall give-fun (cadr stk) (car stk)) (cddr stk))
 		    ;; (score     (cons (funcall score-fun (car stk)) (cdr stk)))
@@ -2672,6 +2678,8 @@ Signal the same errors that JOY-EVAL would."
 	    (multiple-value-bind (status stk exp stks exps heap c no-op)
 		(joy-eval-2-handler stk exp stks exps :heap heap :c 2 :no-op #'new-ops)
 	      (declare (ignore c no-op))
+	      (when (or (not (listp stk)) (not (listp exp)))
+		(setf status 'error))
 	      (flet ((survive ()
 		       ;; update state of the organism	
 		       (setf (walker-stk org) stk
@@ -2697,6 +2705,7 @@ Signal the same errors that JOY-EVAL would."
 	;;(print (list "org1" org))
 	;; duplicate an organism with high enough energy
 	;; TODO: the cloning of organisms requires that we know their genome. however, if organisms would reproduce themselves, this would not be required, so probably I should at some point in time drop cloning, and instead mutate the memory that an organism holds.
+	;;(print (list "clone" (walker-id org)))
 	(let ((e (walker-energy org)))
 	  (when (> e clone-min-energy)
 	    (let* ((mut1 (walker-mut org))
@@ -2709,6 +2718,7 @@ Signal the same errors that JOY-EVAL would."
 	      (when (and (valid-genome new) (valid-mut new-mut (length joy-ops)))
 		;;(print (list "new" new "new-mut" new-mut))
 		(setf (walker-energy org) energy/2)
+		(incf (walker-n-offspring org))
 		(push (make-walker :genome new
 				   :mut new-mut
 				   :stk nil
@@ -2720,7 +2730,8 @@ Signal the same errors that JOY-EVAL would."
 				   :energy energy/2
 				   :x (walker-x org)
 				   :y (walker-y org)
-				   :id (incf *walker-id-next*))
+				   :id (incf *walker-id-next*)
+				   :n-offspring 0)
 		      new-organisms)))))
 	)
       ;; print best organisms
