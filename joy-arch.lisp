@@ -268,6 +268,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 	 (branch  (if (caddr stk)
 		      (joy-eval (cdddr stk) (cadr stk) :heap heap :c c :cd cd)
 		      (joy-eval (cdddr stk) (car stk) :heap heap :c c :cd cd)))
+	 (branch1 (cons (if (caddr stk) (cadr stk) (car stk)) (cdddr stk)))
 	 (concat  (cons (append (cadr stk) (car stk)) (cddr stk)))
 	 (cons    (cons (cons (cadr stk) (let ((a (car stk))) (if (proper-list-p a) a (error (make-condition 'type-error :datum a :expected-type 'list))))) (cddr stk))) ; same as papply
 	 (dip     (cons (cadr stk) (joy-eval (cddr stk) (car stk) :heap heap :c c :cd cd)))
@@ -418,6 +419,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 		;;(1=      (cons (= (car stk) 1) (cdr stk)))
 		(+       (cons (+ (cadr stk) (car stk)) (cddr stk))) ;add
 		(and     (cons (and (car stk) (cadr stk)) (cddr stk)))
+		(branch1 (cons (if (caddr stk) (cadr stk) (car stk)) (cdddr stk)))
 		(concat  (cons (append (cadr stk) (car stk)) (cddr stk)))
 		(cons    (cons (cons (cadr stk) (let ((a (car stk))) (if (proper-list-p a) a (error (make-condition 'type-error :datum a :expected-type 'list))))) (cddr stk))) ; same as papply
 		(/       (cons (/ (cadr stk) (car stk)) (cddr stk)))
@@ -566,6 +568,8 @@ This function must not modify stk, only copy it (otherwise test values might be 
 (joy-test nil '(3 5 and) '(3))
 (joy-test nil '(true (1) (2) branch) '(1))
 (joy-test nil '(nill (1) (2) branch) '(2))
+(joy-test nil '(true 1 2 branch1) '(1))
+(joy-test nil '(nill 1 2 branch1) '(2))
 (joy-test nil '(0 (1 2 3) (4 5 6) concat) '((1 2 3 4 5 6) 0))
 (joy-test nil '(4 (3) cons) '((4 3)))
 (joy-test nil '(1 2 5 (+) dip) '(5 3))
@@ -671,7 +675,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
     #+SBCL (SB-KERNEL::ARG-COUNT-ERROR () 'error)))
 
 (defparameter *joy-ops* 
-  '(+ and branch concat cons dip / dup equal gensym i ifte list * nill not or patmat patsub pop pred quote rem si sample < stack step - succ swap times true uncons unstack while define))
+  '(+ and branch branch1 concat cons dip / dup equal gensym i ifte list * nill not or patmat patsub pop pred quote rem si sample < stack step - succ swap times true uncons unstack while define))
 
 (defstruct joy-program
   (program))
@@ -852,6 +856,7 @@ Example: (mapexps (lambda (x) (values (print x) t)) '(1 (2) (3 (4))))"
   '((+       (number number) (number))
     (and     (t t) (boolean))
     (branch  (t list list) (:any))
+    (branch1 (t t t) (t))
     (concat  (list list) (list))
     (cons    (t list) (list))
     (dip     (t list) (:any))
