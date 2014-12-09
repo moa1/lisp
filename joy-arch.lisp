@@ -2606,7 +2606,7 @@ Signal the same errors that JOY-EVAL would."
 	   (image (make-ltk-image)))
       (print (list "image" image))
       (multiple-value-bind (organisms plane)
-	  (planeswalker organisms plane image joy-ops iterations 50 plane-x plane-y)
+	  (planeswalker organisms plane image joy-ops iterations 25 plane-x plane-y)
 	(setf *last-organisms* organisms *last-plane* plane)
       nil))))
 
@@ -2615,7 +2615,7 @@ Signal the same errors that JOY-EVAL would."
     (print (list "iter" iter))
     ;; randomly add energy to the plane
     (loop for i below 400 do
-	 (incf (aref plane (random plane-x) (random plane-y)) 0.5))
+	 (incf (aref plane (random plane-x) (random plane-y)) 1.0))
     ;;(print plane)
     ;; print organism stats
     (let* ((energies (loop for org in organisms collect (walker-energy org)))
@@ -2676,7 +2676,7 @@ Signal the same errors that JOY-EVAL would."
 		(heap (walker-heap org)))
 	    ;;(print (list "stk" stk "exp" exp "stks" stks "exps" exps))
 	    (multiple-value-bind (status stk exp stks exps heap c no-op)
-		(joy-eval-2-handler stk exp stks exps :heap heap :c 2 :no-op #'new-ops)
+		(joy-eval-2-handler stk exp stks exps :heap heap :c 4 :no-op #'new-ops)
 	      (declare (ignore c no-op))
 	      (when (or (not (listp stk)) (not (listp exp)))
 		(setf status 'error))
