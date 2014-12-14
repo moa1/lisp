@@ -2612,8 +2612,13 @@ Signal the same errors that JOY-EVAL would."
   (dotimes (iter iterations)
     (print (list "iter" iter))
     ;; randomly add energy to the plane
-    (loop for i below 400 do
-	 (incf (aref plane (random plane-x) (random plane-y)) 0.5))
+    (let* ((average-energy-per-iteration 0.5)
+	   (iterations-per-day 200)
+	   (e (* (1+ (sin (* (/ iter (/ iterations-per-day 2)) pi))) average-energy-per-iteration)))
+      (print (list "energy income" e))
+      (loop for i below 400 do
+	 ;;	 (incf (aref plane (random plane-x) (random plane-y)) 0.5))
+	   (incf (aref plane (random plane-x) (random plane-y)) e)))
     ;;(print plane)
     ;; print organism stats
     (let* ((energies (loop for org in organisms collect (walker-energy org)))
