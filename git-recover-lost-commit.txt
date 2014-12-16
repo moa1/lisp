@@ -1,0 +1,14 @@
+look into .git/logs/refs/heads/BRANCH-NAME
+identify the lost commit which looks e.g. like this:
+
+d73943795960ac96adff0441f40f7cd9599be79c 80c2b4114efc78c80f7ab612fd6c28f3f9f25c70 toni <toni@zweihorn.(none)> 1377564632 +0200  commit: add learner-joy-rbm.lisp which tries to learn one joy step using an RBM.
+
+if the commit was not recorded in .git/logs/refs/heads/BRANCH-NAME, then it should be in .git/logs/HEAD.
+
+another command to show history of changes is git reflog.
+
+the learn* in the following command is a pattern that describes the file that we are looking for.
+
+git ls-tree 80c2b4114efc78c80f7ab612fd6c28f3f9f25c70 learn*
+git show 6a0f2a8deb0fee94570c184d0078b740577f8f4d
+

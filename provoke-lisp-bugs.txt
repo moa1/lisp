@@ -1,0 +1,14 @@
+;; provokes an sbcl bug in 1.0.57.0.debian, but not in 1.0.40.0.debian
+(/ 1.0 0.0)
+
+;;git id c7a04e19198f4f295865ca4fbf9b7b0598dd8b91 provokes sbcl bug when calling rbm-learn:
+;;(defparameter *rbm* (rbm-learn *data* (new-rbm 6 2 :v-binary 6 :h-binary 2) .1 0 .0002 1000))
+;;this provokes an sbcl bug in version 1.0.40.0.debian, 1.0.57.0.debian.
+(defun test ()
+  (declare (optimize (safety 0)))
+  (loop while t do
+       (mapcar (lambda (a b)
+		 (declare (type fixnum a b))
+		 (the fixnum (* a b)))
+	       '(nil) '(nil))))
+(test)
