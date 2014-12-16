@@ -428,12 +428,12 @@ EXP: expression, PAT: pattern, CLOSED: ((a . value) (b . 1))."
 			   (patternp h)))
 		  (patternp (cdr p)))))))
 
-(defstruct nest<>
+(defstruct nest[]
   (list))
 
 ;; boa constrictor = by-order-of-arguments constructor.
-(defun make-nest<>-boa (list)
-  (make-nest<> :list list))
+(defun make-nest[]-boa (list)
+  (make-nest[] :list list))
 
 ;; TODO: instead of using function nest-brackets, write reader-macros or what they are called (this has the advantage that you can write reader-macros for nested <> [] {} (), which is not possible with nest-brackets).
 (defun nest-brackets (list open-bracket close-bracket nest-function &key (test #'eq))
@@ -468,15 +468,15 @@ TEST is used to compare elements of LIST with the BRACKETs."
 	(rec nil 0)
       (values res (= 0 open)))))
 
-(assert (equalp (multiple-value-list (nest-brackets '(1 < < 2 (3) > 4 >) '< '> #'make-nest<>-boa))
-		`((1 ,(make-nest<>-boa (list (make-nest<>-boa '(2 (3))) 4))) t)))
-;;	       '((1 #S(NEST<> :LIST (#S(NEST<> :LIST (2 (3))) 4))) t))) ;error I don't understand.
-(assert (null (nth-value 1 (nest-brackets '(1 < 2 (3) > 4 >)
-					  '< '> #'make-nest<>-boa))))
-(assert (null (nth-value 1 (nest-brackets '(1 < < 2 (3) > 4)
-					  '< '> #'make-nest<>-boa))))
-(assert (null (nth-value 1 (nest-brackets '(1 < < 2 (3) (>) 4 >)
-					  '< '> #'make-nest<>-boa))))
+(assert (equalp (multiple-value-list (nest-brackets '(1 [ [ 2 (3) ] 4 ]) '[ '] #'make-nest[]-boa))
+		`((1 ,(make-nest[]-boa (list (make-nest[]-boa '(2 (3))) 4))) t)))
+;;	       '((1 #S(NEST[] :LIST (#S(NEST[] :LIST (2 (3))) 4))) t))) ;error I don't understand.
+(assert (null (nth-value 1 (nest-brackets '(1 [ 2 (3) ] 4 ])
+					  '[ '] #'make-nest[]-boa))))
+(assert (null (nth-value 1 (nest-brackets '(1 [ [ 2 (3) ] 4)
+					  '[ '] #'make-nest[]-boa))))
+(assert (null (nth-value 1 (nest-brackets '(1 [ [ 2 (3) (]) 4 ])
+					  '] '] #'make-nest[]-boa))))
 
 (defstruct call
   (name nil :type symbol :read-only t)
@@ -488,7 +488,7 @@ TEST is used to compare elements of LIST with the BRACKETs."
 (defun parse-result (result)
   "Examples:
   ()
-  (1 2 e.1 #S(NEST<> :LIST (function 2 (3))) (a b c))."
+  (1 2 e.1 #S(NEST[] :LIST (function 2 (3))) (a b c))."
   (labels ((rec (r res)
 	     (if (null r)
 		 (nreverse res)
@@ -496,8 +496,8 @@ TEST is used to compare elements of LIST with the BRACKETs."
 		   (cond
 		     ((or (symbolp h) (numberp h)) (rec (cdr r) (cons h res)))
 		     ((listp h) (rec (cdr r) (cons (parse-result h) res)))
-		     ((nest<>-p h)
-		      (let ((l (nest<>-list h)))
+		     ((nest[]-p h)
+		      (let ((l (nest[]-list h)))
 			(if (or (null l) (not (refal-function-name-p (car l))))
 			    nil
 			    (let ((call (make-call :name (car l)
@@ -513,9 +513,9 @@ TEST is used to compare elements of LIST with the BRACKETs."
 	       '(() t)))
 (assert (equal (multiple-value-list (parse-result '(1 2 e.1 (3 4) 5)))
 	       '((1 2 e.1 (3 4) 5) t)))
-;;(assert (equal (multiple-value-list (parse-result '(1 #S(NEST<> :LIST (function 2 (3))) 4)))
+;;(assert (equal (multiple-value-list (parse-result '(1 #S(NEST[] :LIST (function 2 (3))) 4)))
 ;;		'((1 #S(CALL :NAME FUNCTION :ARGS (2 (3))) 4) T)))
-(assert (equalp (multiple-value-list (parse-result `(1 ,(make-nest<>-boa '(function 2 (3))) 4)))
+(assert (equalp (multiple-value-list (parse-result `(1 ,(make-nest[]-boa '(function 2 (3))) 4)))
 		`((1 ,(make-CALL :NAME 'FUNCTION :ARGS '(2 (3))) 4) T)))
 
 (defun parse-clause (clause)
@@ -547,8 +547,8 @@ TEST is used to compare elements of LIST with the BRACKETs."
       (push (parse-clause clause) pclauses))
     (cons name (nreverse pclauses))))
 
-(assert (equalp (parse-function (nest-brackets '(ITAL-ENGL ((E.W) < TRANS (E.W) < TABLE > >))
-					       '< '> #'make-nest<>-boa))
+(assert (equalp (parse-function (nest-brackets '(ITAL-ENGL ((E.W) [ TRANS (E.W) [ TABLE ] ]))
+					       '[ '] #'make-nest[]-boa))
 		`(ITAL-ENGL ((E.W) ,(make-CALL :NAME 'TRANS :ARGS `((E.W) ,(make-CALL :NAME 'TABLE :ARGS NIL)))))))
 
 (defun parse-program (program)
@@ -568,7 +568,7 @@ TEST is used to compare elements of LIST with the BRACKETs."
 (defun parse-program* (program)
   (if (listp program)
       (multiple-value-bind (r accepted)
-	  (nest-brackets program '< '> #'make-nest<>-boa)
+	  (nest-brackets program '[ '] #'make-nest[]-boa)
 	(if accepted
 	    (parse-program r)
 	    nil))
@@ -576,7 +576,7 @@ TEST is used to compare elements of LIST with the BRACKETs."
 
 (defparameter *prog-trans-ital-engl*
   '((ital-engl
-     ((e.W) < Trans (e.W) < Table > >))
+     ((e.W) [ Trans (e.W) [ Table ] ]))
     (table
      (() ;nil becomes
       ((cane) dog)
@@ -590,15 +590,19 @@ TEST is used to compare elements of LIST with the BRACKETs."
 
 (assert (not (null (parse-program* *prog-trans-ital-engl*))))
 
-(defun refal-eval (program view &key (c (make-counter)))
-  "Input: a parsed refal PROGRAM and a VIEW field.
+(defun default-no-function (f n a)
+  (declare (ignore f n a))
+  (throw 'refal-eval-error 'unknown-function-error))
+
+(defun refal-eval (program view &key (c (make-counter)) (no-op #'default-no-function))
+  "Input: a not yet parsed refal PROGRAM and a VIEW field.
 Output: the result, when applying the VIEW field to the first function in PROGRAM."
   (let ((pprogram (parse-program* program)))
     (if (or (null pprogram) (not (listp view)))
 	'parsing-error
 	(catch 'refal-eval-error
 	  (let ((first-function (caar program)))
-	    (eval-view pprogram nil (make-call :name first-function :args view) :c c))))))
+	    (eval-view pprogram nil (make-call :name first-function :args view) :c c :no-op no-op))))))
 
 ;; Idea: A "lazy-evaluating" Refal, which can bind variables to lists with calls in them. That way calls could appear in a pattern, and a program could modify its meaning. Something like:
 ;;   Func-a { 0 s.1 = s.1; s.2 s.1 = <Func-a <- s.2 1> <+ s.1 1>> };
@@ -606,37 +610,36 @@ Output: the result, when applying the VIEW field to the first function in PROGRA
 ;;   $ENTRY Go { =  <Func-b <Func-a 2 3>>  }
 ;; That way Func-b could accelerate calls to Func-a, like compiler-macros in lisp.
 
-(defun eval-view (f b v &key c)
+(defun eval-view (f b v &key c no-op)
   "F(unctions), B(indings), V(iew)."
   ;;(prind "eval-view" v)
   (let ((c-value (funcall c)))
     (when (<= c-value 0)
       (throw 'refal-eval-error 'overrun)))
-  (if (null v)
-      nil
-      (cond
-	((or (svarp v) (tvarp v))
-	 (list (cdr (assoc v b))))
-	((evarp v)
-	 (cdr (assoc v b)))
-	((or (symbolp v) (numberp v))
-	 (list v))
-	((listp v)
-	 (list (loop for i in v
-		  for ie = (eval-view f b i :c c)
-		  append ie)))
-	((call-p v)
-	 (let* ((n (call-name v))
-		(a (car (eval-view f b (call-args v) :c c))))
-	   (car (eval-call f n a :c c))))
-	(t (error "unknown type")))))
+  (cond
+    ((null v) nil)
+    ((or (svarp v) (tvarp v))
+     (list (cdr (assoc v b))))
+    ((evarp v)
+     (cdr (assoc v b)))
+    ((or (symbolp v) (numberp v))
+     (list v))
+    ((listp v)
+     (list (loop for i in v
+	      for ie = (eval-view f b i :c c :no-op no-op)
+	      append ie)))
+    ((call-p v)
+     (let* ((n (call-name v))
+	    (a (car (eval-view f b (call-args v) :c c :no-op no-op))))
+       (car (eval-call f n a :c c :no-op no-op))))
+    (t (error "unknown type"))))
 
-(defun eval-call-userdef (f n a &key c)
+(defun eval-call-userdef (f n a &key c no-op)
   "Evaluate the call of user-defined function N with arguments A by looking up the function in F(unctions)."
   ;;(prind "eval-call-userdef" n a)
   (let* ((clauses (assoc n f)))
     (if (null clauses)
-	'name-error
+	'unknown-function-error
 	(let ((clauses (cdr clauses)))
 	  ;; find the first matching clause
 	  (loop for (pattern . result) in clauses do
@@ -644,54 +647,50 @@ Output: the result, when applying the VIEW field to the first function in PROGRA
 	       (let ((b (patmat a pattern)))
 		 (when (not (eq b 'fail))
 		   (return-from eval-call-userdef
-		     (eval-view f b result :c c)))))
+		     (eval-view f b result :c c :no-op no-op)))))
 	  (throw 'refal-eval-error 'recognition-error)))))
 
 (defun numeric-list-p (a)
   (and (listp a)
        (loop for i in a always (numberp i))))
 
-(defparameter *built-in-functions*
-  `((+ ,(lambda (a) (if (numeric-list-p a) (apply #'+ a) (throw 'refal-eval-error 'numeric-error))))
-    (- ,(lambda (a) (if (and (numeric-list-p a) (not (null a))) (apply #'- a) (throw 'refal-eval-error 'numeric-error))))
-    (* ,(lambda (a) (if (numeric-list-p a) (apply #'* a) (throw 'refal-eval-error 'numeric-error))))
-    (/ ,(lambda (a) (if (and (numeric-list-p a)
-			     (not (null a))
-			     (loop for i in (cdr a) always (not (= i 0))))
-			(apply #'/ a)
-			(throw 'refal-eval-error 'numeric-error))))
-    ))
+(defun eval-call-builtin (f n a &key c no-op)
+  (declare (ignore f c no-op))
+  (case n
+    ((+) (if (numeric-list-p a) (list (list (apply #'+ a))) (throw 'refal-eval-error 'numeric-error)))
+    ((-) (if (and (numeric-list-p a) (not (null a))) (list (list (apply #'- a))) (throw 'refal-eval-error 'numeric-error)))
+    ((*) (if (numeric-list-p a) (list (list (apply #'* a))) (throw 'refal-eval-error 'numeric-error)))
+    ((/) (if (and (numeric-list-p a)
+		  (not (null a))
+		  (loop for i in (cdr a) always (not (= i 0))))
+	     (list (list (apply #'/ a)))
+	     (throw 'refal-eval-error 'numeric-error)))
+    (t 'unknown-function-error)))
 
-(defun eval-call-builtin (f n a)
-  (declare (ignore f))
-  (let ((builtin (assoc n *built-in-functions*)))
-    (if (null builtin)
-	'name-error
-	(list (list (funcall (cadr builtin) a))))))
-
-(defun eval-call (f n a &key c)
-  "Evaluate the call of function N with arguments A by looking up the function in *built-in-functions* or user-defined F(unctions)."
+(defun eval-call (f n a &key c no-op)
+  "Evaluate the call of function N with arguments A by evaluating built-in functions or user-defined F(unctions), and, if both don't know N, call no-op."
   ;;(print (list "f" f "n" n "a" a))
-  (let ((r (eval-call-userdef f n a :c c)))
-    (if (eq r 'name-error)
-	(let ((r (eval-call-builtin f n a)))
-	  (if (eq r 'name-error)
-	      (throw 'refal-eval-error 'name-error)
+  (let ((r (eval-call-builtin f n a :c c :no-op no-op)))
+    (if (eq r 'unknown-function-error)
+	(let ((r (eval-call-userdef f n a :c c :no-op no-op)))
+	  (if (eq r 'unknown-function-error)
+	      (funcall no-op f n a)
 	      r))
 	r)))
 
 (defparameter *prog-fak*
   '((fak
      ((1) 1)
-     ((s.1) < * s.1 < fak < - s.1 1 > > >))))
+     ((s.1) [ * s.1 [ fak [ - s.1 1 ] ] ]))))
 
+(assert (not (null (parse-program* *prog-fak*))))
 (assert (equal (refal-eval *prog-trans-ital-engl* '(cane)) '(dog)))
 (assert (equal (refal-eval *prog-fak* '(3)) '(6)))
 
 (defparameter *prog-fak-unnested*
   '( { fak
     { { 1 } 1 }
-    { { s.1 } < * s.1 < fak < - s.1 1 > > > } } ))
+    { { s.1 } [ * s.1 [ fak [ - s.1 1 ] ] ] } } ))
 ;; Symbols necessary for *prog-fak-unnested*:
 ;; (length (unique *prog-fak-unnested*)) == 9
 ;; (length *prog-fak-unnested*) == 26
@@ -699,7 +698,7 @@ Output: the result, when applying the VIEW field to the first function in PROGRA
 (defparameter *prog-fak-unnested-X*
   '( X fak ;X means this symbol is the only symbol possible, which means a factor of only 1 in above P-calculation for that position.
     X X 1 } 1 } ; the } are necessary b/c we need to know when the (parameter-,result-) lists are finished.
-    X X s.1 } < * s.1 < fak < - s.1 1 > > > } } ))
+    X X s.1 } [ * s.1 [ fak [ - s.1 1 ] ] ] } } ))
 ;; (length (remove 'X *prog-fak-unnested-X*)) == 21
 ;; P2 = 9 ** 21 == 109418989131512359209L
 ;; i.e. at a speed of 51552.152 calls per second (measured using: (timecps (1000 :stats t :time 5.0) (refal-eval *prog-fak* '(3))) on purasuchikku), we need (round (/ 109418989131512359209 51552 60 60 24 365)) = 67303953 = 67 M years.
