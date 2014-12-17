@@ -665,6 +665,11 @@ Output: the result, when applying the VIEW field to the first function in PROGRA
 		  (loop for i in (cdr a) always (not (= i 0))))
 	     (list (list (apply #'/ a)))
 	     (throw 'refal-eval-error 'numeric-error)))
+    ((<) (if (and (numeric-list-p a) (not (null a))) (list (list (apply #'< a))) (throw 'refal-eval-error 'numeric-error)))
+    ((>) (if (and (numeric-list-p a) (not (null a))) (list (list (apply #'> a))) (throw 'refal-eval-error 'numeric-error)))
+    ((sample) (if (and (listp a) (not (null a)))
+		  (list (list (let ((l (length a))) (elt a (random l)))))
+		  (throw 'refal-eval-error 'sample-error)))
     (t 'unknown-function-error)))
 
 (defun eval-call (f n a &key c no-op)
