@@ -544,6 +544,8 @@ calling (FITFUN C0 C1...)."
 		 fun
 		 cases)))
 
+(defparameter *fit-verbose* nil)
+
 (defun fit-asic-2 (code)
   (destructuring-bind (ticks length siccode) code
     (add-product-cases (list (range length) (range length))
@@ -553,10 +555,12 @@ calling (FITFUN C0 C1...)."
 			   (setf (ith -1 sic) (funcall mask a))
 			   (setf (ith -2 sic) (funcall mask b))
 			   (sic ticks sic 0)
-			   ;;(prind a b (ith -1 sic) (funcall mask (- a b)))
-			   (if (= (ith -1 sic)
-				  (funcall mask (- a b)))
-			       0 -1))))))
+			   (let ((is (ith -1 sic))
+				 (goal (funcall mask (- a b))))
+			     (when *fit-verbose*
+			       (prind a b is goal))
+			     (if (= is goal)
+				 0 -1)))))))
 
 (defun fit-asic+2 (code)
   (destructuring-bind (ticks length siccode) code
@@ -567,15 +571,17 @@ calling (FITFUN C0 C1...)."
 			   (setf (ith -1 sic) (funcall mask a))
 			   (setf (ith -2 sic) (funcall mask b))
 			   (sic ticks sic 0)
-			   ;;(prind a b (ith -1 sic) (funcall mask (- a b)))
-			   (if (= (ith -1 sic)
-				  (funcall mask (+ a b)))
-			       0 -1))))))
+			   (let ((is (ith -1 sic))
+				 (goal (funcall mask (+ a b))))
+			     (when *fit-verbose*
+			       (prind a b is goal))
+			     (if (= is goal)
+				 0 -1)))))))
 
 (defun offsp-fit-asic-2 (population)
   (declare (optimize (debug 3)))
   (destructuring-bind (a-ticks a-length a-siccode) (choice population)
-    (ecase (choice '(:crossover :mutate        ))
+    (ecase (choice '(:crossover :mutate))
       (:mutate (let* ((n-ticks (clamp (+ a-ticks (choice '(-1 0 1))) 1 100))
 		      (mcode (let ((e (random a-length))
 				   (c (copy-list a-siccode)))
@@ -599,6 +605,62 @@ calling (FITFUN C0 C1...)."
 			   (n-siccode (append mcode (last g-siccode rest-len)))
 			   (n-length (length n-siccode)))
 		      (list n-ticks n-length n-siccode)))))))
+
+(defmacro offsp-preproc (f-offsp gencode-pattern)
+  ;;  (destructuring-bind (a c (x y)) gencode
+  ;;    (destructuring-bind (a (x y)) (funcall f-offsp (list a (list x y)))
+  ;;      (list a c (list x y))))
+  (labels ((constp (s)
+	     (and (listp s) (length>= s 2) (eq (car s) 'const)))
+	   (rec (pat d1-ll d1-res d2-ll d2-res)
+	     (prind pat)
+	     (cond
+	       ((null pat) (values d1-ll
+				   (cons 'list d1-res)
+				   d2-ll
+				   (cons 'list d2-res)))
+	       ((constp (car pat)) (with-gensyms (c)
+				     (rec (cdr pat)
+					  (append d1-ll (list c))
+					  d1-res
+					  d2-ll
+					  (append d2-res (list c)))))
+	       ((listp (car pat)) (multiple-value-bind
+					(e1-ll e1-res e2-ll e2-res)
+				      (rec (car pat) nil nil nil nil)
+				    (rec (cdr pat)
+					 (append d1-ll (list e1-ll))
+					 (append d1-res (list e1-res))
+					 (append d2-ll (list e2-ll))
+					 (append d2-res (list e2-res)))))
+	       (t (with-gensyms (v)
+		    (rec (cdr pat)
+			 (append d1-ll (list v))
+			 (append d1-res (list v))
+			 (append d2-ll (list v))
+			 (append d2-res (list v))))))))
+    (multiple-value-bind (d1-ll d1-res d2-ll d2-res)
+	(rec gencode-pattern nil nil nil nil)
+      (prind d1-ll d1-res)
+      (prind d2-ll d2-res)
+      (prind f-offsp)
+      (with-gensyms (gencode population postproc child)
+	`(lambda (,population)
+	   (let* ((,postproc (mapcar (lambda (,gencode)
+				       (destructuring-bind ,d1-ll ,gencode
+					 ,d1-res))
+				     ,population))
+		  (,child (funcall ,f-offsp ,postproc)))
+	     (prind ,postproc ,child)
+	     (destructuring-bind ,d1-ll (car ,population)
+	       (destructuring-bind ,d2-ll ,child
+		 ,d2-res))))))))
+;; 	(lambda (,gencode)
+;; 	  (destructuring-bind ,d1-ll ,gencode
+;; 	    (destructuring-bind ,d2-ll (funcall ,f-offsp ,d1-res)
+;; 	      ,d2-res)))))))
+
+;; (offsp-preproc #'offsp-fit-asic-2 (1 (const 3) (0 0 0)))
 
 ;; (genetic (repeat '(1 4 (0 0 0 0)) 2)
 ;; 		  #'fit-asic-2
@@ -900,6 +962,31 @@ calling (FITFUN C0 C1...)."
 ;; 					  :goal (1+ x))
 ;; 					 (const 0)))))
 
-
-
-
+(defun genetic-sic (ancestors fitness generations foffspring &key verbose
+		    (unfit :serial))
+  (let* ((population (copy-list ancestors))
+	 (fit (mapcar fitness population)))
+    (dotimes (gen generations (let ((i (max-index fit)))
+				(values (elt population i) (elt fit i))))
+      (when (not (null verbose))
+	(prind gen)
+	(when (and (numberp verbose) (>= verbose 2))
+	  (prind population)))
+      (ecase unfit
+	(:serial
+	 (let ((child (funcall foffspring population))
+	       (index (min-index fit)))
+	   (setf (elt population index) child)
+	   (setf (elt fit index) (funcall fitness child))))
+	((:parallel :parallel-strict)
+	 (let ((minfit (apply #'min fit))
+	       (oldpop (copy-list population)))
+	   (dotimes (index (length population))
+	     (if (= (elt fit index) minfit)
+		 (let* ((child (funcall foffspring oldpop))
+			(child-fit (funcall fitness child)))
+		   (when (ecase unfit
+			   (:parallel (>= child-fit minfit))
+			   (:parallel-strict (> child-fit minfit)))
+		     (setf (elt population index) child)
+		     (setf (elt fit index) child-fit)))))))))))

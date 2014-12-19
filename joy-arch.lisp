@@ -145,6 +145,31 @@ The sum of w must not be 0."
 (defun identity-1 (values)
   values)
 
+(defmethod shuffle* ((l list))
+  "Shuffle list L in-place."
+  (labels ((rec (rest n)
+	     (when (> n 0)
+	       (let* ((r (nthcdr (random n) rest))
+		      (a (car rest)))
+		 (setf (car rest) (car r))
+		 (setf (car r) a))
+	       (rec (cdr rest) (1- n)))))
+    (rec l (length l)))
+  l)
+
+(defmethod shuffle* ((v vector))
+  "Shuffle simple-vector V in-place."
+  (let ((n (array-dimension v 0)))
+    (labels ((rec (i)
+	       (when (> i 0)
+		 (let ((r (random i))
+		       (a (aref v i)))
+		   (setf (aref v i) (aref v r))
+		   (setf (aref v r) a))
+		 (rec (1- i)))))
+      (rec (1- n))))
+  v)
+
 (defmacro time2 (&body body)
   "Execute BODY and return the number of seconds passed.
 The first return value is the number of seconds passed as measured by get-internal-run-time, the second as measured by get-internal-real-time."
@@ -2483,6 +2508,7 @@ Signal the same errors that JOY-EVAL would."
 (defstruct walker
   (genome nil :type t)
   (mut nil :type list)
+  (generator nil :type t)
   (stk nil :type list)
   (exp nil :type list)
   (stks nil :type list)
@@ -2497,10 +2523,11 @@ Signal the same errors that JOY-EVAL would."
 
 (defparameter *walker-id-next* 0 "id of the next walker")
 
-(defun make-organism (o joy-ops plane-x plane-y)
+(defun make-organism (o generator-ops generator plane-x plane-y)
   (make-walker :genome (make-joy-program :program o)
-;;	       :mut (generate-mut joy-ops)
-	       :mut (loop for i in (generate-mut joy-ops) collect 0.001)
+;;	       :mut (generate-mut generator-ops)
+	       :mut (loop for i in (generate-mut generator-ops) collect 0.001)
+	       :generator (make-refal-program :program generator)
 	       :stk nil
 	       :exp o
 	       :stks nil
@@ -2605,17 +2632,20 @@ Signal the same errors that JOY-EVAL would."
     (if (null random-state)
 	(defparameter *previous-random-state* (make-random-state) "last (test) random-state")
 	(setf *random-state* (make-random-state random-state)))
-    (let* ((joy-ops '(1 0 -1 + - * dup si i < branch eat walk-x walk-y where-x where-y))
-	   (organisms (loop for i below 40 collect (make-organism '((1 walk-x eat 1 walk-y eat 1 walk-y eat 1 walk-x eat 1 walk-x eat 0 1 - dup dup dup walk-y eat walk-y eat walk-x eat walk-x eat a) (a) define a) joy-ops plane-x plane-y)))
+    (let* ((generator-ops '(1 0 -1 + - * dup si i < branch1 eat walk-x walk-y where-x where-y [ ] sample))
+	   (genome '(eat))
+	   (generator '((fak
+			 ((e.1) [ sample 1 0 -1 ] [ sample walk-x walk-y ] e.1))))
+	   (organisms (loop for i below 40 collect (make-organism genome generator-ops generator plane-x plane-y)))
 	   (plane (make-array (list plane-x plane-y) :initial-element 2.0))
 	   (image (make-ltk-image)))
       (print (list "image" image))
       (multiple-value-bind (organisms plane)
-	  (planeswalker organisms plane image joy-ops iterations 25 plane-x plane-y)
+	  (planeswalker organisms plane image generator-ops iterations 25 plane-x plane-y)
 	(setf *last-organisms* organisms *last-plane* plane)
       nil))))
 
-(defun planeswalker (organisms plane image joy-ops iterations clone-min-energy plane-x plane-y)
+(defun planeswalker (organisms plane image generator-ops iterations clone-min-energy plane-x plane-y)
   (dotimes (iter iterations)
     (print (list "iter" iter))
     ;; randomly add energy to the plane
@@ -2660,12 +2690,12 @@ Signal the same errors that JOY-EVAL would."
 			     stk))
 		    ((walk-x) (let ((offset (car stk)))
 				(and (integerp offset)
-				     (incf/clamp (walker-x org) offset plane-x)
+				     (incf/mod (walker-x org) offset plane-x)
 				     (decf (walker-energy org) (abs offset)))
 				(cdr stk)))
 		    ((walk-y) (let ((offset (car stk)))
 				(and (integerp offset)
-				     (incf/clamp (walker-y org) offset plane-y)
+				     (incf/mod (walker-y org) offset plane-y)
 				     (decf (walker-energy org) (abs offset)))
 				(cdr stk)))
 		    ((where-x) (cons (walker-x org) stk))
@@ -2709,7 +2739,7 @@ Signal the same errors that JOY-EVAL would."
 			   (decf (walker-energy org) e)))))
 		(ecase status
 		  ((counter-error) (survive))
-		  ((halt) (die))
+		  ((halt) (setf exp (joy-program-program (walker-genome org))) (survive))
 		  ((error) (die))
 		  ((unknown-op-error) (die)))))))
 	;;(print (list "org1" org))
@@ -2721,28 +2751,41 @@ Signal the same errors that JOY-EVAL would."
 	    (let* ((mut1 (walker-mut org))
 		   (mut2 (walker-mut org))
 		   (new-mut (mutate-mutate .1 (mutate-crossover mut1 mut2)))
-		   (genome1 (walker-genome org))
-		   (genome2 (walker-genome org))
-		   (new (apply #'crossover-and-mutate joy-ops genome1 genome2 new-mut))
-		   (energy/2 (* e 0.5)))
-	      (when (and (valid-genome new) (valid-mut new-mut (length joy-ops)))
-		;;(print (list "new" new "new-mut" new-mut))
-		(setf (walker-energy org) energy/2)
-		(incf (walker-n-offspring org))
-		(push (make-walker :genome new
-				   :mut new-mut
-				   :stk nil
-				   :exp (joy-program-program new)
-				   :stks nil
-				   :exps nil
-				   :heap (make-hash-table)
-				   :msgs nil
-				   :energy energy/2
-				   :x (walker-x org)
-				   :y (walker-y org)
-				   :id (incf *walker-id-next*)
-				   :n-offspring 0)
-		      new-organisms)))))
+		   (generator1 (walker-generator org))
+		   (generator2 (walker-generator org))
+		   (new-generator (apply #'crossover-and-mutate generator-ops generator1 generator2 new-mut)))
+	      (when (valid-mut new-mut (length generator-ops))
+		;;(print (list "new-generator" new-generator "new-mut" new-mut))
+		(flet ((new-functions (f n a)
+			 (declare (ignore f))
+			 (case n
+			   ((genome) (list (walker-genome org)))
+			   (t (throw 'refal-eval-error 'unknown-generator-function))
+			   )))
+		  (let* ((genome (joy-program-program (walker-genome org)))
+			 (refal-program (refal-program-program new-generator))
+			 (new-joy-program (refal-eval refal-program genome :c (make-counter 100) :no-op #'new-functions))
+			 (new-genome (make-joy-program :program new-joy-program)))
+		    (when (valid-genome new-genome)
+		      ;;(print (list "new-genome" new-genome))
+		      (let ((energy/2 (* e 0.5)))
+			(setf (walker-energy org) energy/2)
+			(incf (walker-n-offspring org))
+			(push (make-walker :genome new-genome
+					   :mut new-mut
+					   :generator new-generator
+					   :stk nil
+					   :exp (joy-program-program new-genome)
+					   :stks nil
+					   :exps nil
+					   :heap (make-hash-table)
+					   :msgs nil
+					   :energy energy/2
+					   :x (walker-x org)
+					   :y (walker-y org)
+					   :id (incf *walker-id-next*)
+					   :n-offspring 0)
+			      new-organisms)))))))))
 	)
       ;; print best organisms
       (let* ((m (loop for org in organisms maximizing (walker-energy org)))
@@ -2753,7 +2796,7 @@ Signal the same errors that JOY-EVAL would."
 	;;(print (list "best" (loop for org in best collect (list "x" (walker-x org) "y" (walker-y org) "id" (walker-id org)))))
 	)
       (update-ltk-image image plane 10)
-      (setf organisms (reverse new-organisms)))
+      (setf organisms (shuffle* (reverse new-organisms))))
     )
   (values organisms plane))
 
