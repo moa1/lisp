@@ -118,7 +118,7 @@ Return the unmodified CLOSED if VAR is bound to a value equal to VAL (under equa
   ;;   (setf (next (dlist-last d)) (dlist-first d))
   ;;   d)
   ;; However, the structures possible with a dlist cannot all be represented with lists, circular or not. So maybe we shouldn't handle circularities anyways.
-  (declare (type dlist dlist))
+  (declare (type (or null dlist) dlist))
   (do ((cur (dlist-last dlist) (prev cur)) (l nil)) ((eq cur nil) l)
     (push (let ((d (data cur)))
 	    (if (dlistp d)
