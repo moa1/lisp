@@ -123,3 +123,45 @@
     (values quadruples quadruples-count)))
 
 ;; enumerate-edge-quadruples exhausts a heap of 512 MB.
+
+
+;;;; Gibt es eine Folge von ganzzahligen aufeinanderfolgenden Zahlen (von 1 ab), die, wenn man sie quadriert und die Quadrate summiert, wieder ein Quadrat einer ganzen Zahl ist?
+
+(defun square?-buggy (x)
+  "Apparently this function does not return correct values, for example (square? 298149294) returns T, but python says that sqrt(298149294)==17267.000144784848."
+  (let* ((s (sqrt x))
+    (if (= (floor s) s)
+	t
+	nil))))
+
+(defun square?-buggy2 (x)
+  "Return T if X is a square of an integer number, NIL otherwise.
+I'm not sure this is correct for all X. It probably doesn't work for large X, where (* (sqrt X) (sqrt X)) looses accuracy in the last digits due to rounding by sqrt."
+  (let* ((s (sqrt x))
+	 (si (floor s)))
+    (if (= si s)
+	(if (= (* si si) x)
+	    t
+	    nil)
+	nil)))
+
+(defun square? (x)
+  "Return T if X is a square of an integer number, NIL otherwise."
+  (let* ((s (isqrt x))
+	 (p (* s s)))
+    (if (= x p)
+	t
+	nil)))
+
+(defun sum-square-1 (upto)
+  "Print two numbers (A B). Then the following holds: (= (loop for A below 25 sum (* i i)) (* B B)."
+  (labels ((rec (n sum)
+	     (when (>= n upto)
+	       (return-from rec nil))
+	     (let ((s (+ sum (* n n))))
+	       ;;(print (list n sum s))
+	       (when (square? s)
+		 ;; verify that there was no floating-point error
+		 (print (list n (floor (sqrt s)))))
+	       (rec (1+ n) s))))
+    (rec 1 0)))
