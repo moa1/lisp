@@ -1,9 +1,11 @@
-;;Frage von Susi: gibt es eine Anordnung von Quadraten mit lauter verschiedenen Kantenlängen (bei dem das kleinste Quadrat Kantenlänge 2 hat, das größte Länge 50, und Kantenlängen dazwischen sind ganzzahlig), und die Kantenlänge des gesamten Quadrats ist 112.
-;;Antwort von Susi: ja, und die minimale Kantenlänge des gesamten Quadrats, das aus der Summe von Quadraten mit kleinen Kantenlängen besteht, die alle durchgehend vorhanden sind, ist 112.
-;; Dieses Skript soll diese Anordnung berechnen.
-;; Die Lösung von Susi ist: 2, 4, 6, 7, 8, 9, 11, 15, 16, 17, 18, 19, 24, 25, 27, 29, 33, 35, 37, 42, 50.
+;;;; Quadrat-Rätsel
 
-;; 1. Frage: welche Kantenlängen geben zusammen 112?
+;;Frage von Susi: gibt es eine Anordnung von Quadraten mit lauter verschiedenen Kantenlängen (bei dem das kleinste Quadrat Kantenlänge 2 hat, das größte Länge 50, und Kantenlängen dazwischen sind ganzzahlig. Es müssen aber nicht alle aufeinanderfolgenden (ganzzahligen) Kantenlängen vorhanden sein.), und die Kantenlänge des gesamten Quadrats ist 112.
+;;Antwort von Susi: ja, und die minimale Kantenlänge des gesamten Quadrats, das aus der Summe von Quadraten mit kleinen Kantenlängen besteht, ist 112.
+;; Dieses Skript soll die Anordnung der Zusammensetzung der Kanten des großen Quadrats berechnen.
+;; Die Lösung: Die Kantenlängen der kleinen Quadrate, die zusammengesetzt ein Quadrat mit Kangenlänge 112 ergeben, sind: 2, 4, 6, 7, 8, 9, 11, 15, 16, 17, 18, 19, 24, 25, 27, 29, 33, 35, 37, 42, 50.
+
+;;;; 1. Frage: welche Kantenlängen geben zusammen 112?
 
 (defparameter *smalls-solution* (list 2 4 6 7 8 9 11 15 16 17 18 19 24 25 27 29 33 35 37 42 50))
 
@@ -32,6 +34,7 @@
 ;; Now that enumerate-edge-sums can enumerate all solutions for the edges of the big square:
 (defparameter *possible-edges* (enumerate-edge-sums 112 *smalls-solution*))
 ;; we need to find which small squares are possible in the corners of the big square.
+;; Note that this approach (of just testing which small squares are possible along the edges of the big square) is too simplistic (and is not able to enumerate all solutions, because there are too many solutions) : It doesn't take into account that some combinations are impossible because their small squares would overlap geometrically.
 
 (defun intersect-sets (set1 set2 &optional (test 'eql))
   "Given two lists SET1 and SET2, return the elements that occur in both lists."
@@ -152,6 +155,9 @@ I'm not sure this is correct for all X. It probably doesn't work for large X, wh
     (if (= x p)
 	t
 	nil)))
+;; This seems to be correct, since
+;; (loop for i below 100000000 always (square? (* i i))) == T
+;; (loop for i below 1000000 always (let ((j (random 100000000000000000000000))) (square? (* j j)))) == T
 
 (defun sum-square-1 (upto)
   "Print two numbers (A B). Then the following holds: (= (loop for A below 25 sum (* i i)) (* B B)."
