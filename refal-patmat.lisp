@@ -594,15 +594,14 @@ TEST is used to compare elements of LIST with the BRACKETs."
   (declare (ignore f n a))
   (throw 'refal-eval-error 'unknown-function-error))
 
-(defun refal-eval (program view &key (c (make-counter)) (no-op #'default-no-function))
+(defun refal-eval (program view &key (c (make-counter)) (no-op #'default-no-function) (view-function (caar program)))
   "Input: a not yet parsed refal PROGRAM and a VIEW field.
-Output: the result, when applying the VIEW field to the first function in PROGRAM."
+Output: the result, when applying the VIEW field to the function named VIEW-FUNCTION (default: first function) in PROGRAM."
   (let ((pprogram (parse-program* program)))
     (if (or (null pprogram) (not (listp view)))
 	'parsing-error
 	(catch 'refal-eval-error
-	  (let ((first-function (caar program)))
-	    (eval-view pprogram nil (make-call :name first-function :args view) :c c :no-op no-op))))))
+	  (eval-view pprogram nil (make-call :name view-function :args view) :c c :no-op no-op)))))
 
 ;; Idea: A "lazy-evaluating" Refal, which can bind variables to lists with calls in them. That way calls could appear in a pattern, and a program could modify its meaning. Something like:
 ;;   Func-a { 0 s.1 = s.1; s.2 s.1 = <Func-a <- s.2 1> <+ s.1 1>> };
@@ -617,7 +616,7 @@ Output: the result, when applying the VIEW field to the first function in PROGRA
     (when (<= c-value 0)
       (throw 'refal-eval-error 'overrun)))
   (cond
-    ((null v) nil)
+    ((null v) (list nil))
     ((or (svarp v) (tvarp v))
      (list (cdr (assoc v b))))
     ((evarp v)
@@ -648,6 +647,7 @@ Output: the result, when applying the VIEW field to the first function in PROGRA
 		 (when (not (eq b 'fail))
 		   (return-from eval-call-userdef
 		     (eval-view f b result :c c :no-op no-op)))))
+	  ;;(print (list "could not recognize function: f" f "n" n "a" a))
 	  (throw 'refal-eval-error 'recognition-error)))))
 
 (defun numeric-list-p (a)
@@ -688,6 +688,8 @@ Output: the result, when applying the VIEW field to the first function in PROGRA
      ((1) 1)
      ((s.1) [ * s.1 [ fak [ - s.1 1 ] ] ]))))
 
+(let ((v '(1 2 () 3)))
+  (assert (equal v (refal-eval '((f ((e.1) e.1))) v))))
 (assert (not (null (parse-program* *prog-fak*))))
 (assert (equal (refal-eval *prog-trans-ital-engl* '(cane)) '(dog)))
 (assert (equal (refal-eval *prog-fak* '(3)) '(6)))
