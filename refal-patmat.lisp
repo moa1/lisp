@@ -436,11 +436,13 @@ EXP: expression, PAT: pattern, CLOSED: ((a . value) (b . 1))."
   (make-nest[] :list list))
 
 ;; TODO: instead of using function nest-brackets, write reader-macros or what they are called (this has the advantage that you can write reader-macros for nested <> [] {} (), which is not possible with nest-brackets).
-(defun nest-brackets (list open-bracket close-bracket nest-function &key (test #'eq))
+;; TODO: instead of the approach with the escape-symbol in this function, maybe consider using a reader like in lisp itself, i.e. a function that converts characters (or symbols) to structures understandable by the refal interpreter. The ability to encode a literal '[ symbol would then also be implemented by a single-escape-symbol, but be part of another function (which maybe would also handle a multiple-escape-symbol).
+(defun nest-brackets (list open-bracket close-bracket nest-function &key (escape-symbol '\\) (test #'eq))
   "Return the tree that results from recursively embedding parts of LIST enclosed with OPEN-BRACKET and CLOSE-BRACKET.
 The NEST-FUNCTION is called with the sublist of LIST that will be embedded (and is enclosed by the brackets).
-Returns the resulting tree and a value indicating if LIST was well-formed, i.e. doesn't contain a CLOSE-BRACKETs before OPEN-BRACKET and contains as many OPEN-BRACKETs as CLOSE-BRACKETs.
-TEST is used to compare elements of LIST with the BRACKETs."
+On encountering ESCAPE-SYMBOL, it is deleted and the next symbol is inserted literally, i.e. it is read without considering it to be a bracket or an ESCAPE-SYMBOL.
+Returns the resulting tree and a value indicating if LIST was well-formed, i.e. doesn't contain a CLOSE-BRACKET before OPEN-BRACKET and contains as many OPEN-BRACKETs as CLOSE-BRACKETs.
+TEST is used to compare elements of LIST with the symbols (OPEN-BRACKET, CLOSE-BRACKET, ESCAPE-SYMBOL)."
   (labels ((chop ()
 	     (let ((r (car list)))
 	       (setf list (cdr list))
@@ -451,6 +453,13 @@ TEST is used to compare elements of LIST with the BRACKETs."
 		 (values (nreverse res) open)
 		 (let ((h (chop)))
 		   (cond
+		     ((funcall test h escape-symbol)
+		      ;; TODO: unify error handling with the indicator returned when the brackets are not matching
+		      (when (or (null list))
+			(error "expected escaped symbol, not end of input"))
+		      (when (listp (car list))
+			(error "expected escaped symbol, not a list"))
+		      (rec (cons (chop) res) open))
 		     ((funcall test h open-bracket)
 		      (multiple-value-bind (embedded-res embedded-open)
 			  (rec nil (1+ open))
@@ -460,7 +469,7 @@ TEST is used to compare elements of LIST with the BRACKETs."
 			(values embedded (1- open))))
 		     ((listp h)
 		      (multiple-value-bind (h-res h-accepted)
-			  (nest-brackets h open-bracket close-bracket nest-function :test test)
+			  (nest-brackets h open-bracket close-bracket nest-function :escape-symbol escape-symbol :test test)
 			(rec (cons h-res res) (if h-accepted open most-negative-fixnum))))
 		     (t
 		      (rec (cons h res) open)))))))
@@ -477,6 +486,9 @@ TEST is used to compare elements of LIST with the BRACKETs."
 					  '[ '] #'make-nest[]-boa))))
 (assert (null (nth-value 1 (nest-brackets '(1 [ [ 2 (3) (]) 4 ])
 					  '] '] #'make-nest[]-boa))))
+(multiple-value-bind (res well-formed-p)
+    (nest-brackets '(1 [ 2 ] \\ [ 3) '[ '] #'identity)
+  (assert (and (equal res '(1 (2) [ 3)) well-formed-p)))
 
 (defstruct call
   (name nil :type symbol :read-only t)
@@ -714,3 +726,44 @@ Output: the result, when applying the VIEW field to the function named VIEW-FUNC
 ;; add the function "< selfquote ... >", which evaluates to "< selfquote ... >". Also add function "< unquote ... >", which, if inside selfquote or quote, evaluates "..." and inserts it at the position that unquote was at. Make selfquote and quote be allowed to be nested, and evaluation of unquote only takes place when there are equally many nested unquotes as there were nested quotes/selfquotes before.
 ;; Is it possible to write a self-replicating or self-modifying program using these functions?
 ;; (fak ((s.1) < selfquote < unquote < + s.1 1 > >
+
+(defun refal-eval-replace (program view &key (prefix-string "R") (c (make-counter)) (no-op #'default-no-function) (view-function (caar program)))
+  "Like refal-eval, but insert symbol PREFIX-STRING into the E-, T-, and S-variable before evaluation of VIEW (using PROGRAM) and remove PREFIX-STRING after evaluation. This allows a program to output E-, T-, and S-symbols (which, using normal evaluation by refal-eval, would be substituted by their value (which is most likely NIL in the top level view)."
+  (let ((back (make-hash-table :test #'eq)))
+    (labels ((subst-symbol (tree predicate genf result)
+	       (if (null tree)
+		   (nreverse result)
+		   (if (listp tree)
+		       (let ((head (car tree)))
+			 (if (listp head)
+			     (subst-symbol (cdr tree) predicate genf (cons (subst-symbol head predicate genf nil) result))
+			     (if (funcall predicate head)
+				 (let ((replacement (funcall genf head)))
+				   (setf (gethash replacement back) head)
+				   (subst-symbol (cdr tree) predicate genf (cons replacement result)))
+				 (subst-symbol (cdr tree) predicate genf (cons head result)))))))))
+      (let* ((prefixer (lambda (head)
+			 (let* ((heads (string head)))
+			   (intern (concatenate 'string (subseq heads 0 1) prefix-string (subseq heads 1))))))
+	     (view1 (subst-symbol view #'svarp prefixer nil))
+	     (view2 (subst-symbol view1 #'tvarp prefixer nil))
+	     (view3 (subst-symbol view2 #'evarp prefixer nil)))
+	;;(print (list "view3" view3))
+	(let ((result (refal-eval program view3 :c c :no-op no-op :view-function view-function))
+	      (gethasher (lambda (head) (gethash head back head))))
+	  ;;(print (list "result" result))
+	  (if (listp result)
+	      (subst-symbol result (constantly t) gethasher nil)
+	      result))))))
+
+(let ((program-walker `((next
+			 ((e.1) [ helper (e.1) ]))
+			(helper
+			 (((s.1 e.1) e.2) [ helper (e.1) e.2 s.1 ])
+			 ((((e.3) e.1) e.2) [ helper (e.1) e.2 ([ helper (e.3) ]) ])
+			 ((() e.2) e.2)))))
+  (let ((result (refal-eval-replace '((f ((e.1) e.1))) program-walker)))
+    (assert (equal result program-walker)))
+  (let* ((view '(1 2 (3) 4))
+	 (result (refal-eval program-walker view)))
+    (assert (equal result view))))
