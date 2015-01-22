@@ -440,8 +440,8 @@ EXP: expression, PAT: pattern, CLOSED: ((a . value) (b . 1))."
 (defun nest-brackets (list open-bracket close-bracket nest-function &key (escape-symbol '\\) (test #'eq))
   "Return the tree that results from recursively embedding parts of LIST enclosed with OPEN-BRACKET and CLOSE-BRACKET.
 The NEST-FUNCTION is called with the sublist of LIST that will be embedded (and is enclosed by the brackets).
-On encountering ESCAPE-SYMBOL, it is deleted and the next symbol is read without considering it to be a bracket.
-Returns the resulting tree and a value indicating if LIST was well-formed, i.e. doesn't contain a CLOSE-BRACKET before OPEN-BRACKET and contains as many OPEN-BRACKETs as CLOSE-BRACKETs.
+On encountering ESCAPE-SYMBOL, it is deleted and the next symbol is inserted literally, i.e. it is read without considering it to be a bracket or an ESCAPE-SYMBOL.
+Returns the resulting tree and a second value, which is T if LIST was well-formed, or a string describing its error.
 TEST is used to compare elements of LIST with the symbols (OPEN-BRACKET, CLOSE-BRACKET, ESCAPE-SYMBOL)."
   (labels ((chop ()
 	     (let ((r (car list)))
@@ -454,41 +454,43 @@ TEST is used to compare elements of LIST with the symbols (OPEN-BRACKET, CLOSE-B
 		 (let ((h (chop)))
 		   (cond
 		     ((funcall test h escape-symbol)
-		      ;; TODO: unify error handling with the indicator returned when the brackets are not matching
-		      (when (or (null list))
-			(error "expected escaped symbol, not end of input"))
-		      (when (listp (car list))
-			(error "expected escaped symbol, not a list"))
-		      (rec (cons (chop) res) open))
+		      (cond
+			((null list) (values (nreverse res) "expected escaped symbol, not end of input"))
+			((listp (car list)) (values (nreverse res) "expected escaped symbol, not a list"))
+			(t (rec (cons (chop) res) open))))
 		     ((funcall test h open-bracket)
 		      (multiple-value-bind (embedded-res embedded-open)
 			  (rec nil (1+ open))
-			(rec (cons embedded-res res) (if (= embedded-open open) open most-positive-fixnum))))
+			(if (and (numberp embedded-open) (= embedded-open open))
+			    (rec (cons embedded-res res) open)
+			    (values (nreverse (cons embedded-res res)) "nesting with too many CLOSE-BRACKETs"))))
 		     ((funcall test h close-bracket)
 		      (let ((embedded (funcall nest-function (nreverse res))))
 			(values embedded (1- open))))
 		     ((listp h)
 		      (multiple-value-bind (h-res h-accepted)
 			  (nest-brackets h open-bracket close-bracket nest-function :escape-symbol escape-symbol :test test)
-			(rec (cons h-res res) (if h-accepted open most-negative-fixnum))))
+			(if (eq t h-accepted)
+			    (rec (cons h-res res) open)
+			    (values (nreverse (cons h-res res)) h-accepted))))
 		     (t
 		      (rec (cons h res) open)))))))
-    (multiple-value-bind (res open)
+    (multiple-value-bind (res error-code)
 	(rec nil 0)
-      (values res (= 0 open)))))
+      (values res (if (and (numberp error-code) (= 0 error-code)) t error-code)))))
 
 (assert (equalp (multiple-value-list (nest-brackets '(1 [ [ 2 (3) ] 4 ]) '[ '] #'make-nest[]-boa))
 		`((1 ,(make-nest[]-boa (list (make-nest[]-boa '(2 (3))) 4))) t)))
 ;;	       '((1 #S(NEST[] :LIST (#S(NEST[] :LIST (2 (3))) 4))) t))) ;error I don't understand.
-(assert (null (nth-value 1 (nest-brackets '(1 [ 2 (3) ] 4 ])
-					  '[ '] #'make-nest[]-boa))))
-(assert (null (nth-value 1 (nest-brackets '(1 [ [ 2 (3) ] 4)
-					  '[ '] #'make-nest[]-boa))))
-(assert (null (nth-value 1 (nest-brackets '(1 [ [ 2 (3) (]) 4 ])
-					  '] '] #'make-nest[]-boa))))
+(assert (not (eq t (nth-value 1 (nest-brackets '(1 [ 2 (3) ] 4 ])
+					       '[ '] #'make-nest[]-boa)))))
+(assert (not (eq t (nth-value 1 (nest-brackets '(1 [ [ 2 (3) ] 4)
+					       '[ '] #'make-nest[]-boa)))))
+(assert (not (eq t (nth-value 1 (nest-brackets '(1 [ [ 2 (3) (]) 4 ])
+					       '] '] #'make-nest[]-boa)))))
 (multiple-value-bind (res well-formed-p)
     (nest-brackets '(1 [ 2 ] \\ [ 3) '[ '] #'identity)
-  (assert (and (equal res '(1 (2) [ 3)) well-formed-p)))
+  (assert (and (equal res '(1 (2) [ 3)) (not (stringp well-formed-p)))))
 
 (defstruct call
   (name nil :type symbol :read-only t)
@@ -581,7 +583,7 @@ TEST is used to compare elements of LIST with the symbols (OPEN-BRACKET, CLOSE-B
   (if (listp program)
       (multiple-value-bind (r accepted)
 	  (nest-brackets program '[ '] #'make-nest[]-boa)
-	(if accepted
+	(if (eq t accepted)
 	    (parse-program r)
 	    nil))
       nil))
@@ -606,13 +608,15 @@ TEST is used to compare elements of LIST with the symbols (OPEN-BRACKET, CLOSE-B
   (declare (ignore f n a))
   (throw 'refal-eval-error 'unknown-function-error))
 
-(defun refal-eval (program view &key (c (make-counter)) (no-op #'default-no-function) (view-function (caar program)))
+(defun refal-eval (program view &key (c (make-counter)) (no-op #'default-no-function) view-function)
   "Input: a not yet parsed refal PROGRAM and a VIEW field.
 Output: the result, when applying the VIEW field to the function named VIEW-FUNCTION (default: first function) in PROGRAM."
   (let ((pprogram (parse-program* program)))
     (if (or (null pprogram) (not (listp view)))
 	'parsing-error
 	(catch 'refal-eval-error
+	  (when (null view-function)
+	    (setf view-function (caar program)))
 	  (eval-view pprogram nil (make-call :name view-function :args view) :c c :no-op no-op)))))
 
 ;; Idea: A "lazy-evaluating" Refal, which can bind variables to lists with calls in them. That way calls could appear in a pattern, and a program could modify its meaning. Something like:
