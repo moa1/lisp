@@ -2632,10 +2632,30 @@ Signal the same errors that JOY-EVAL would."
     (if (null random-state)
 	(defparameter *previous-random-state* (make-random-state) "last (test) random-state")
 	(setf *random-state* (make-random-state random-state)))
-    (let* ((generator-ops '(1 0 -1 + - * dup si i < branch1 eat walk-x walk-y where-x where-y [ ] sample))
-	   (genome '(eat))
-	   (generator '((fak
-			 ((e.1) [ sample 1 0 -1 ] [ sample walk-x walk-y ] e.1))))
+    (let* ((genome '(eat))
+	   (generator `((genenv
+			 ((e.1) [ sample 1 0 -1 ] [ sample walk-x walk-y ] e.1))
+			(gengen
+			 ((e.1) [ helper (e.1) ]
+			  ;; allow inserting symbols at the end
+			  [ extend [ insert ] [ sample ,@(loop for i below 400 collect 'del) ins nop mod ] ]))
+			(helper
+			 (((s.1 e.1) e.2) [ helper (e.1) e.2 [ extend s.1
+			  [ sample
+			  del ins mod ,@(loop for i below 400 collect 'nop) ] ] ]
+			  ;;		     nop ] ] ]
+			  )
+			 ((((e.3) e.1) e.2) [ helper (e.1) e.2 ([ helper (e.3) ]) ])
+			 ((() e.2) e.2))
+			(insert
+			 (() [ sample 0 1 () \\ [ \\ ] ,@*joy-ops* ]))
+			(extend
+			 ((s.1 del) )
+			 ((s.1 ins) [ insert ] [ extend s.1 [ sample ins nop nop nop ] ])
+			 ((s.1 mod) [ insert ])
+			 ((s.1 nop) s.1))))
+	   ;; TODO: include into generator-ops all unique symbols of generator (i.e. leaves of the tree generator).
+	   (generator-ops '(1 0 -1 + - * dup si i < branch1 eat walk-x walk-y where-x where-y [ ] sample genenv gengen))
 	   (organisms (loop for i below 40 collect (make-organism genome generator-ops generator plane-x plane-y)))
 	   (plane (make-array (list plane-x plane-y) :initial-element 2.0))
 	   (image (make-ltk-image)))
@@ -2643,7 +2663,7 @@ Signal the same errors that JOY-EVAL would."
       (multiple-value-bind (organisms plane)
 	  (planeswalker organisms plane image generator-ops iterations 25 plane-x plane-y)
 	(setf *last-organisms* organisms *last-plane* plane)
-      nil))))
+	nil))))
 
 (defun planeswalker (organisms plane image generator-ops iterations clone-min-energy plane-x plane-y)
   (dotimes (iter iterations)
@@ -2753,11 +2773,13 @@ Signal the same errors that JOY-EVAL would."
 		   (new-mut (mutate-mutate .1 (mutate-crossover mut1 mut2)))
 		   (generator1 (walker-generator org))
 		   (generator2 (walker-generator org))
-		   (new-generator (apply #'crossover-and-mutate generator-ops generator1 generator2 new-mut)))
-	      (when (valid-mut new-mut (length generator-ops))
+		   (new-generator-1 (lambda () (apply #'crossover-and-mutate generator-ops generator1 generator2 new-mut)))
+		   (new-generator-2 (lambda () (let ((g (refal-program-program generator1))) (refal-eval-replace g g :view-function 'gengen))))
+		   (new-generator (if (chance .1) (funcall new-generator-1) (make-refal-program :program (funcall new-generator-2)))))
+	      (when (and (valid-mut new-mut (length generator-ops)))
 		;;(print (list "new-generator" new-generator "new-mut" new-mut))
 		(flet ((new-functions (f n a)
-			 (declare (ignore f))
+			 (declare (ignorable f a))
 			 (case n
 			   ((genome) (list (walker-genome org)))
 			   (t (throw 'refal-eval-error 'unknown-generator-function))
