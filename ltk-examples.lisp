@@ -104,3 +104,38 @@
 	      (setf i (1+ i)))
 	 )
     ))
+
+(defparameter *bla* 0)
+
+;; I can't get ltk to execute the :command of the button when using :serve-event t.
+(defun make-ltk-image ()
+  (ltk:start-wish)
+  (let* ((f (make-instance 'ltk:frame))
+	 (sc (make-instance 'ltk:scrolled-canvas
+			    :master f))
+	 (c (ltk:canvas sc))
+	 (text (ltk:create-text c 260 250 "Canvas test"))
+	 (button-draw-image
+	  (make-instance 'ltk:button
+			 :master f
+			 :text "Toggle draw"
+			 :command (lambda ()
+				    ;; for some reason, this never executes:
+				    (incf *bla*)
+				    (with-open-file (s "/tmp/bla.txt" :direction :output :if-exists :overwrite :if-does-not-exist :create)
+				      (format s "written")))))
+	 (image (ltk:make-image))
+	 (image-1 (ltk:create-image c 0 0 :image image)))
+    (ltk:pack f)
+    (ltk:pack sc :side :left :expand 1 :fill :both)
+    (ltk:pack button-draw-image :side :right)
+    (ltk:scrollregion c 0 0 800 800)
+    (ltk:mainloop :serve-event t)
+    (let ((c 0))
+      (loop do
+	   (incf c)
+	   (print (list c *bla*))
+	   (setf *break-mainloop* t)
+	   (ltk:mainloop :serve-event t)
+	   (setf *break-mainloop* t)
+	   (sleep .1)))))
