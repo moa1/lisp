@@ -1,6 +1,7 @@
 (load "~/quicklisp/setup.lisp")
-(ql:quickload 'lhstats)
-(asdf:oos 'asdf:load-op 'utils)
+(ql:quickload :lhstats)
+(asdf:oos 'asdf:load-op :utils)
+(use-package :utils)
 
 (defun plist-vs-hashtable (putlength)
   (let* ((pl nil)
@@ -109,12 +110,24 @@ Is used to measure the performance of interrupting joy-eval."
       b
       (plus-catch (1- a) (1+ b) :c c)))
 
-(defun timediff-return-vs-catch (&optional (d 1))
+(defun timediff-plus-return-vs-catch (&optional (d 1))
   (let ((v most-positive-fixnum))
     (timediff (eq (plus-return v 0 :c (make-counter d)) 'overrun)
 	      (catch 'overrun (plus-catch v 0 :c (make-counter d)))
 	      :showtimes t
 	      :maxtime 2)))
+
+(defun return-normal ()
+  1)
+
+(defun return-throw ()
+  (throw :a 1))
+
+(defun timediff-return-vs-catch-throw ()
+  (timediff (return-normal) (catch :a (return-throw)) :showtimes t))
+
+(defun timediff-return-vs-catch-normal ()
+  (timediff (return-normal) (catch :a (return-normal)) :showtimes t))
 
 (defun plus-return-inline (a b &key (c 0))
   (if (progn
