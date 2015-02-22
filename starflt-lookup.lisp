@@ -1,5 +1,6 @@
-(asdf:oos 'asdf:load-op 'utils)
-(asdf:oos 'asdf:load-op 'cl-ppcre)
+(asdf:oos 'asdf:load-op :utils)
+(asdf:oos 'asdf:load-op :cl-ppcre)
+(use-package :utils)
 
 (defparameter first-alist
   '(("arth" . 1)

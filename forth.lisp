@@ -1,5 +1,8 @@
-(asdf:oos 'asdf:load-op 'utils)
-(asdf:oos 'asdf:load-op 'cl-statistics)
+(asdf:oos 'asdf:load-op :utils)
+(asdf:oos 'asdf:load-op :lhstats)
+
+(use-package :utils)
+(use-package :alexandria)
 
 ;; one of the basic problems of evolution algorithms is specifying a good
 ;; fitness function: it should be 'smooth', meaning that its gradient gives a

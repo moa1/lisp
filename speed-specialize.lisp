@@ -1,4 +1,5 @@
-(asdf:oos 'asdf:load-op 'utils)
+(asdf:oos 'asdf:load-op :utils)
+(use-package :utils)
 
 (defun my-search (item list &key key (test #'eql))
   (labels ((helper (list)

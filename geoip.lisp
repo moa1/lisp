@@ -1,6 +1,8 @@
 ;(asdf:oos 'asdf:load-op 'rsm-string)
-(asdf:oos 'asdf:load-op 'utils)
+(asdf:oos 'asdf:load-op :utils)
 (asdf:oos 'asdf:load-op 'regex)
+
+(use-package :utils)
 
 ; types:
 ; list-all-packages returns a list, result type is: (VALUES LIST &optional)

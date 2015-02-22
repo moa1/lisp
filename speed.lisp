@@ -1,6 +1,7 @@
 (load "~/quicklisp/setup.lisp")
-(ql:quickload 'lhstats)
-(asdf:oos 'asdf:load-op 'utils)
+(ql:quickload :lhstats)
+(asdf:oos 'asdf:load-op :utils)
+(use-package :utils)
 
 (defun plist-vs-hashtable (putlength)
   (let* ((pl nil)

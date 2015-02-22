@@ -1,4 +1,5 @@
-(asdf:oos 'asdf:load-op 'utils)
+(asdf:oos 'asdf:load-op :utils)
+(use-package :utils)
 
 (defparameter size (expt 2 8))
 

@@ -1,6 +1,9 @@
 ;;(asdf:oos 'asdf:load-op 'utils)
 (load "~/quicklisp/setup.lisp")
-(ql:quickload 'utils)
+(ql:quickload :utils)
+(ql:quickload :alexandria)
+(use-package :utils)
+(use-package :alexandria)
 
 (defparameter initial '((T 4 T T T T T 5 T)
 			(3 7 T 5 T T T 2 1)

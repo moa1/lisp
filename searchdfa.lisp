@@ -1,6 +1,7 @@
 ;; search for words in a text using a deterministic finite automaton
 
-(asdf:oos 'asdf:load-op 'utils)
+(asdf:oos 'asdf:load-op :utils)
+(use-package :utils)
 
 ;;(defparameter words (read-lines "/home/toni/soft/devel/celprofile/probeblaster/example-words"))
 (defparameter words (read-lines "/home/toni/soft/devel/celprofile/probeblaster/HG-U133A_probe"))

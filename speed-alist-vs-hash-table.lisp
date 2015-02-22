@@ -1,5 +1,6 @@
 (load "~/quicklisp/setup.lisp")
-(ql:quickload 'utils)
+(ql:quickload :utils)
+(use-package :utils)
 
 ;;;; Test whether functional usage of an alist is faster than functional usage of a hash-table. Functional usage means being able to return a modified container without modifying the old container.
 
