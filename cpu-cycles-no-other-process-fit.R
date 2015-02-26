@@ -67,12 +67,11 @@ lines(x,y,col="red")
 #ferrorsum(k,theta,r,scale) := sum(ferror(i,k,theta,r,scale), i, 1, length(histcum));
 
 dwaittime <- function(x,k,theta,r,scale) {
-	return(pgamma((x-r)*scale,k,1/theta))
+	return(dgamma((x-r)*scale,k,1/theta))
 }
 
 ferror <- function(i,k,theta,r,scale) {
-#	a <- (dwaittime(histbreaks[i+1],k,theta,r,scale)-dwaittime(histbreaks[i],k,theta,r,scale)-histcum[i])^2
-	a <- (dwaittime(histbreaks[i],k,theta,r,scale)-histcum[i])^2
+	a <- (dwaittime(histbreaks[i],k,theta,r,scale)-histdens[i])^2
 	return(a)
 }
 
@@ -82,12 +81,11 @@ ferrorsum <- function(k,theta,r,scale) {
 
 plotpars <- function(k,theta,r,scale,yscale=1) {
 	plot(histbreaks[-length(histbreaks)], histcum, col="black")
-#	x <- (histbreaks[1]/10000):(histbreaks[length(histbreaks)-1]/10000)*10000 #more smooth
-	x <- histbreaks[-length(histbreaks)]
-	y <- dwaittime(x,k,theta,r,scale)
+	#x <- histbreaks[-length(histbreaks)]
+	y <- pgamma((x-r)*scale,k,1/theta)
 	lines(x,y,col="red")
 	# plot density
-	points(histbreaks[-length(histbreaks)], histdens/max(histdens), col="grey")
+	points(x, histdens/max(histdens), col="grey")
 	ydens <- dgamma((x-r)*scale,k,1/theta)
 	lines(x,ydens/max(ydens),col="green")
 }
@@ -115,6 +113,8 @@ optimizepars <- function(k,theta,r,scale,maxchange=0.1) {
 }
 
 # optimizepars(5.175, 0.525, 20322500, 0.85e-8)
-# optimizepars(5.175, 0.525, 20322500, 8.5e-6)
+# optimizepars(5.175, 1.125, 20322500, 8.5e-6)
 # optimizepars(5.175, 1.125, 20422500, 8.5e-6)
 # plotpars(5.175, 1.125, 20422500, 8.5e-6)
+# plotpars(7.534688, 1.810431, 20473988, 1.9888e-05)
+# plotpars(19.91387, 5.332401, 20099556, 0.0001002135)
