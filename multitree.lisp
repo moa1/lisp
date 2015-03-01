@@ -113,9 +113,9 @@ X, (car X), and (cdr X) may be a list, a symbol, or a number."
 ;;;; A deterministic function cacher (mru: most recently used)
 
 (defclass mru-cache ()
-  ((slots :initarg :slots :type (and fixnum unsigned-byte))
-   (ht :initarg :ht :type hash-table)
-   (mru :initarg :mru :type dlist2))
+  ((slots :initarg :slots :accessor mru-cache-slots :type (and fixnum unsigned-byte))
+   (ht :initarg :ht :accessor mru-cache-ht :type hash-table)
+   (mru :initarg :mru :accessor mru-cache-mru :type dlist2))
   (:documentation "A most-recently-used-cache class."))
 
 (defun make-mru-cache (slots)
@@ -133,7 +133,7 @@ X, (car X), and (cdr X) may be a list, a symbol, or a number."
   "Return whether the key KEY is present in the mru-cache MRU."
   (declare (type mru-cache mru))
   (with-custom-hash-table
-    (multiple-value-bind (mru-dcons p) (gethash key (slot-value mru 'ht))
+    (multiple-value-bind (mru-dcons p) (gethash key (mru-cache-ht mru))
       (declare (ignore mru-dcons))
       p)))
 
@@ -156,8 +156,8 @@ X, (car X), and (cdr X) may be a list, a symbol, or a number."
 (defun mru-cache-get-value (mru key &optional (default nil))
   "If the key KEY is present in mru-cache MRU, return the values for key KEY and T as secondary value and bring KEY to the front of MRU.
 If key is not present return the value DEFAULT and as secondary value NIL."
-  (let ((ht (slot-value mru 'ht))
-	(mru (slot-value mru 'mru)))
+  (let ((ht (mru-cache-ht mru))
+	(mru (mru-cache-mru mru)))
     (with-custom-hash-table
       (multiple-value-bind (mru-dcons p) (gethash key ht)
 	(if p
@@ -174,9 +174,9 @@ If key is not present return the value DEFAULT and as secondary value NIL."
   "Set the value VALUE for the key KEY in mru-cache MRU, if KEY was not present yet.
 Bring the key-value-pair to the front of the mru-cache."
   (declare (type mru-cache mru))
-  (let* ((ht (slot-value mru 'ht))
-	 (slots (slot-value mru 'slots))
-	 (mru (slot-value mru 'mru)))
+  (let* ((ht (mru-cache-ht mru))
+	 (slots (mru-cache-slots mru))
+	 (mru (mru-cache-mru mru)))
     (with-custom-hash-table
       (multiple-value-bind (mru-dcons p) (gethash key ht)
 	(if p
@@ -209,7 +209,7 @@ Bring the key-value-pair to the front of the mru-cache."
   "Most-recently-used cache for determinitic and side-effect-free functions."
   (let* ((mru (make-mru-cache slots)))
     (lambda (&rest rest)
-      ;;(print (list "mru-function-cacher ht" (let (l) (maphash (lambda (key value) (push (list key value) l)) (slot-value mru 'ht)) l) "mru" (slot-value mru 'mru)))
+      ;;(print (list "mru-function-cacher ht" (let (l) (maphash (lambda (key value) (push (list key value) l)) (mru-cache-ht mru)) l) "mru" (mru-cache-mru mru)))
       (if (mru-cache-key-present-p mru rest)
 	  (nth-value 0 (mru-cache-get-value mru rest))
 	  ;; the function call is unkown
