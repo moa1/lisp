@@ -1,8 +1,8 @@
 (load "~/quicklisp/setup.lisp")
 (ql:quickload :cl-custom-hash-table)
-(ql:quickload :dlist)
 (use-package :cl-custom-hash-table)
-(use-package :dlist)
+(ql:quickload :dlist)
+;;(use-package :dlist)
 (ql:quickload :alexandria)
 (use-package :alexandria)
 
@@ -123,12 +123,12 @@ X, (car X), and (cdr X) may be a list, a symbol, or a number."
   (declare (type (integer 1 #.most-positive-fixnum) slots))
   (let* ((pseudo-entry (cons (gensym) t))
 	 (ht (make-lsxhash-equal-hash-table))
-	 (mru (dlist pseudo-entry))
+	 (mru (dlist:dlist pseudo-entry))
 	 (c (make-instance 'mru-cache
 			   :slots slots
 			   :ht ht
 			   :mru mru)))
-    (setf (gethash pseudo-entry ht) (dlist-first mru)) ;enter into ht, so that (hash-table-count ht) works.
+    (setf (gethash pseudo-entry ht) (dlist:dlist-first mru)) ;enter into ht, so that (hash-table-count ht) works.
     c))
 
 (declaim (inline mru-cache-key-present-p))
@@ -142,38 +142,38 @@ X, (car X), and (cdr X) may be a list, a symbol, or a number."
 
 (declaim (inline mru-dlist-hit-mru-dcons))
 (defun mru-dlist-hit-mru-dcons (mru mru-dcons)
-  (declare (type dlist mru)
-	   (type dcons mru-dcons))
+  (declare (type dlist:dlist mru)
+	   (type dlist:dcons mru-dcons))
   "Bring the dcons MRU-DCONS to the front of the dlist MRU."
   ;;(print "mru hit") (describe-object mru t)
   ;; slice out mru-dcons from its current position
-  (let ((p-dcons (prev mru-dcons)))
+  (let ((p-dcons (dlist:prev mru-dcons)))
     ;; check if mru-dcons is already in front
     (when (not (null p-dcons))
       ;; move mru-dcons to first position of mru.
-      (let ((n-dcons (next mru-dcons)))
-	(setf (next p-dcons) n-dcons)
+      (let ((n-dcons (dlist:next mru-dcons)))
+	(setf (dlist:next p-dcons) n-dcons)
 	(if (null n-dcons)
-	    (setf (dlist-last mru) p-dcons)
-	    (setf (prev n-dcons) p-dcons)))
-      (setf (prev mru-dcons) nil)
-      (setf (next mru-dcons) (dlist-first mru))
-      (setf (prev (dlist-first mru)) mru-dcons)
-      (setf (dlist-first mru) mru-dcons)
+	    (setf (dlist:dlist-last mru) p-dcons)
+	    (setf (dlist:prev n-dcons) p-dcons)))
+      (setf (dlist:prev mru-dcons) nil)
+      (setf (dlist:next mru-dcons) (dlist:dlist-first mru))
+      (setf (dlist:prev (dlist:dlist-first mru)) mru-dcons)
+      (setf (dlist:dlist-first mru) mru-dcons)
       ;; updating the hash-table is not necessary, because its keys still point to the dconses.
       )))
 
 (declaim (inline mru-cache-get-value))
 (defun mru-cache-get-value (mru key &optional (default nil))
   "If the key KEY is present in mru-cache MRU, return the values for key KEY and T as secondary value and bring KEY to the front of MRU.
-If key is not present return the value DEFAULT and as secondary value NIL as well."
+If key is not present return the value DEFAULT and as secondary value NIL."
   (let ((ht (slot-value mru 'ht))
 	(mru (slot-value mru 'mru)))
     (with-custom-hash-table
       (multiple-value-bind (mru-dcons p) (gethash key ht)
 	(if p
 	    ;; the function call is known, therefore bring it to front in mru.
-	    (destructuring-bind (key . value) (data mru-dcons)
+	    (destructuring-bind (key . value) (dlist:data mru-dcons)
 	      (declare (ignore key))
 	      (mru-dlist-hit-mru-dcons mru mru-dcons)
 	      ;;(describe-object mru t)
@@ -187,24 +187,22 @@ Bring the key-value-pair to the front of the mru-cache."
   (declare (type mru-cache mru))
   (let* ((ht (slot-value mru 'ht))
 	 (slots (slot-value mru 'slots))
-	 (mru (slot-value mru 'mru))
-	 (new-dcons (dcons nil (cons key value) (dlist-first mru))))
+	 (mru (slot-value mru 'mru)))
     (with-custom-hash-table
       (multiple-value-bind (mru-dcons p) (gethash key ht)
 	(if p
 	    (mru-dlist-hit-mru-dcons mru mru-dcons)
 	    ;; set it to front of mru.
 	    (progn
-	      (setf (prev (dlist-first mru)) new-dcons)
-	      (setf (dlist-first mru) new-dcons) ;this always works because dlist contains >= 1 dconses.
+	      (dlist:dlist-push (cons key value) mru)
 	      ;; insert into ht
-	      (setf (gethash key ht) new-dcons)
+	      (setf (gethash key ht) (dlist:dlist-first mru))
 	      (when (> (hash-table-count ht) slots)
 		;; the cache is full. remove the oldest element (after adding the new one, so that mru doesn't point to nil).
-		(destructuring-bind (key . value) (data (dlist-last mru))
+		(destructuring-bind (key . value) (dlist:data (dlist:dlist-last mru))
 		  (declare (ignorable value))
 		  ;;(print "mru full") (describe-object mru t)
-		  (dlist-pop mru :from-end t) ;after this, mru can't point to nil, because it was a dlist with at least two members.
+		  (dlist:dlist-pop mru :from-end t) ;after this, mru can't point to nil, because it was a dlist with at least two members.
 		  (remhash key ht)
 		  ;;(describe-object mru t)
 		  ))
@@ -221,16 +219,48 @@ Bring the key-value-pair to the front of the mru-cache."
 	    (mru-cache-set mru rest value)
 	    value)))))
 
+(let ((last nil))
+  (flet ((add (a b)
+	   ;;(print (list "add" a b))
+	   (setf last (list a b))
+	   (+ a b)))
+    (let ((cadd (mru-function-cacher #'add 2)))
+      (setf last nil)
+      (assert (= (funcall cadd 1 2) 3))
+      (assert (equal last '(1 2)))
+      (setf last nil)
+      (assert (= (funcall cadd 3 4) 7))
+      (assert (equal last '(3 4)))
+      (setf last nil)
+      (assert (= (funcall cadd 1 2) 3))
+      (assert (equal last nil))
+      (setf last nil)
+      (assert (= (funcall cadd 1 2) 3))
+      (assert (equal last nil))
+      ;; now the mru has items '((1 2) (3 4)). test pushing the last mru-cached item, i.e. '(3 4), out.
+      (setf last nil)
+      (assert (= (funcall cadd 5 6) 11))
+      (assert (equal last '(5 6)))
+      ;; check that '(3 4) was not cached in the mru anymore.
+      (setf last nil)
+      (assert (= (funcall cadd 3 4) 7))
+      (assert (equal last '(3 4))))))
+
+#|
+(ql:quickload :utils)
 (flet ((add (a b)
-	 ;;(print (list "add" a b))
 	 (+ a b)))
   (let ((cadd (mru-function-cacher #'add 2)))
-    (funcall cadd 1 2)
-    (funcall cadd 3 4)
-    (funcall cadd 1 2)
-    (funcall cadd 1 2)
-    (funcall cadd 5 6)
-    (funcall cadd 3 4)))
+    (defun time-mru ()
+      (utils:timesec (lambda ()
+		       (funcall cadd 1 2)
+		       (funcall cadd 3 4)
+		       (funcall cadd 1 2)
+		       (funcall cadd 1 2)
+		       (funcall cadd 5 6)
+		       (funcall cadd 3 4))))))
+;; with mru implementation using dlist: CL-USER> (time-mru) = 87/8192000 1.06201171875d-5 8192
+|#
 
 ;;;; Property lists, i.e. a list of alternating SYMBOL and VALUE.
 ;;;; Example '(a 1 b 2 c (a list))
@@ -279,347 +309,3 @@ Returns NIL if plist has an odd length."
 	 (setf alist (cons (cons (car a) (cadr a)) alist)))
     (nreverse alist)))
 
-;;;; A doubly linked list
-
-;;(deftype dllist ()
-;;  (or null dllist))
-
-(defstruct dllist
-  "An element of a doubly linked list.
-To clarify the nomenclature of 'element' and 'object' for DLLIST, the object of this element is OBJ."
-  (:print-function 'print-dllist)
-  (obj nil :type t)
-  (bdr nil :type (or null dllist))
-  (cdr nil :type (or null dllist)))
-
-(defun dllist-p (o)
-  ;; The empty doubly linked list is defined to be NIL.
-  (or (null o) (typep o 'dllist)))
-
-(defun print-dllist (dll stream depth)
-  "Print a doubly linked list.
-Doesn't yet print whether dll has any circularities in it (but detects them already)."
-  (declare (ignore depth))
-  ;; FIXME: rewrite this function to print a reader-readable format (or define a reader function or whatever is supposed work).
-  (print-unreadable-object (dll stream :type nil :identity nil)
-    (format stream "DLLIST")
-    (let ((visited nil))
-      ;; FIXME: only detect loops if *PRINT-CIRCLE* is true.
-      ;; FIXME: print where the loop occurs (using "#1=OBJ ...more-objs... #1#" syntax).
-      (format stream " O:~A" (dllist-obj dll))
-      (push dll visited)
-      (do ((cur (dllist-cdr dll) (dllist-cdr cur))) ((or (null cur) (find cur visited)))
-	(push cur visited)
-	(format stream " ~A" (dllist-obj cur)))
-      (do ((cur (dllist-bdr dll) (dllist-bdr cur))) ((or (null cur) (find cur visited)))
-	(push cur visited)
-	(format stream " B:~A" (dllist-obj cur))))))
-
-(defmethod print-object ((l dllist) stream)
-  (print-dllist l stream 0))
-
-(defun dllist (&rest args)
-  (if (null args)
-      nil
-      (let* ((dll (make-dllist :obj (car args)))
-	     (ret dll))
-	(loop for a in (cdr args) do
-	     (let ((adll (make-dllist :obj a :bdr dll)))
-	       (setf (dllist-cdr dll) adll)
-	       (setf dll adll)))
-	ret)))
-
-(defun dllist-first (dll)
-  "Returns the first doubly linked element of doubly linked list DLL.
-DLL must not be a circular doubly linked list."
-  (if (null dll)
-      nil
-      (do ((cur dll (dllist-bdr cur))) ((null (dllist-bdr cur)) cur))))
-
-(defun dllist-last (dll)
-  "Returns the last doubly linked element of doubly linked list DLL.
-DLL must not be a circular doubly linked list."
-  (if (null dll)
-      nil
-      (do ((cur dll (dllist-cdr cur))) ((null (dllist-cdr cur)) cur))))
-
-(defun dllist-circular (arg0 &rest args)
-  "Return a circular doubly linked list containing ARG0 as first element and the objects in list ARGS as elements in the circle."
-  (let* ((dll (apply #'dllist arg0 args))
-	 (dll-last (dllist-last dll)))
-    (setf (dllist-bdr dll) dll-last)
-    (setf (dllist-cdr dll-last) dll)
-    dll))
-
-;; Add (defun dllist-circular-p (dll)) which returns T if dll is one circle (i.e. the bdr of the first points to the last and the cdr of the last points to the first).
-;; Add (defun dllist-circularities-p (dll)) which returns T if dll contains any circularities (i.e. dll is the first in a chain whose last element points to some element in the chain).
-;; Add (defun dllist-broken-p (dll)) which returns T if the bdr of the cdr of element A is not A for any element reachable by DLL.
-
-(defun dllist-delete (dll &key (return-cdr t))
-  "Modify the dllist by removing the element DLL.
-DLL may be circular.
-Returns the former cdr of DLL if RETURN-CDR is T, the bdr otherwise, and NIL if DLL contained only one element."
-  (let ((bdr (dllist-bdr dll))
-	(cdr (dllist-cdr dll)))
-    (if (eq bdr dll)
-	nil
-	(progn
-	  (setf (dllist-cdr bdr) cdr)
-	  (setf (dllist-bdr cdr) bdr)
-	  (if return-cdr cdr bdr)))))
-
-(defun dllist-insert (dll obj &key (after t) (new-circular nil))
-  "Modify the dllist DLL by inserting OBJ after the element DLL (or before DLL if after is NIL).
-Returns the dllist pointing to the newly inserted element, or a newly constructed (circular if NEW-CIRCULAR is T) dllist."
-  (assert (eq after t))
-  (if (null dll)
-      (if new-circular (dllist-circular obj) (dllist obj))
-      (progn
-	(let* ((cdr (dllist-cdr dll))
-	       (new-dll (make-dllist :obj obj :bdr dll :cdr cdr)))
-	  (setf (dllist-cdr dll) new-dll)
-	  (unless (null cdr)
-	    (setf (dllist-bdr cdr) new-dll))
-	  new-dll))))
-
-(defmacro specializing-if (test then &optional else)
-  "If TEST is T, only insert THEN, if TEST is NIL, only ELSE, otherwise the if-statement (if ,test ,then ,else)."
-  (case test
-    ((t) then)
-    ((nil) else)
-    (t `(if ,test ,then ,else))))
-
-(defmacro do-dllist ((cur dll &key circular) &body body)
-  "Iterate over the elements of DLL and assign CUR to each element (get the object using (DLLIST-OBJ CUR)).
-If CIRCULAR is true, DLL is assumed to be a circular list and the iteration starts at DLL and ends at (DLLIST-BDR DLL).
-If CIRCULAR is false, DLL is non-circular and iteration starts at (DLLIST-FIRST DLL) and ends at (DLLIST-LAST DLL).
-Returns NIL."
-  ;; FIXME: add an option :dir with values :bdr or :cdr, which determines the direction. (i.e. a non-circular list will only be traversed in one direction.)
-  ;; FIXME: get rid of warning "undefined variable #:GO" in (do-dllist (cur (dllist 1 2 3)) (print (dllist-obj cur)))
-  (with-gensyms (dll-evaluated first)
-    `(let ((,dll-evaluated ,dll))
-       (when ,dll-evaluated
-	 (specializing-if ,circular
-	     (let* ((,first ,dll-evaluated)
-		    (,cur ,first))
-	       ,@body
-	       (do ((,cur (dllist-cdr ,dll-evaluated) (dllist-cdr ,cur))) ((eq ,cur ,first))
-		 ,@body))
-	     (do ((,cur (dllist-first ,dll-evaluated) (dllist-cdr ,cur))) ((null ,cur))
-	       ,@body))))))
-
-(defun dllist-insert-list (dll dll2 &key (after t) (dll2-is-circular nil))
-  "Modify the dllist DLL by inserting all elements of dllist DLL2 (in order) after the element DLL.
-If DLL2-IS-CIRCULAR is true, the circle of DLL2 is broken before the element DLL2 before inserting.
-If DLL2 is circular, and DLL2-IS-CIRCULAR is false, the result is undefined.
-If DLL is empty and DLL2 is circular, the result is the circular DLL2.
-DLL may or may not be circular.
-Return the modified DLL at the position of the original DLL."
-  (if (null dll)
-      dll2
-      (let ((orig-dll dll))
-	(do-dllist (cur dll2 :circular dll2-is-circular)
-	  (setf dll (dllist-insert dll (dllist-obj cur) :after after)))
-	orig-dll)))
-;; write tests for dllist-insert-list
-
-(defun dllist-to-list (dll &key dll-is-circular obj)
-  "Return a freshly consed list of the doubly linked list DLL with the same order as followed by DO-DLLIST.
-If DLL-IS-CIRCULAR is true, DLL may be a circular dllist.
-If OBJ is true, the list is made of the DLL elements, and of the objects of DLL otherwise."
-  ;; FIXME: add option :dir which determines the dir of do-dllist.
-  (let ((l nil))
-    ;; FIXME: when do-dllist has option :dir, avoid nreverse by inverting dir for circular lists.
-    ;; FIXME avoid nreverse for non-circular lists by first going into :dir and then iterating until the original DLL is reached (and consing every position. this gives a list of correct order).
-    (if obj
-	(do-dllist (cur dll :circular dll-is-circular)
-	  (setf l (cons (dllist-obj cur) l)))
-	(do-dllist (cur dll :circular dll-is-circular)
-	  (setf l (cons cur l))))
-    (nreverse l)))
-
-;;;; implement a priority queue using a fibonacci heap to find the element with lowest/highest priority.
-;;;; See Wikipedia article "Fibonacci heap".
-
-(deftype dltree ()
-  `dllist)
-
-(defstruct node
-  (priority 0 :type number)
-  (marked nil :type (or t null))
-  ;; The number of children (total number of leaves) of this node.
-  (degree 0 :type (and unsigned-byte fixnum))
-  ;; The doubly linked list of children nodes. (Or NIL if no children).
-  (children nil :type (or null dltree)))
-
-(defclass fibheap ()
-  ((forest :accessor fibheap-forest :type (or null dllist) :initarg nil
-	   :documentation "A doubly linked list of trees. Each object (accessed by dllist-obj) of the list is a NODE."
-	   :initarg :forest)
-   (root :accessor fibheap-root :type (or null dltree)
-	 :documentation "A pointer to the minimum of FOREST."
-	 :initarg :root)
-   (size :accessor fibheap-size :type (and fixnum unsigned-byte)
-	 :documentation "The total number of nodes stored in the heap."
-	 :initarg :size))
-  (:documentation "A fibonacci heap."))
-
-(defmethod print-object ((fh fibheap) stream)
-  (print-unreadable-object (fh stream)
-    (format stream "FIBHEAP :FOREST ~A :ROOT ~A :SIZE ~A" (fibheap-forest fh) (fibheap-root fh) (fibheap-size fh))))
-(defun list-fibheap-forest (fh-forest)
-  (labels ((collect (dll)
-	     (if (null dll)
-		 nil
-		 (let ((ret nil))
-		   (do-dllist (cur dll :circular t)
-		     (setf ret (append ret (list :P (node-priority (dllist-obj cur))
-						 :C (collect (node-children (dllist-obj cur)))))))
-		   ret))))
-    (collect fh-forest)))
-
-(defgeneric fibheap-empty (fh))
-(defmethod fibheap-empty ((fh fibheap))
-  (null (fibheap-root fh)))
-
-(defgeneric fibheap-min (fh))
-(defmethod fibheap-min ((fh fibheap))
-  "Return the minimum of the fibonacci heap FH, or NIL if FH is empty."
-  (if (fibheap-empty fh)
-      nil
-      (node-priority (dllist-obj (fibheap-root fh)))))
-
-(defgeneric fibheap-merge (fh1 fh2)
-  (:documentation "Destructively merge fibonacci heaps FH1 and FH2 and return the resulting fibonacci heap (which shares memory with FH1 and FH2)."))
-(defmethod fibheap-merge ((fh1 fibheap) (fh2 fibheap))
-  ;; FIXME: Change this function so that it always changes FH1 and doesn't choose returning FH1 or FH2 (this makes it possible to avoid a (setf fh (fibheap-merge fh1 fh2)).
-  (if (fibheap-empty fh1)
-      (if (fibheap-empty fh2)
-	  nil
-	  fh2)
-      (if (fibheap-empty fh2)
-	  fh1
-	  (if (< (fibheap-min fh1) (fibheap-min fh2))
-	      (progn
-		(setf (fibheap-forest fh1)
-		      (dllist-insert-list (fibheap-forest fh1) (fibheap-forest fh2) :dll2-is-circular t))
-		;; (fibheap-root fh1) points to the correct element
-		(incf (fibheap-size fh1) (fibheap-size fh2))
-		fh1)
-	      (progn
-		(setf (fibheap-forest fh2)
-		      (dllist-insert-list (fibheap-forest fh2) (fibheap-forest fh1) :dll2-is-circular t))
-		;; (fibheap-root fh2) points to the correct element
-		(incf (fibheap-size fh2) (fibheap-size fh1))
-		fh2)))))
-
-(defun fibheap-new (&optional priority)
-  "Create a new fibheap.
-If PRIORITY is specified, a node with this priority is created."
-  (if priority
-      (let* ((new-node (make-node :priority priority))
-	     (new-forest (dllist-circular new-node))
-	     (new-fibheap (make-instance 'fibheap
-					 :forest new-forest
-					 :root new-forest
-					 :size 1)))
-	new-fibheap)
-      (make-instance 'fibheap :forest nil :root nil :size 0)))
-
-(defgeneric fibheap-insert (fh priority)
-  (:documentation "Destructively insert a new element with priority PRIORITY into the fibonaccy heap FH and return the new element."))
-(defmethod fibheap-insert ((fh fibheap) priority)
-  (fibheap-merge fh (fibheap-new priority)))
-
-(defmacro swap (var1 var2)
-  "Swap the values of places VAR1 and VAR2.
-Returns VAR1."
-  (with-gensyms (temp)
-    `(progn
-       (let ((,temp ,var1))
-	 (setf ,var1 ,var2)
-	 (setf ,var2 ,temp)))))
-
-(defgeneric fibheap-pop (fh)
-  (:documentation "Destructively remove the minimum of fibheap FH and return the resulting tree.
-Get the minimum value by fibheap-min first."))
-(defmethod fibheap-pop ((fh fibheap))
-  (declare (optimize (debug 3) (safety 3)))
-  (labels ((remove-root ()
-	     "In the first phase, remove the root node; its children become part of the forest."
-	     (let* ((children (node-children (dllist-obj (fibheap-root fh)))))
-	       (setf (fibheap-forest fh) (dllist-delete (fibheap-root fh)))
-	       (setf (fibheap-root fh) nil) ;; Just so that we remember that the root is invalid for now.
-	       ;;(format t "AAAREMOVE-ROOT A (fibheap-forest fh):~A children:~A~%" (list-fibheap-forest (fibheap-forest fh)) (list-fibheap-forest children))
-	       (setf (fibheap-forest fh) (dllist-insert-list (fibheap-forest fh) children :dll2-is-circular t))
-	       ;;(format t "AAAREMOVE-ROOT B (fibheap-forest fh):~A~%" (list-fibheap-forest (fibheap-forest fh)))
-	       (decf (fibheap-size fh))))
-	   (merge-trees-from-forest (root1 root2)
-	     "TREE1 and TREE2 are elements of (FIBHEAP-FOREST FH). Merge them and return the remaining tree."
-	     (let ((node1 (dllist-obj root1))
-		   (node2 (dllist-obj root2)))
-	       (when (> (node-priority node1) (node-priority node2))
-		 (swap root1 root2)
-		 (swap node1 node2))
-	       ;; make root2 a child of root1
-	       ;;(format t "children-root1:~A root2-obj:~A~%" (node-children (dllist-obj root1)) (dllist-obj root2))
-	       (setf (node-children node1)
-		     (dllist-insert (node-children node1) node2 :new-circular t))
-	       (incf (node-degree node1) (node-degree node2))
-	       ;; delete root2 from fibheap-forest
-	       (setf (fibheap-forest fh) (dllist-delete root2))
-	       ;; root1 remains
-	       root1))
-	   (merge-trees ()
-	     "In the second phase, merge trees of the forest which have equal degree.
-To find trees of the same degree efficiently we use an array of length O(log n) in which we keep a pointer to one root of each degree. When a second root is found of the same degree, the two are linked and the array is updated."
-	     ;;(format t "AAAMERGE-TREES~%")
-	     (when (> (fibheap-size fh) 1)
-	       (let* ((logsize (ceiling (log (fibheap-size fh) 2)))
-		      (degree-array (make-array logsize :element-type '(or dltree null) :initial-element nil))
-		      ;; copying the forest is neccessary because it is changed in merge-trees-from-forest
-		      (forest (dllist-to-list (fibheap-forest fh) :dll-is-circular t :obj nil)))
-		 ;;(format t "fibheap-size:~A logsize:~A~%" (fibheap-size fh) logsize)
-		 (dolist (cur forest)
-		   (let* ((node (dllist-obj cur))
-			  (degree (node-degree node)))
-		     ;;(format t "degree:~A~%" degree)
-		     (if (aref degree-array degree)
-			 ;; merge trees
-			 (setf (aref degree-array degree)
-			       (merge-trees-from-forest (aref degree-array degree) cur))
-			 (setf (aref degree-array degree) cur))))
-		 ;; fibheap-forest was already updated by merge-trees-from-forest
-		 )))
-	   (find-new-root ()
-	     "In the third phase we check each of the remaining roots and find the minimum.
-Update root and decrease size by 1."
-	     (let* ((min (fibheap-forest fh))
-		    (min-priority (node-priority (dllist-obj min))))
-	       ;; FIXME: the first element is checked twice. Omit checking it against itself.
-	       (do-dllist (cur (fibheap-forest fh) :circular t)
-		 (let ((cur-priority (node-priority (dllist-obj cur))))
-		   ;;(format t "cur:~A cur-prio:~A min:~A min-prio:~A~%" cur cur-priority min min-priority)
-		   (when (< cur-priority min-priority)
-		     (setf min cur)
-		     (setf min-priority cur-priority))))
-	       (setf (fibheap-root fh) min))))
-    (when (fibheap-empty fh)
-      (error "Cannot pop an element off of an empty fibheap."))
-    (remove-root)
-    (if (null (fibheap-forest fh))
-	fh ;; root was set to nil already by remove-root, therefore fh is consistent like this.
-	(progn
-	  (merge-trees)
-	  (find-new-root)
-	  fh))))
-
-;;(let ((fh (fibheap-new 4))
-;;	       ;(ins (loop for i below 10 collect (random 10)))
-;;	       (ins '(1 8 4 8 8 3 2 3 5 3)))
-;;	   (print ins)
-;;	   (loop for i in ins do (setf fh (fibheap-insert fh i)))
-;;	   (loop for i below 10 do
-;;		(print (list "fibheap-min" (fibheap-min fh)))
-;;		(fibheap-pop fh))
-;;	   fh)
