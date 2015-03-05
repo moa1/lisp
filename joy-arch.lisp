@@ -14,7 +14,7 @@
 ;;(load "~/lisp/multitree.lisp")
 (handler-case (load "~/lisp/multitree.lisp")
   (SB-PCL::SLOTD-INITIALIZATION-ERROR (c) (continue c))) ;how to avoid it?
-(load "~/lisp/refal-patmat.lisp")
+(load "~/lisp/refal-patmat2.lisp")
 ;;(ql:quickload :cl-custom-hash-table)
 ;;(use-package :cl-custom-hash-table)
 
@@ -2197,7 +2197,7 @@ Signal the same errors that JOY-EVAL would."
 	       ;; Returns two values: MESSAGE-PRESENT-P and MESSAGE, which is NIL if there was no message.
 	       (if (null (joy-state-msgs (elt state i)))
 		   (values nil nil)
-		   (values t (dlist:dlist-pop (joy-state-msgs (elt state i))))))
+		   (values t (dlist-pop (joy-state-msgs (elt state i))))))
 	     )
 	(let* ((istate (elt state i))
 	       (stk (joy-state-stk istate))
@@ -2774,7 +2774,7 @@ Signal the same errors that JOY-EVAL would."
 		   (generator1 (walker-generator org))
 		   (generator2 (walker-generator org))
 		   (new-generator-1 (lambda () (apply #'crossover-and-mutate generator-ops generator1 generator2 new-mut)))
-		   (new-generator-2 (lambda () (let ((g (refal-program-program generator1))) (refal-eval-replace g g :view-function 'gengen))))
+		   (new-generator-2 (lambda () (let ((g (refal-program-program generator1))) (refal-eval-replace g g :c (make-counter 100000) :view-function 'gengen))))
 		   (new-generator (if (chance .1) (funcall new-generator-1) (make-refal-program :program (funcall new-generator-2)))))
 	      (when (and (valid-mut new-mut (length generator-ops)))
 		;;(print (list "new-generator" new-generator "new-mut" new-mut))
@@ -2786,7 +2786,7 @@ Signal the same errors that JOY-EVAL would."
 			   )))
 		  (let* ((genome (joy-program-program (walker-genome org)))
 			 (refal-program (refal-program-program new-generator))
-			 (new-joy-program (refal-eval refal-program genome :c (make-counter 100) :no-op #'new-functions))
+			 (new-joy-program (refal-eval refal-program genome :c (make-counter 1000) :no-op #'new-functions))
 			 (new-genome (make-joy-program :program new-joy-program)))
 		    (when (valid-genome new-genome)
 		      ;;(print (list "new-genome" new-genome))
