@@ -15,7 +15,7 @@
 
 (defun print-dcons (dcons stream depth)
   "Print a doubly linked list.
-Doesn't yet print whether dll has any circularities in it (but detects them already)."
+Doesn't yet print whether the doubly linked list has any circularities in it (but detects them already)."
   (declare (ignore depth))
   ;; FIXME: rewrite this function to print a reader-readable format (or define a reader function or whatever is supposed to work).
   (print-unreadable-object (dcons stream :type nil :identity nil)
@@ -224,6 +224,7 @@ OPEN-L and OPEN-R are the open regions on the left and on the right side of the 
 	       (multiple-value-bind (c o)
 		   (if (eq exp-l exp-r)
 		       (if from-r
+			   ;; TODO FIXME: I think there might be a bug here: when open-l and open-r are not nil, they are not passed to close-var-exp-null, and thus cannot be returned by them. Therefore they will be lost forever, while they are needed for further trial-and-error in #'open-var. Is it possible that there is an empty EXP and we have already recorded open variables?
 			   (close-var-exp-null pat-l (prev pat-r) closed)
 			   (close-var-exp-null (next pat-l) pat-r closed))
 		       (if from-r
@@ -334,6 +335,27 @@ OPEN-L and OPEN-R are the open regions on the left and on the right side of the 
 		 (close-var '((1 2 3) (4) 5 6 (7) (8))
 			    '((s.1 e.1) e.2 e.3 (s.2) t.1)
 			    nil))))
+
+;; TODO: add optional parameter FROM-END, which pushes the data starting from dcons-stop, effectively reversing the data.
+(defun dcons->dlist (dcons-start dcons-stop)
+  "Create a new dlist and push the data between DCONS-STOP and DCONS-START (both inclusively) onto it. The structure of the new dlist may share structure with the original data.
+If DCONS-START and DCONS-STOP are not on the same dlist, or DCONS-START is after DCONS-STOP, the consequences are undefined.
+This function returns a list with at least one element."
+  (declare (type dcons dcons-start dcons-stop))
+  (let* ((last (dcons nil (data dcons-start) nil))
+	 (first last))
+    (labels ((rec (cur)
+	       (let ((new (dcons last (data cur) nil)))
+		 (setf (next last) new)
+		 (setf last new)
+		 (when (not (eq cur dcons-stop))
+		   (rec (next cur))))))
+      (when (not (eq dcons-start dcons-stop))
+	(rec (next dcons-start)))
+      (make-instance 'dlist :first first :last last))))
+(let* ((d (dlist 1 2 3 4 5))
+       (r (dcons->dlist (next (dlist-first d)) (prev (dlist-last d)))))
+  (assert (dlist= r (dlist 2 3 4))))
 
 (defun open-var (closed open)
   "OPEN contains regions of the expression and the pattern.
@@ -509,14 +531,22 @@ TEST is used to compare elements of LIST with the symbols (OPEN-BRACKET, CLOSE-B
 		 (let ((h (car r)))
 		   (cond
 		     ((or (symbolp h) (numberp h)) (rec (cdr r) (cons h res)))
-		     ((listp h) (rec (cdr r) (cons (parse-result h) res)))
+		     ((listp h) (multiple-value-bind (presult accepted)
+				    (parse-result h)
+				  (if accepted
+				      (rec (cdr r) (cons presult res))
+				      nil)))
 		     ((nest[]-p h)
 		      (let ((l (nest[]-list h)))
 			(if (or (null l) (not (refal-function-name-p (car l))))
 			    nil
-			    (let ((call (make-call :name (car l)
-						   :args (parse-result (cdr l)))))
-			      (rec (cdr r) (cons call res))))))
+			    (multiple-value-bind (presults accepted)
+				(parse-result (cdr l))
+			      (if accepted
+				  (let* ((call (make-call :name (car l)
+							  :args presults)))
+				    (rec (cdr r) (cons call res)))
+				  nil)))))
 		     (t nil))))))
     (if (null result)
 	(values nil t)
