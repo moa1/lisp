@@ -13,7 +13,7 @@
 	(values (lambda () (decf c))
 		(lambda (counter-delta) (incf c counter-delta))))))
 
-;; Refal pattern matching
+;;;; Refal pattern matching
 
 (defun make-svar ()
   (gensym "S."))
@@ -94,9 +94,8 @@ Return the unmodified CLOSED if VAR is bound to a value equal to VAL (under equa
 	      closed
 	      (throw 'patmat 'fail))))))
 
-;;;; Pattern matching
-
 (defun map-open-dcons-list-to-dlist (open)
+  "Used for debugging."
   (labels ((rec (open result)
 	     (if (null open)
 		 (reverse result)
@@ -162,7 +161,7 @@ This function returns NIL as the open variables, because there can't be open var
 			  ((evar) (if (eq (next pat-l-next) pat-r)
 				      ;; there is no more unbound variable after the variable named by PAT, therefore bind PAT to the compound or term determined by EXP-L and EXP-R.
 				      (values
-				       ;; TODO: don't copy when binding e-variables to the EXPression, just (make-instance 'dlist :left exp-l :right exp-r) or something like that. only copy when concatenating the variables to the result dlist.
+				       ;; don't copy when binding e-variables to the EXPression, just (make-instance 'dlist :left exp-l :right exp-r) or something like that. only copy when concatenating the variables to the result dlist.
 				       (bind-closed pat (make-instance 'dlist :first exp-l :last exp-r) closed)
 				       open-l)
 				      (close-r exp-l exp-r pat-l pat-r closed open-l nil)))
@@ -378,6 +377,8 @@ EXP: expression, PAT: pattern, CLOSED: ((a . value) (b . 1))."
 ;; In refal/html/ch_1.3.html it says "A t-variable takes any term as its value (recall that a term is either a symbol or an expression in structure brackets). An e-variable can take any expression as its value.", so I think t-variables differ from e-variables in that they may not bind NIL, but e-variables may. EDIT: I am now pretty sure that t-variables also may not bind to sublists (t-variables bind only if the sublist is in brackets), only e-variables may. Exercises 1.3(b) and (c) support that: "Write patterns that can be described in words as follows: [(a) ...] (b) an expression which contains at least two identical terms on the top level of structure; (c) a non-empty expression." and their answers (file refal/html/answers.html) are: "(b) e.1 t.X e.2 t.X e.3 ; (c) t.1 e.2 or e.1 t.2".
 ;; Chapter 1.3, exercise 1.4(b) says: "Find the results of the following matchings: (a) 'abbab' : e.1 t.X t.X e.2 (b) 'ab(b)ab' : e.1 t.X t.X e.2" and their answers are: "(a) t.X becomes b ; (b) failure;", so I think that t-variables may be either a symbol/number/character or an expression in structure brackets (meaning described as a regexp: "." OR "\(.*\)").
 
+
+;;;; Parsing of REFAL programs
 
 ;; TODO (or rather, reminder) when implementing the rest of refal-patmat.lisp: only copy e-variables when concatenating the variables to the result dlist. (And only copy an e-variable if it occurs more than once; if it occurs only once, we can probably just splice it into the result dlist.)
 
@@ -632,6 +633,8 @@ S	  pprogram))
 
 (assert (not (null (parse-program* *prog-trans-ital-engl*))))
 
+;;;; Evaluation of parsed REFAL programs
+
 (defun default-no-function (f n a)
   (declare (ignore f n a))
   (throw 'refal-eval-error 'unknown-function-error))
@@ -699,7 +702,7 @@ S	  pprogram))
 	  ;;(print (list "could not recognize function: f" f "n" n "a" a))
 	  (throw 'refal-eval-error 'recognition-error)))))
 
-;; TODO: instead of COPY-DLIST-ing the DLISTs to be inserted, I could also store adjacent DLISTs as leaves of a tree, so that when I want to insert a new DLIST, I would wrap the DLIST in a TREE-object, and insert it into the right position in the tree. (The tree needs to have an order defined on its leaves). The list which is to be represented by this tree would be defined implicitly by the depth-first traversal of the tree. To be able to access the NEXT item in the tree, I would have to define an iterator on that data structure, which consists of the currently processed DLIST, and a stack of parent-DLISTs (and probably also nodes in the tree leading to the currently processed DLIST), that the currently processed DLIST is part of. Besides converting function EVAL-VIEW, I would have to convert function PATMAT and EVAL-CALL-BUILTIN and EVAL-CALL-USERDEF to use this data structure.
+;; TODO: instead of COPY-DLIST-ing the DLISTs to be inserted (using function DLIST-NCONC), I could also store adjacent DLISTs as leaves of a tree, so that when I want to insert a new DLIST, I would wrap the DLIST in a TREE-object, and insert it into the right position in the tree. (The tree needs to have an order defined on its leaves). The list which is to be represented by this tree would be defined implicitly by the depth-first traversal of the tree. To be able to access the NEXT item in the tree, I would have to define an iterator on that data structure, which consists of the currently processed DLIST, and a stack of parent-DLISTs (and probably also nodes in the tree leading to the currently processed DLIST), that the currently processed DLIST is part of. Besides converting function EVAL-VIEW, I would have to convert function PATMAT and EVAL-CALL-BUILTIN and EVAL-CALL-USERDEF to use this data structure. This should have the speed advantage that when inserting an e-variable into an existing view field, I would not have to copy the e-variable, but could quickly store a pointer to e-variable's content in the tree. The assignment of e-variables during pattern matching would have to be done by copying. (Iterate over the atoms in the depth-first representation of the tree, delimited by the left and the right pointer and cons up a new dlist.)
 (defun eval-view (current-view left-position control-stack functions bindings c no-op)
   (declare (type dlist current-view)
 	   (type dcons left-position)
@@ -724,12 +727,13 @@ S	  pprogram))
 		  (eval-view view-1 left-position-1 (cdr control-stack) functions bindings-1 (1- c) no-op)
 		  ;; now current-view holds the evaluated arguments to function FUNCTION
 		  (multiple-value-bind (result bindings-f)
-		      (eval-call-userdef functions function current-view) ;TODO: the counter C should really be decremented by function PATMAT, but for that, I need to make PATMAT interruptible and restartable (like EVAL-VIEW itself).
+		      (eval-call-userdef functions function current-view) ;TODO: the counter C should really be decremented by function PATMAT, but for that, I need to make PATMAT interruptible and restartable (like EVAL-VIEW itself is already).
 		    (if (eq result 'unknown-function-error)
 			(progn
 			  ;; TODO: maybe update eval-call-builtin to accept dlists if it's not too complicated, but actually I think it is too complicated.
 			  (setf result (eval-call-builtin function (dlist->list current-view :deep t)))
 			  (when (eq result 'unknown-function-error)
+			    ;; TODO: instead of throwing an error here, call the (user-defined) function NO-OP, and store its result in RESULT.
 			    (throw 'refal-eval-error 'unknown-function-error))
 			  (setf result (dlist result)))
 			;; result needs to be deep copied because it is the unevaluated template and could contain sub-lists or function calls.
@@ -743,7 +747,7 @@ S	  pprogram))
 		      (dlist-nconc (make-instance 'dlist :first (dlist-first view-1) :last left-position-1)
 				   result
 				   (make-instance 'dlist :first left-position-1 :last (dlist-last view-1)))
-		      ;; the following re-definition of result is necessary, b/c the original (dlist-first result) and (dlist-last result) are not in the new dlist of view-1 (they were thrown away by dlist-nconc).
+		      ;; the following re-definition of result is necessary, b/c the original dconses (dlist-first result) and (dlist-last result) are not in the new dlist of view-1 (they were thrown away by dlist-nconc).
 		      (let ((result (if result-empty? (dlist) (make-instance 'dlist :first (prev result-old-first) :last (next result-old-last)))))
 			;;(print (list "result" result))
 			(eval-view result (dlist-first result) (cons (list nil view-1 left-position-1 bindings-1) (cdr control-stack)) functions bindings-f (1- c) no-op)))))))
