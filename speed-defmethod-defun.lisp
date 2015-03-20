@@ -58,3 +58,9 @@
 (defun test-verymany-veryfew-methods ()
   (let ((s (make-struct-0 :a 1 :b 2 :c 3)))
     (utils:timediff (test-verymany s) (test-veryfew s) :showtimes t)))
+
+(defun test-verymany-with-without-declared-type ()
+  (let ((a (make-struct-0 :a 1 :b 2 :c 3))
+	(b (make-struct-0 :a 1 :b 2 :c 3)))
+    (declare (type struct-0 a))
+    (utils:timediff (test-verymany a) (test-verymany b) :showtimes t)))
