@@ -142,10 +142,17 @@
 	(finish-output)
 	))))
 
+(defun sdl-lock-surface (surface)
+  "Lock SURFACE for directly accessing the pixels."
+  (plus-c:c-fun sdl2-ffi::sdl-lock-surface surface))
+
+(defun sdl-unlock-surface (surface)
+  "Unlock SURFACE for directly accessing the pixels."
+  (plus-c:c-fun sdl2-ffi::sdl-unlock-surface surface))
+
 (defun software-render-texture ()
   "Software renderer example, drawing a texture on the screen.
-See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_frames_to_the_screen.
-"
+See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_frames_to_the_screen."
   (sdl2:with-init (:everything)
     (format t "Using SDL Library Version: ~D.~D.~D~%"
             sdl2-ffi:+sdl-major-version+
@@ -195,6 +202,7 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 
 	  (:idle
 	   ()
+	   (sdl-lock-surface sur)
 	   (let ((index 0))
 	     (loop for y below 600 by 2 do
 		  (loop for x below 800 by 2 do
@@ -210,6 +218,7 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 			 (setf (cffi:mem-aref pix :uint32 (+ 801 index)) color))
 		       (incf index 2))
 		  (incf index 800)))
+	   (sdl-unlock-surface sur)
 	   (sdl2:update-texture tex pix :width (* 4 800))
 	   ;;TODO: call SDL_RenderClear(sdlRenderer);
 	   (sdl2:render-copy wrend tex)
