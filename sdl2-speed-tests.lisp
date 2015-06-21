@@ -61,6 +61,7 @@ PITCH-SYMBOL must be a symbol and will be bound to the pitch in bytes."
     `(let* ((,sur ,surface)
 	    (,pixels-symbol (plus-c:c-ref ,sur SDL2-FFI:SDL-SURFACE :pixels))
 	    (,pitch-symbol (sdl-surface-get-pitch ,sur)))
+       (declare (type fixnum ,pitch-symbol))
        (assert (sdl-surface-format-rgba-p ,sur))
        (sdl-lock-surface ,sur)
        (unwind-protect (progn ,@body) (sdl-unlock-surface ,sur)))))
@@ -72,14 +73,16 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
   (with-unique-names (pixels pitch pitch-uint32 last-x last-y)
     `(with-direct-pixel-access-raw ,surface ,pixels ,pitch
        (assert (sdl-surface-format-rgba-p ,surface))
-       (let ((,pitch-uint32 (/ ,pitch 4)) ;pitch is in pixels, but we need it in :uint32.
+       (let ((,pitch-uint32 (ash ,pitch -2)) ;pitch is in pixels, but we need it in :uint32.
 	     (,last-x (1- (sdl-surface-get-w ,surface)))
 	     (,last-y (1- (sdl-surface-get-h ,surface))))
+	 (declare (type fixnum ,pitch-uint32))
 	 (flet ((,set-pixel-symbol (x y color)
 		  (declare (type fixnum x y) (type (integer 0 4294967295) color))
 		  (assert (<= 0 x ,last-x))
 		  (assert (<= 0 y ,last-y))
-		  (let ((index (+ (* y ,pitch-uint32) x)))
+		  (let ((index (+ (the fixnum (* y ,pitch-uint32)) x)))
+		    (declare (type fixnum index))
 		    (setf (cffi:mem-aref ,pixels :uint32 index) color))))
 	   ,@body)))))
 
@@ -88,16 +91,19 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 NOTE: Unfortunately, this function is too slow to use it in interactive graphics."
   (declare (type list pixels))
   (with-direct-pixel-access-raw surface buffer pitch
-    (let ((pitch-uint32 (/ pitch 4)) ;pitch is in pixels, but we need it in :uint32.
+    (let ((pitch-uint32 (ash pitch -2)) ;pitch is in pixels, but we need it in :uint32.
 	  (last-x (1- (sdl-surface-get-w surface)))
 	  (last-y (1- (sdl-surface-get-h surface))))
-	(flet ((set-pixel (x y color)
-		 (let ((index (+ (* y pitch-uint32) x)))
-		   (setf (cffi:mem-aref buffer :uint32 index) color))))
-	  (loop for (x y color) in pixels do
-	       (assert (<= 0 x last-x))
-	       (assert (<= 0 y last-y))
-	       (set-pixel x y color))))))
+      (declare (type fixnum pitch-uint32))
+      (flet ((set-pixel (x y color)
+	       (declare (type fixnum x y) (type (integer 0 4294967295) color))
+	       (let ((index (+ (the fixnum (* y pitch-uint32)) x)))
+		 (declare (type fixnum index))
+		 (setf (cffi:mem-aref buffer :uint32 index) color))))
+	(loop for (x y color) in pixels do
+	     (assert (<= 0 x last-x))
+	     (assert (<= 0 y last-y))
+	     (set-pixel x y color))))))
 
 (defun render-array (texture array x0 y0 texture-w texture-h)
   ;; TODO: Get TEXTURE-W and TEXTURE-H from calling SDL_QueryTexture. This doesn't work: (plus-c:c-fun sdl2-ffi::sdl-query-texture tex format access w h).
@@ -117,10 +123,11 @@ NOTE: Unfortunately, this function is too slow to use it in interactive graphics
 					   :a-mask #xff000000)))
     (declare (type fixnum w h))
     (with-direct-pixel-access-raw surface pixels pitch
-      (let ((pitch-uint32 (/ pitch 4))) ;pitch is in pixels, but we need it in :uint32.
-	(loop for y below h
-	   for index = (* y pitch-uint32) do
-	     (loop for x below w do
+      (let ((pitch-uint32 (ash pitch -2))) ;pitch is in pixels, but we need it in :uint32.
+	(declare (type fixnum pitch-uint32))
+	(loop for y fixnum below h
+	   for index fixnum = (* y pitch-uint32) do
+	     (loop for x fixnum below w do
 		  (setf (cffi:mem-aref pixels :uint32 index)
 			(aref array x y))
 		  (incf index 1)))
