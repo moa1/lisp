@@ -214,6 +214,20 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	  (:idle
 	   ()
 	   (ecase render-mode
+	     ((:raw)
+	      (sdl-lock-surface sur)
+	      (let ((index 0))
+		(declare (type fixnum index))
+		(loop for y fixnum below 600 by 1 do
+		     (loop for x fixnum below 800 by 1 do
+			;;(let ((color (random (expt 2 32))))
+			  (let* ((r (+ x y num-frames))
+				 (g (- x y))
+				 (color (+ (ash #xff 24) (ash (logand r #xff) 16) (ash (logand g #xff) 8) (ash 95 0))))
+			    (setf (cffi:mem-aref pix :uint32 index) color))
+			  (incf index))))
+	      (sdl-unlock-surface sur)
+	      (sdl2:update-texture tex pix :width (* 4 800)))
 	     ((:local-function)
 	      (with-safe-pixel-access sur set-pixel
 		(loop for y below 600 do
