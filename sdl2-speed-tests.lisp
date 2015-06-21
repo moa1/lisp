@@ -76,9 +76,10 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
        (let ((,pitch-uint32 (ash ,pitch -2)) ;pitch is in pixels, but we need it in :uint32.
 	     (,last-x (1- (sdl-surface-get-w ,surface)))
 	     (,last-y (1- (sdl-surface-get-h ,surface))))
-	 (declare (type fixnum ,pitch-uint32))
+	 (declare (type fixnum ,pitch-uint32 ,last-x ,last-y))
 	 (flet ((,set-pixel-symbol (x y color)
-		  (declare (type fixnum x y) (type (integer 0 4294967295) color))
+		  (declare (optimize (speed 3) (safety 0) (debug 0) (compilation-speed 0))
+			   (type fixnum x y) (type (integer 0 4294967295) color))
 		  (assert (<= 0 x ,last-x))
 		  (assert (<= 0 y ,last-y))
 		  (let ((index (+ (the fixnum (* y ,pitch-uint32)) x)))
@@ -89,21 +90,24 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 (defun render-pixels-list (surface pixels)
   "Draw PIXELS, a list of lists (X Y COLOR) onto the SDL SURFACE.
 NOTE: Unfortunately, this function is too slow to use it in interactive graphics."
-  (declare (type list pixels))
+  (declare (optimize (speed 3) (safety 0) (debug 0) (compilation-speed 0))
+	   (type list pixels))
   (with-direct-pixel-access-raw surface buffer pitch
     (let ((pitch-uint32 (ash pitch -2)) ;pitch is in pixels, but we need it in :uint32.
 	  (last-x (1- (sdl-surface-get-w surface)))
 	  (last-y (1- (sdl-surface-get-h surface))))
-      (declare (type fixnum pitch-uint32))
+      (declare (type fixnum pitch-uint32 last-x last-y))
       (flet ((set-pixel (x y color)
 	       (declare (type fixnum x y) (type (integer 0 4294967295) color))
 	       (let ((index (+ (the fixnum (* y pitch-uint32)) x)))
 		 (declare (type fixnum index))
 		 (setf (cffi:mem-aref buffer :uint32 index) color))))
-	(loop for (x y color) in pixels do
-	     (assert (<= 0 x last-x))
-	     (assert (<= 0 y last-y))
-	     (set-pixel x y color))))))
+	(loop for el in pixels do
+	     (destructuring-bind (x y color) el
+	       (declare (type fixnum x y) (type (integer 0 4294967295) color))
+	       (assert (<= 0 x last-x))
+	       (assert (<= 0 y last-y))
+	       (set-pixel x y color)))))))
 
 (defun render-array (texture array x0 y0 texture-w texture-h)
   ;; TODO: Get TEXTURE-W and TEXTURE-H from calling SDL_QueryTexture. This doesn't work: (plus-c:c-fun sdl2-ffi::sdl-query-texture tex format access w h).
@@ -112,6 +116,7 @@ ARRAY must be a 2-dimensional array with the elements being the (32-bit ARGB) co
 TEXTURE must be a SDL-texture with flag :STREAMING.
 X0 and Y0 must be integers.
 NOTE: Unfortunately, this function is too slow to use it in interactive graphics."
+  (declare (optimize (speed 3) (safety 0) (debug 0) (compilation-speed 0)))
   (let* ((h (array-dimension array 0))
 	 (w (array-dimension array 1))
 	 (surface (sdl2:create-rgb-surface w
