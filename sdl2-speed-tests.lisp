@@ -157,14 +157,16 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
             sdl2-ffi:+sdl-patchlevel+)
     (finish-output)
 
-    (sdl2:with-window (win :flags '(:shown))
+    (sdl2:with-window (win :w 800 :h 600 :flags '(:shown))
       ;; basic window/gl setup
-      (format t "Setting up window: ~A.~%" win)
+      (format t "Setting up window: ~A (size:~A).~%" win (multiple-value-list (sdl2:get-window-size win)))
       (finish-output)
 
-      (let* ((wrend (sdl2:create-renderer win -1 '(:software :targettexture)))
-	     (tex (sdl2:create-texture wrend :ARGB8888 :streaming 800 600))
-	     (sur (sdl2:create-rgb-surface 800 600 32
+      (let* ((tex-w 800) ;texture size; can be different from window size above.
+	     (tex-h 600)
+	     (wrend (sdl2:create-renderer win -1 '(:software :targettexture)))
+	     (tex (sdl2:create-texture wrend :ARGB8888 :streaming tex-w tex-h))
+	     (sur (sdl2:create-rgb-surface tex-w tex-h 32
 					   :r-mask #x00ff0000
 					   :g-mask #x0000ff00
 					   :b-mask #x000000ff
@@ -180,8 +182,6 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	(format t "Texture: ~A~%" tex)
 	(format t "Surface: ~A~%" sur)
 	(finish-output)
-
-	(sdl2-ffi.functions:sdl-set-render-draw-color wrend 255 0 0 255)
 
 	;; main loop
 	(format t "Beginning main loop.~%")
@@ -218,8 +218,8 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	      (sdl-lock-surface sur)
 	      (let ((index 0))
 		(declare (type fixnum index))
-		(loop for y fixnum below 600 by 1 do
-		     (loop for x fixnum below 800 by 1 do
+		(loop for y fixnum below tex-h by 1 do
+		     (loop for x fixnum below tex-w by 1 do
 			;;(let ((color (random (expt 2 32))))
 			  (let* ((r (+ x y num-frames))
 				 (g (- x y))
@@ -227,29 +227,29 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 			    (setf (cffi:mem-aref pix :uint32 index) color))
 			  (incf index))))
 	      (sdl-unlock-surface sur)
-	      (sdl2:update-texture tex pix :width (* 4 800)))
+	      (sdl2:update-texture tex pix :width (* 4 tex-w)))
 	     ((:local-function)
 	      (with-safe-pixel-access sur set-pixel
-		(loop for y below 600 do
-		     (loop for x below 800 do
+		(loop for y below tex-h do
+		     (loop for x below tex-w do
 			  (let ((c (color-to-argb8888 #xff (logand (+ x y num-frames) 255) (logand (- x y) 255) 127)))
 			    (set-pixel x y c)))))
-	      (sdl2:update-texture tex pix :width (* 4 800)))
+	      (sdl2:update-texture tex pix :width (* 4 tex-w)))
 	     ((:list)
 	      (let ((l nil))
-		(loop for y fixnum below 600 do
-		     (loop for x fixnum below 800 do
+		(loop for y fixnum below tex-h do
+		     (loop for x fixnum below tex-w do
 			  (push (list x y (color-to-argb8888 #xff (logand (+ x y num-frames) 255) (logand (- x y) 255) 0)) l)))
 		(render-pixels-list sur l)
-		(sdl2:update-texture tex pix :width (* 4 800))))
+		(sdl2:update-texture tex pix :width (* 4 tex-w))))
 	     ((:array)
-	      (let ((array (make-array '(600 800) :element-type 'integer)))
+	      (let ((array (make-array (list tex-h tex-w) :element-type 'integer)))
 		;; TODO: FIXME: filling the array is very slow.
-		(loop for y fixnum below 600 do
-		     (loop for x fixnum below 800 do
+		(loop for y fixnum below tex-h do
+		     (loop for x fixnum below tex-w do
 			  (let* ((color (color-to-argb8888 #xff (logand (+ x y num-frames) 255) (logand (- x y) 255) 255)))
 			    (setf (aref array y x) color))))
-		(render-array tex array 0 0 800 600))))
+		(render-array tex array 0 0 tex-w tex-h))))
 	   ;;TODO: call SDL_RenderClear(sdlRenderer);
 	   (sdl2:render-copy wrend tex)
 	   (sdl2:render-present wrend)
