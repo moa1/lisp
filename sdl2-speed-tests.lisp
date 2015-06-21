@@ -112,8 +112,8 @@ ARRAY must be a 2-dimensional array with the elements being the (32-bit ARGB) co
 TEXTURE must be a SDL-texture with flag :STREAMING.
 X0 and Y0 must be integers.
 NOTE: Unfortunately, this function is too slow to use it in interactive graphics."
-  (let* ((w (array-dimension array 0))
-	 (h (array-dimension array 1))
+  (let* ((h (array-dimension array 0))
+	 (w (array-dimension array 1))
 	 (surface (sdl2:create-rgb-surface w
 					   h
 					   32
@@ -125,12 +125,15 @@ NOTE: Unfortunately, this function is too slow to use it in interactive graphics
     (with-direct-pixel-access-raw surface pixels pitch
       (let ((pitch-uint32 (ash pitch -2))) ;pitch is in pixels, but we need it in :uint32.
 	(declare (type fixnum pitch-uint32))
-	(loop for y fixnum below h
-	   for index fixnum = (* y pitch-uint32) do
-	     (loop for x fixnum below w do
-		  (setf (cffi:mem-aref pixels :uint32 index)
-			(aref array x y))
-		  (incf index 1)))
+	(let ((ai 0))
+	  (declare (type fixnum ai))
+	  (loop for y fixnum below h
+	     for mi fixnum = (* y pitch-uint32) do
+	       (loop for x fixnum below w do
+		    (setf (cffi:mem-aref pixels :uint32 mi)
+			  (row-major-aref array ai))
+		    (incf mi 1)
+		    (incf ai 1))))
 	;; TODO: Do I have to SDL_LockTexture the texture before calling SDL_UpdateTexture? (To answer this I should probably check if there is a call to SDL_LockTexture in the source code of SDL_UpdateTexture.)
 	(sdl2:update-texture texture pixels
 			     ;;:rect (sdl2:make-rect x0 y0 w h)
@@ -221,12 +224,12 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 		(render-pixels-list sur l)
 		(sdl2:update-texture tex pix :width (* 4 800))))
 	     ((:array)
-	      (let ((array (make-array '(800 600) :element-type 'integer)))
+	      (let ((array (make-array '(600 800) :element-type 'integer)))
 		;; TODO: FIXME: filling the array is very slow.
-		(loop for x fixnum below 800 do
-		     (loop for y fixnum below 600 do
+		(loop for y fixnum below 600 do
+		     (loop for x fixnum below 800 do
 			  (let* ((color (color-to-argb8888 #xff (logand (+ x y num-frames) 255) (logand (- x y) 255) 255)))
-			    (setf (aref array x y) color))))
+			    (setf (aref array y x) color))))
 		(render-array tex array 0 0 800 600))))
 	   ;;TODO: call SDL_RenderClear(sdlRenderer);
 	   (sdl2:render-copy wrend tex)
