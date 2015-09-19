@@ -30,3 +30,23 @@
      (+ (v3c-x c) (v3c-y c) (v3c-z c))
      :showtimes t
      :maxtime 2)))
+
+(defun speed-access-structure-let-vs-with-slots ()
+  (let ((v (make-v3s 1 2 3)))
+    (utils:timediff
+     (let ((x (v3s-x v)) (y (v3s-y v)) (z (v3s-z v)))
+       (+ x y z))
+     (with-slots (x y z) v
+       (+ x y z))
+     :showtimes t
+     :maxtime 2)))
+
+(defun speed-access-class-let-vs-with-slots ()
+  (let ((v (make-v3c 1 2 3)))
+    (utils:timediff
+     (let ((x (v3c-x v)) (y (v3c-y v)) (z (v3c-z v)))
+       (+ x y z))
+     (with-slots (x y z) v
+       (+ x y z))
+     :showtimes t
+     :maxtime 2)))
