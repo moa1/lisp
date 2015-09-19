@@ -10,8 +10,16 @@
    (y :initarg :y :accessor v3c-y)
    (z :initarg :z :accessor v3c-z)))
 
+(defclass v3c2 (v3c)
+  ((x :initarg :x :accessor v3c-x)
+   (y :initarg :y :accessor v3c-y)
+   (z :initarg :z :accessor v3c-z)))
+
 (defun make-v3c (x y z)
   (make-instance 'v3c :x x :y y :z z))
+
+(defun make-v3c2 (x y z)
+  (make-instance 'v3c2 :x x :y y :z z))
 
 (defun speed-make-v3s-vs-v3c ()
   (format t "Body1 is structure, Body2 is class.~%")
@@ -43,6 +51,16 @@
 
 (defun speed-access-class-let-vs-with-slots ()
   (let ((v (make-v3c 1 2 3)))
+    (utils:timediff
+     (let ((x (v3c-x v)) (y (v3c-y v)) (z (v3c-z v)))
+       (+ x y z))
+     (with-slots (x y z) v
+       (+ x y z))
+     :showtimes t
+     :maxtime 2)))
+
+(defun speed-access-derived-class-let-vs-with-slots ()
+  (let ((v (make-v3c2 1 2 3)))
     (utils:timediff
      (let ((x (v3c-x v)) (y (v3c-y v)) (z (v3c-z v)))
        (+ x y z))
