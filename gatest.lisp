@@ -14,17 +14,19 @@ Example calls:
 
 (defmacro prind (&rest args)
   "Print args"
+  ;; TODO: modify the pretty print dispatch table so that it prints representations readable by #'READ. (especially modify the table so that printing a float respects *print-base*.)
   (with-gensyms (i)
-    `(progn
-       (format t "~&")
+    `(let ((*print-pretty* t)
+	   (*print-right-margin* most-positive-fixnum))
        ,@(loop for a in args collect
 	      (if (eq a T)
-		  `(format t "~&")
+		  `(format t "~%")
 		  `(progn
 		     (format t "~A:" ,(format nil "~A" a))
 		     (dolist (,i (multiple-value-list ,a))
 		       (prin1 ,i)
-		       (princ " "))))))))
+		       (princ " ")))))
+       (format t "~%"))))
 
 (defun sdl-lock-surface (surface)
   "Lock SURFACE for directly accessing the pixels."
@@ -105,69 +107,226 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
   (let ((l (length seq)))
     (elt seq (random l))))
 
+(defun arefd (array default &rest subscripts)
+  (loop
+     for i from 0
+     for s in subscripts do
+       (let ((d (1- (array-dimension array i))))
+	 (if (not (<= 0 s d)) (return-from arefd default))))
+  (apply #'aref array subscripts))
+
 (defstruct (org
-	     (:constructor make-org (gen ip x y energy)))
-  gen
+	     (:constructor make-org* (id genes code ip x y energy off ax bx genesx)))
+  id
+  genes
+  code
   ip
   x
   y
-  energy)
+  energy
+  off
+  ax
+  bx
+  genesx)
 
-(defparameter *world* (make-array '(200 150) :initial-element 500))
-(defparameter *orgs*
-  (let* ((org-1 (let ((g '(eat copy-left goto0)))
-		  (make-array (length g) :initial-contents g))))
-    (loop for i below 500 collect (make-org org-1 0 (random (array-dimension *world* 0)) (random (array-dimension *world* 1)) 10))))
+(defun compile-genes (genes &optional (default-code (make-array 0)))
+  ;;(declare (optimize (debug 3)))
+  (labels ((return-defaults ()
+	     (return-from compile-genes (values default-code))))
+    (multiple-value-bind (code markers)
+	(let ((markers nil)
+	      (code nil)
+	      (code-ip 0))
+	  (loop do
+	       (labels ((next ()
+			  (if (null genes)
+			      (let* ((rev (nreverse code))
+				     (new (make-array (length rev) :initial-contents rev)))
+				(return (values new markers)))
+			      (let ((a (car genes)))
+				(setf genes (cdr genes))
+				a))))
+		 (let* ((g (next))
+			(gs (string g)))
+		   ;;(prind g code-ip)
+		   (cond
+		     ((eq (elt gs 0) #\M)
+		      (let* ((rest (subseq gs 1))
+			     (pos (assoc rest markers)))
+			(when (null pos)
+			  (let ((label (read-from-string rest)))
+			    (when (not (typep label 'fixnum))
+			      (return-defaults))
+			    (push (cons label code-ip) markers)))))
+		     (t
+		      (push g code)
+		      (incf code-ip)))))))
+      ;;(prind code)
+      ;;(prind markers)
+      (let ((max-ip (1- (array-dimension code 0))))
+	(do* ((ip 0 (1+ ip)))
+	     ((> ip max-ip) nil)
+	  (let ((ins (aref code ip)))
+	    ;;(prind ip ins (array-dimension code 0))
+	    (case ins
+	      ((jne)
+	       (incf ip)
+	       (when (> ip max-ip)
+		 (return-defaults))
+	       (let* ((whole-label (string (arefd code 'X ip)))
+		      (label (read-from-string (subseq whole-label 1)))
+		      (marker (assoc label markers)))
+		 (when (or (not (eq (elt whole-label 0) #\L)) (not (typep label 'fixnum)) (null marker))
+		   ;;(prind ip ins whole-label label marker markers)
+		   (return-defaults))
+		 (setf (aref code ip) (cdr marker))))))))
+      (values code))))
+	     
+(defparameter *id* 0)
+
+(defun make-org (genes x y energy)
+  (incf *id*)
+  (multiple-value-bind (code) (compile-genes genes)
+    (make-org* *id* genes code 0 x y energy nil nil nil genes)))
+
+(defparameter *world-max-energy* 4000)
+(defun make-world (w h energy)
+  (make-array (list w h) :initial-element energy))
+(defparameter *default-world* (make-world 200 150 500))
+(defparameter *world* (copy-array *default-world*))
+
+(defun make-orgs (num energy &optional (genes '(eat set-b-end m0 read-a write-a cmp-a-b jne l0 off-left goto0 end)))
+  (loop for i below num collect
+       (make-org genes (random (array-dimension *world* 0)) (random (array-dimension *world* 1)) energy)))
+(defparameter *default-orgs* (make-orgs 500 10))
+(defparameter *orgs* *default-orgs*)
+
+(defun copy-orgs (orgs)
+  (mapcar #'copy-org orgs))
+
+(defun default-world ()
+  (setf *world-max-energy* 4000)
+  (setf *world* (copy-array *default-world*))
+  (setf *orgs* (copy-orgs *default-orgs*))
+  nil)
+
+(defun world1 (&key (w 200) (h 150) (world-energy 500) (num-orgs 500) (org-energy 10))
+  (setf *world* (make-world w h world-energy))
+  (setf *orgs* (make-orgs num-orgs org-energy))
+  nil)
 
 (defun idleloop (surface)
   (declare (optimize (debug 3)))
-  (labels ((copy-gen (gen)
-	     (let* ((new-gen (make-array (length gen))))
-	       (loop for g below (length gen) do
-		    (setf (aref new-gen g)
-			  (if (<= (random 1000) 1)
-			      (sample '(eat copy-left copy-right copy-up copy-down goto0))
-			      (aref gen g))))
-	       new-gen))
-	   (eval-org (iters org)
-	     (let* ((offspring nil))
-	       (with-slots (gen ip off x y energy) org
-		 (loop for i below iters do
-		      (when (or (>= ip (length gen)) (<= energy 0))
-			(return-from eval-org :kill))
-		      (let* ((ins (aref gen ip)))
-			(decf energy)
-			(ecase ins
-			  ((eat)
-			   (incf energy (aref *world* x y))
-			   (setf (aref *world* x y) 0))
-			  ((copy-left)
-			   (let ((gen-off (copy-gen gen))
-				 (new-energy (floor (/ energy 2))))
-			     (push (make-org gen-off 0 (mod (1- x) (array-dimension *world* 0)) y new-energy) offspring)
-			     (decf energy new-energy)))
-			  ((copy-right)
-			   (let ((gen-off (copy-gen gen))
-				 (new-energy (floor (/ energy 2))))
-			     (push (make-org gen-off 0 (mod (1+ x) (array-dimension *world* 0)) y new-energy) offspring)
-			     (decf energy new-energy)))
-			  ((copy-up)
-			   (let ((gen-off (copy-gen gen))
-				 (new-energy (floor (/ energy 2))))
-			     (push (make-org gen-off 0 x (mod (1- y) (array-dimension *world* 1)) new-energy) offspring)
-			     (decf energy new-energy)))
-			  ((copy-down)
-			   (let ((gen-off (copy-gen gen))
-				 (new-energy (floor (/ energy 2))))
-			     (push (make-org gen-off 0 x (mod (1+ y) (array-dimension *world* 1)) new-energy) offspring)
-			     (decf energy new-energy)))
-			  ((goto0)
-			   (setf ip -1)))
-			(incf ip))))
-	       (values :survive offspring))))
+  (labels ((eval-org (iters org)
+	     (with-slots (genes code ip x y energy off ax bx genesx) org
+	       (let* ((offspring nil)
+		      (max-ip (1- (array-dimension code 0))))
+		 (labels ((die ()
+			    ;;(prind "dies" org)
+			    (return-from eval-org :kill))
+			  (add-offspring (off-x off-y off-energy)
+			    (setf off (nreverse off))
+			    (setf off-energy (min energy (max (floor off-energy) 0)))
+			    (setf off-x (mod off-x (array-dimension *world* 0)))
+			    (setf off-y (mod off-y (array-dimension *world* 1)))
+			    ;;(format t "add-offspring x:~A y:~A energy:~A off:~A~%" off-x off-y off-energy off)
+			    (push (make-org off off-x off-y off-energy) offspring)
+			    (setf off nil)
+			    (setf genesx genes)
+			    (decf energy off-energy)))
+		   (loop for i below iters do
+			(tagbody
+			 next-ins
+			   (when (or (> ip max-ip) (<= energy 0))
+			     (die))
+			   (let* ((ins (aref code ip)))
+			     ;;(prind energy ip ins ax bx off)
+			     (decf energy)
+			     (macrolet ((make-instructions (keyform &body cases)
+					  (let* ((instructions-list (mapcar #'caar cases))
+						 (n-labels 2)
+						 (markers-list (loop for i below n-labels collect
+								    (intern (format nil "M~A" i))))
+						 (labels-list (loop for i below n-labels collect
+								   (intern (format nil "L~A" i))))
+						 (i-list (append instructions-list markers-list labels-list '(end)))
+						 (instructions (make-array (length i-list) :initial-contents i-list))
+						 (instructions-hash-table (make-hash-table :test 'eq))
+						 (labels-cases (loop for label in labels-list collect
+								    `((,label))))
+						 (keyform-sym (gensym)))
+					    (loop for ins in i-list do
+						 (setf (gethash ins instructions-hash-table) t))
+					    (let ((code
+						   `(labels ((random-ins ()
+							       (sample ,instructions))
+							     (is-valid-ins (ins)
+							       (multiple-value-bind (val present)
+								   (gethash ins ,instructions-hash-table)
+								 (declare (ignore val))
+								 present)))
+						      (let ((,keyform-sym ,keyform))
+							(case ,keyform-sym
+							  ,@cases
+							  ,@labels-cases
+							  ((end))
+							  (t (assert (and (integerp ,keyform-sym) (>= ,keyform-sym 0))))))
+						      )))
+					      (prind code)
+					      (prind instructions)
+					      code))))
+			       (make-instructions
+				ins
+				((eat)
+				 (incf energy (aref *world* x y))
+				 (setf (aref *world* x y) 0))
+				((set-a)
+				 (incf ip)
+				 (setf ax (arefd code nil ip)))
+				((set-b)
+				 (incf ip)
+				 (setf bx (arefd code nil ip)))
+				((set-b-end)
+				 (setf bx 'end))
+				((read-a)
+				 (setf ax (car genesx))
+				 (setf genesx (cdr genesx)))
+				((read-b)
+				 (setf bx (car genesx))
+				 (setf genesx (cdr genesx)))
+				((write-a)
+				 (when (is-valid-ins ax)
+				   (push (if (<= (random 100) 0) (random-ins) ax) off)))
+				((write-b)
+				 (when (is-valid-ins bx)
+				   (push (if (<= (random 100) 0) (random-ins) bx) off)))
+				((cmp-a-b)
+				 (setf ax (eq ax bx)))
+				((jne)
+				 (incf ip)
+				 (when (not ax)
+				   (let* ((jump-ip (arefd code nil ip)))
+				     (setf ip jump-ip)
+				     (if (<= 0 ip max-ip)
+					 (go next-ins)
+					 (die)))))
+				((off-left)
+				 (add-offspring (1- x) y (/ energy 2)))
+				((off-right)
+				 (add-offspring (1+ x) y (/ energy 2)))
+				((off-up)
+				 (add-offspring x (1- y) (/ energy 2)))
+				((off-down)
+				 (add-offspring x (1+ y) (/ energy 2)))
+				((goto0)
+				 (setf ip 0)
+				 (go next-ins)))))
+			   (incf ip))))
+		 (values :survive offspring)))))
     (let ((new-org nil))
       (loop for org in *orgs* do
-	   (multiple-value-bind (status offspring) (eval-org 10 org)
+	   ;;(prind org)
+	   (multiple-value-bind (status offspring) (eval-org 30 org)
 	     (cond
 	       ((eq status :kill)) ;do not transfer org to new-org
 	       ((eq status :survive)
@@ -178,7 +337,7 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
   (let ((max-world-energy 0)
 	(min-world-energy most-positive-fixnum)
 	(avg-world-energy 0)
-	(num-rain 10000))
+	(num-rain (floor (* (array-dimension *world* 0) (array-dimension *world* 1)) 3)))
     (loop for i below num-rain do
 	 (let* ((x (random (array-dimension *world* 0)))
 		(y (random (array-dimension *world* 1)))
@@ -186,7 +345,8 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 	   (setf max-world-energy (max max-world-energy e))
 	   (setf min-world-energy (min min-world-energy e))
 	   (incf avg-world-energy e)
-	   (incf (aref *world* x y))))
+	   (let ((new-e (min *world-max-energy* (+ e 10))))
+	     (setf (aref *world* x y) new-e))))
     (setf avg-world-energy (float (/ avg-world-energy num-rain)))
     (prind max-world-energy min-world-energy avg-world-energy))
   (with-safe-pixel-access surface set-pixel
