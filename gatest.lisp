@@ -196,6 +196,23 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
   (make-array (list w h) :initial-element energy))
 (defparameter *default-world* (make-world 200 150 50))
 (defparameter *world* (copy-array *default-world*))
+(defstruct world-cloud
+  x y xvel yvel rain edge)
+(defun make-clouds (world-rain num-clouds fraction-covered world-w world-h velocity)
+  (let* ((cloud-edge (round (sqrt (/ (* world-w world-h fraction-covered) num-clouds))))
+	 (total-rain (* world-w world-h world-rain))
+	 (rain-size (round total-rain num-clouds))
+	 (rains0 (loop for i below num-clouds collect (random rain-size)))
+	 (rains (let ((sum (apply #'+ rains0))) (loop for r in rains0 collect (round (* r (/ total-rain sum)))))))
+    (loop for r in rains collect
+	 (make-world-cloud
+	  :x (random world-w)
+	  :y (random world-h)
+	  :xvel (- (random velocity) (/ velocity 2))
+	  :yvel (- (random velocity) (/ velocity 2))
+	  :rain r
+	  :edge cloud-edge))))
+(defparameter *world-clouds* (make-clouds .1 10 .5 (array-dimension *world* 0) (array-dimension *world* 1) .1))
 
 (defun make-default-orgs (num energy &optional (genes '(eat walk-left set-b-end m0 read-a write-a cmp-a-b jne l0 off-up goto0 end)))
   (loop for i below num collect
@@ -217,7 +234,7 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
   (setf *orgs* (make-default-orgs orgs org-energy))
   nil)
 
-(defun idleloop (surface)
+(defun idleloop (surface cursor)
   (declare (optimize (debug 3)))
   (let ((new-org nil)
 	(max-org-energy 0)
@@ -243,6 +260,7 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 			      ;;(format t "cell-division x:~A y:~A energy:~A off:~A~%" off-x off-y off-energy off)
 			      (push (make-org off off-x off-y off-energy) offspring)
 			      (push (make-org off x y (- energy off-energy)) offspring)
+			      (setf energy 0)
 			      (incf num-new 1)
 			      (return-from eval-org (values :kill offspring))))
 		     (loop for i below iters do
@@ -298,7 +316,8 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 				  ins
 				  ((eat)
 				   (incf energy (aref *world* x y))
-				   (setf (aref *world* x y) 0))
+				   (setf (aref *world* x y) 0)
+				   (setf wait 1000))
 				  ((set-a)
 				   (incf ip)
 				   (setf ax (arefd code nil ip)))
@@ -349,6 +368,9 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 			     (incf ip))))
 		   (values :survive offspring)))))
       (loop for org in *orgs* do
+	   (when (eq org cursor)
+	     (format t "org id:~5A wait:~4A energy:~4A age:~2A x:~3A y:~3A~%" (org-id org) (org-wait org) (org-energy org) (org-age org) (org-x org) (org-y org))
+	     (format t "genes:~A~%" (org-genes org)))
 	   (let ((e (org-energy org)))
 	     (setf max-org-energy (max max-org-energy e))
 	     (incf avg-org-energy e))
@@ -365,20 +387,25 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
       (let ((max-world-energy 0)
 	    (min-world-energy most-positive-fixnum)
 	    (avg-world-energy 0)
-	    (num-rain (floor (* (array-dimension *world* 0) (array-dimension *world* 1)) 15)))
-	(loop for i below num-rain do
-	     (let* ((x (random (array-dimension *world* 0)))
-		    (y (random (array-dimension *world* 1)))
-		    (e (aref *world* x y)))
-	       (setf max-world-energy (max max-world-energy e))
-	       (setf min-world-energy (min min-world-energy e))
-	       (incf avg-world-energy e)
-	       (let ((new-e (min *world-max-energy* (+ e 1))))
-		 (setf (aref *world* x y) new-e))))
-	(setf avg-world-energy (float (/ avg-world-energy num-rain)))
+	    (total-rain (apply #'+ (mapcar #'world-cloud-rain *world-clouds*))))
+	(loop for cloud in *world-clouds* do
+	     (with-slots (x y xvel yvel rain edge) cloud
+	       (loop for i below rain do
+		    (let* ((rx (mod (+ (floor x) (random edge)) (array-dimension *world* 0)))
+			   (ry (mod (+ (floor y) (random edge)) (array-dimension *world* 1)))
+			   (e (aref *world* rx ry)))
+		      (setf max-world-energy (max max-world-energy e))
+		      (setf min-world-energy (min min-world-energy e))
+		      (incf avg-world-energy e)
+		      (let ((new-e (min *world-max-energy* (+ e 1))))
+			(setf (aref *world* rx ry) new-e))))
+	       (setf x (mod (+ x xvel) (array-dimension *world* 0)))
+	       (setf y (mod (+ y yvel) (array-dimension *world* 1)))))
+	(setf avg-world-energy (float (/ avg-world-energy total-rain)))
 	;;(prind length-orgs max-world-energy min-world-energy avg-world-energy max-org-energy avg-org-energy)
-	(format t "(world energy min:~4A avg:~4A max:~4A) (org num:~5A -:~3A +:~3A =:~3A energy avg:~5A max:~5A)~%"
-		min-world-energy (round avg-world-energy) max-world-energy length-orgs num-died num-new (- num-new num-died) (round avg-org-energy) max-org-energy)
+	(when (null cursor)
+	  (format t "(world energy min:~4A avg:~4A max:~4A) (org num:~5A -:~3A +:~3A =:~3A energy avg:~5A max:~5A)~%"
+		  min-world-energy (round avg-world-energy) max-world-energy length-orgs num-died num-new (- num-new num-died) (round avg-org-energy) max-org-energy))
 	)))
   (with-safe-pixel-access surface set-pixel
     (let* ((w (sdl-surface-get-w surface))
@@ -396,7 +423,21 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 		 (set-pixel x y (color-to-argb8888 255 255 0 0))
 		 (set-pixel x y (color-to-argb8888 255 0 e (max 128 e)))))))))
 
-(defun software-render-texture (&key (total-frames -1))
+(defun nearest-org (x y orgs)
+  "Return the organism in ORGS which is nearest to coordinate (X, Y)."
+  (let ((min-dist nil)
+	(min-org))
+    (loop for org in orgs do
+	 (let* ((org-x (org-x org))
+		(org-y (org-y org))
+		(diff-x (- x org-x))
+		(diff-y (- y org-y))
+		(dist (+ (* diff-x diff-x) (* diff-y diff-y))))
+	   (when (or (null min-dist) (< dist min-dist))
+	     (setf min-dist dist min-org org))))
+    min-org))
+
+(defun software-render-texture (&key (total-frames -1) (win-x 388) (win-y 0) (win-w 800) (win-h 600))
   "Software renderer example, drawing a texture on the screen.
 See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_frames_to_the_screen."
   (sdl2:with-init (:everything)
@@ -406,7 +447,7 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
             sdl2-ffi:+sdl-patchlevel+)
     (finish-output)
 
-    (sdl2:with-window (win :x 1000 :y 0 :w 800 :h 600 :flags '(:shown))
+    (sdl2:with-window (win :x win-x :y win-y :w win-w :h win-h :flags '(:shown))
       ;; basic window/gl setup
       (format t "Setting up window: ~A (size:~A).~%" win (multiple-value-list (sdl2:get-window-size win)))
       (finish-output)
@@ -423,7 +464,10 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	     ;; see .../cl-autowrap-20141217-git/cl-plus-c.md: "We may access the various fields as follows:"
 	     (pix (plus-c:c-ref sur SDL2-FFI:SDL-SURFACE :pixels))
 	     (first-frame-time (get-internal-real-time))
-	     (num-frames 0))
+	     (num-frames 0)
+	     (mouse-x (/ tex-w 2))
+	     (mouse-y (/ tex-h 2))
+	     (cursor nil))
 	(declare (type fixnum num-frames))
 
 	(format t "Window renderer: ~A~%" wrend)
@@ -441,13 +485,11 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 		 (sym (sdl2:sym-value keysym))
 		 (mod-value (sdl2:mod-value keysym)))
 	     (cond
-	       ((sdl2:scancode= scancode :scancode-w) (format t "~a~%" "WALK"))
-	       ((sdl2:scancode= scancode :scancode-s) (sdl2:show-cursor))
-	       ((sdl2:scancode= scancode :scancode-h) (sdl2:hide-cursor)))
-	     (format t "Key sym: ~a, code: ~a, mod: ~a~%"
-		     sym
-		     scancode
-		     mod-value)))
+	       ((sdl2:scancode= scancode :scancode-w)
+		(prind "w")))
+	     
+	     ;;(format t "Key sym: ~a, code: ~a, mod: ~a~%" sym scancode mod-value)
+	     ))
 
 	  (:keyup
 	   (:keysym keysym)
@@ -456,8 +498,11 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 
 	  (:mousemotion
 	   (:x x :y y :xrel xrel :yrel yrel :state state)
-	   (format t "Mouse motion abs(rel): ~a (~a), ~a (~a)~%Mouse state: ~a~%"
-		   x xrel y yrel state))
+	   ;;(format t "Mouse motion abs(rel): ~a (~a), ~a (~a)~%Mouse state: ~a~%" x xrel y yrel state)
+	   (setf mouse-x (/ (* x tex-w) win-w) mouse-y (/ (* y tex-h) win-h))
+	   (let* ((x (floor mouse-x)) (y (floor mouse-y))
+		  (org (nearest-org x y *orgs*)))
+	     (setf cursor org)))
 
 	  (:idle
 	   ()
@@ -465,10 +510,23 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 		   (null *orgs*))    
 	       (sdl2:push-quit-event)
 	       (progn
-		 (idleloop sur)
+		 (idleloop sur cursor)
 		 (sdl2:update-texture tex pix :width (* 4 tex-w))
 		 ;;TODO: call SDL_RenderClear(sdlRenderer);
 		 (sdl2:render-copy wrend tex)
+		 (sdl2-ffi.functions::sdl-set-render-draw-color wrend (random 256) (random 256) (random 256) 255)
+		 (cond
+		   ((and (org-p cursor) (> (org-energy cursor) 0))
+		    (let* ((x (org-x cursor)) (y (org-y cursor))
+			   (x1 (* x (/ win-w tex-w)))
+			   (y1 (* y (/ win-h tex-h)))
+			   (x2 (* (1+ x) (/ win-w tex-w)))
+			   (y2 (* (1+ y) (/ win-h tex-h))))
+		      (sdl2-ffi.functions::sdl-render-draw-line wrend x1 y1 x2 y1)
+		      (sdl2-ffi.functions::sdl-render-draw-line wrend x2 y1 x2 y2)
+		      (sdl2-ffi.functions::sdl-render-draw-line wrend x2 y2 x1 y2)
+		      (sdl2-ffi.functions::sdl-render-draw-line wrend x1 y2 x1 y1)))
+		   (t (setf cursor nil)))
 		 (sdl2:render-present wrend)
 		 (incf num-frames)))
 	   )
