@@ -116,7 +116,7 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
   (apply #'aref array subscripts))
 
 (defstruct (org
-	     (:constructor make-org* (id genes code ip wait x y energy age off ax bx genesx)))
+	     (:constructor make-org* (id genes code ip wait x y energy age off as bs an bn genesx)))
   id
   genes
   code
@@ -127,8 +127,10 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
   energy
   age
   off
-  ax
-  bx
+  as
+  bs
+  an
+  bn
   genesx)
 
 (defun compile-genes (genes &optional (default-code (make-array 0)))
@@ -189,7 +191,7 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 (defun make-org (genes x y energy)
   (incf *id*)
   (multiple-value-bind (code) (compile-genes genes)
-    (make-org* *id* genes code 0 0 x y energy 0 nil nil nil genes)))
+    (make-org* *id* genes code 0 0 x y energy 0 nil nil nil 0 0 genes)))
 
 (defparameter *world-max-energy* 4000)
 (defun make-world (w h energy)
@@ -199,6 +201,8 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 (defstruct world-cloud
   x y xvel yvel rain edge)
 (defun make-clouds (world-rain num-clouds fraction-covered world-w world-h velocity)
+  "WORLD-RAIN is the average rain per world coordinate per iteration.
+FRACTION-COVERED is the fraction of the whole world covered with clouds."
   (let* ((cloud-edge (round (sqrt (/ (* world-w world-h fraction-covered) num-clouds))))
 	 (total-rain (* world-w world-h world-rain))
 	 (rain-size (round total-rain num-clouds))
@@ -212,9 +216,9 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 	  :yvel (- (random velocity) (/ velocity 2))
 	  :rain r
 	  :edge cloud-edge))))
-(defparameter *world-clouds* (make-clouds .1 10 .5 (array-dimension *world* 0) (array-dimension *world* 1) .1))
+(defparameter *world-clouds* (make-clouds .1 3 .25 (array-dimension *world* 0) (array-dimension *world* 1) .1))
 
-(defun make-default-orgs (num energy &optional (genes '(eat walk-left set-b-end m0 read-a write-a cmp-a-b jne l0 off-up goto0 end)))
+(defun make-default-orgs (num energy &optional (genes '(eat in-energy-left-an in-energy-right-bn sub-bn-an walk-an m0 read-as read-next write-as cmp-as-bs jne l0 off-up goto0)))
   (loop for i below num collect
        (make-org genes (random (array-dimension *world* 0)) (random (array-dimension *world* 1)) energy)))
 (defparameter *default-orgs* (make-default-orgs 50 500))
@@ -243,7 +247,7 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 	(num-died 0)
 	(num-new 0))
     (labels ((eval-org (iters org)
-	       (with-slots (genes code ip wait x y energy age off ax bx genesx) org
+	       (with-slots (genes code ip wait x y energy age off as bs an bn genesx) org
 		 (let* ((offspring nil)
 			(max-ip (1- (array-dimension code 0)))
 			(world-w (array-dimension *world* 0))
@@ -277,16 +281,16 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 			     (when (<= (random 1000) 1)
 			       (setf ip (random (length code))))
 			     (let* ((ins (aref code ip)))
-			       ;;(prind energy ip ins ax bx off)
+			       ;;(prind energy ip ins as bs off)
 			       (decf energy)
 			       (macrolet ((make-instructions (keyform &body cases)
 					    (let* ((instructions-list (mapcar #'caar cases))
-						   (n-labels 2)
+						   (n-labels 4)
 						   (markers-list (loop for i below n-labels collect
 								      (intern (format nil "M~A" i))))
 						   (labels-list (loop for i below n-labels collect
 								     (intern (format nil "L~A" i))))
-						   (i-list (append instructions-list markers-list labels-list '(end)))
+						   (i-list (append instructions-list markers-list labels-list))
 						   (instructions (make-array (length i-list) :initial-contents i-list))
 						   (instructions-hash-table (make-hash-table :test 'eq))
 						   (labels-cases (loop for label in labels-list collect
@@ -318,36 +322,64 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 				   (incf energy (aref *world* x y))
 				   (setf (aref *world* x y) 0)
 				   (setf wait 1000))
-				  ((set-a)
+				  ((set-as)
 				   (incf ip)
-				   (setf ax (arefd code nil ip)))
-				  ((set-b)
+				   (setf as (arefd code nil ip)))
+				  ((set-bs)
 				   (incf ip)
-				   (setf bx (arefd code nil ip)))
-				  ((set-b-end)
-				   (setf bx 'end))
-				  ((read-a)
-				   (setf ax (car genesx))
+				   (setf bs (arefd code nil ip)))
+				  ((read-as)
+				   (setf as (if (<= (random 1000) 0) (random-ins) (car genesx))))
+				  ((read-bs)
+				   (setf bs (if (<= (random 1000) 0) (random-ins) (car genesx))))
+				  ((read-next)
 				   (setf genesx (cdr genesx)))
-				  ((read-b)
-				   (setf bx (car genesx))
-				   (setf genesx (cdr genesx)))
-				  ((write-a)
-				   (when (is-valid-ins ax)
-				     (push (if (<= (random 100) 0) (random-ins) ax) off)))
-				  ((write-b)
-				   (when (is-valid-ins bx)
-				     (push (if (<= (random 100) 0) (random-ins) bx) off)))
-				  ((cmp-a-b)
-				   (setf ax (eq ax bx)))
+				  ((write-as)
+				   (when (is-valid-ins as)
+				     (push as off)))
+				  ((write-bs)
+				   (when (is-valid-ins bs)
+				     (push bs off)))
+				  ((cmp-as-bs)
+				   (setf as (eq as bs)))
 				  ((jne)
 				   (incf ip)
-				   (when (not ax)
+				   (when (not as)
 				     (let* ((jump-ip (arefd code nil ip)))
 				       (setf ip jump-ip)
 				       (if (<= 0 ip max-ip)
 					   (go next-ins)
 					   (die)))))
+				  ((set-an-1)
+				   (setf an 1))
+				  ((set-bn-1)
+				   (setf bn 1))
+				  ((in-energy-left-an)
+				   (let ((x (mod (- x (random 10)) world-w)))
+				     (setf an (aref *world* x y))))
+				  ((in-energy-right-an)
+				   (let ((x (mod (+ x (random 10)) world-w)))
+				     (setf an (aref *world* x y))))
+				  ((in-energy-left-bn)
+				   (let ((x (mod (- x (random 10)) world-w)))
+				     (setf an (aref *world* x y))))
+				  ((in-energy-right-bn)
+				   (let ((x (mod (+ x (random 10)) world-w)))
+				     (setf an (aref *world* x y))))
+				  ((add-an-bn)
+				   (setf an (+ an bn)))
+				  ((sub-an-bn)
+				   (setf an (- an bn)))
+				  ((sub-bn-an)
+				   (setf an (- bn an)))
+				  ((sign-an)
+				   (setf an (signum an)))
+				  ((sign-bn)
+				   (setf bn (signum bn)))
+				  ((setf-as-an-gt0)
+				   (setf as (> an 0)))
+				  ((setf-as-an-ge0)
+				   (setf as (>= an 0)))
 				  ((off-left)
 				   (cell-division (1- x) y (/ energy 2)))
 				  ((off-right)
@@ -359,11 +391,11 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 				  ((goto0)
 				   (setf ip 0)
 				   (go next-ins))
-				  ((walk-left)
-				   (setf x (mod (1- x) world-w))
+				  ((walk-an)
+				   (setf x (mod (+ x (signum an)) world-w))
 				   (setf wait 1000))
-				  ((walk-right)
-				   (setf x (mod (1+ x) world-w))
+				  ((walk-bn)
+				   (setf x (mod (+ x (signum bn)) world-w))
 				   (setf wait 1000)))))
 			     (incf ip))))
 		   (values :survive offspring)))))
