@@ -1,5 +1,9 @@
 ;;;; Speed-test different methods of drawing safely (without being able to violate memory bounds) onto a surface.
 
+;; when using the default random state, around loop iteration 14784 the program crashes.
+
+(defparameter *default-random-state* (make-random-state nil)) ;save default random state using defparameter, this way it will only be evaluated once. Then, when we want to reset the state, we can copy *default-random-state* and use it as the new state.
+
 (load "/home/toni/quicklisp/setup.lisp")
 (ql:quickload :sdl2)
 (ql:quickload :alexandria)
@@ -103,6 +107,10 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 		    (setf (cffi:mem-aref ,pixels :uint32 index) color))))
 	   ,@body)))))
 
+(defun reset-random-state ()
+  "Set the random state to the default random state."
+  (setf *random-state* (make-random-state *default-random-state*)))
+
 (defun sample (seq)
   (let ((l (length seq)))
     (elt seq (random l))))
@@ -116,7 +124,7 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
   (apply #'aref array subscripts))
 
 (defstruct (org
-	     (:constructor make-org* (id genes code ip wait x y energy age off as bs an bn genesx)))
+	     (:constructor make-org* (id genes code ip wait x y energy age off-genes off-length as bs an bn genesx)))
   id
   genes
   code
@@ -126,7 +134,8 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
   y
   energy
   age
-  off
+  off-genes
+  off-length
   as
   bs
   an
@@ -134,7 +143,7 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
   genesx)
 
 (defun compile-genes (genes &optional (default-code (make-array 0)))
-  ;;(declare (optimize (debug 3)))
+  (declare (optimize (debug 3)))
   (labels ((return-defaults ()
 	     (return-from compile-genes (values default-code))))
     (multiple-value-bind (code markers)
@@ -154,8 +163,8 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 			(gs (string g)))
 		   ;;(prind g code-ip)
 		   (cond
-		     ((eq (elt gs 0) #\M)
-		      (let* ((rest (subseq gs 1))
+		     ((equal (subseq gs 0 3) "MRK")
+		      (let* ((rest (subseq gs 3))
 			     (pos (assoc rest markers)))
 			(when (null pos)
 			  (let ((label (read-from-string rest)))
@@ -175,15 +184,18 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 	    (case ins
 	      ((jne)
 	       (incf ip)
-	       (when (> ip max-ip)
-		 (return-defaults))
-	       (let* ((whole-label (string (arefd code 'X ip)))
-		      (label (read-from-string (subseq whole-label 1)))
-		      (marker (assoc label markers)))
-		 (when (or (not (eq (elt whole-label 0) #\L)) (not (typep label 'fixnum)) (null marker))
-		   ;;(prind ip ins whole-label label marker markers)
+	       (let ((whole-label (string (arefd code "x" ip))))
+		 (when (or (> ip max-ip) (equal whole-label "x"))
 		   (return-defaults))
-		 (setf (aref code ip) (cdr marker))))))))
+		 (let ((label-string (subseq whole-label 3)))
+		   (when (equal label-string "")
+		     (return-defaults))
+		   (let* ((label (read-from-string label-string))
+			  (marker (assoc label markers)))
+		     (when (or (not (equal (subseq whole-label 0 3) "LBL")) (not (typep label 'fixnum)) (null marker))
+		       ;;(prind ip ins whole-label label marker markers)
+		       (return-defaults))
+		     (setf (aref code ip) (cdr marker))))))))))
       (values code))))
 	     
 (defparameter *id* 0)
@@ -191,63 +203,73 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 (defun make-org (genes x y energy)
   (incf *id*)
   (multiple-value-bind (code) (compile-genes genes)
-    (make-org* *id* genes code 0 0 x y energy 0 nil nil nil 0 0 genes)))
+    (make-org* *id* genes code 0 0 x y energy 0 nil 0 nil nil 0 0 genes)))
+(defun copy-orgs (orgs)
+  (mapcar #'copy-org orgs))
 
 (defparameter *world-max-energy* 4000)
 (defun make-world (w h energy)
   (make-array (list w h) :initial-element energy))
-(defparameter *default-world* (make-world 200 150 50))
-(defparameter *world* (copy-array *default-world*))
+(defparameter *default-world* (make-world 200 100 50))
 (defstruct world-cloud
-  x y xvel yvel rain edge)
-(defun make-clouds (world-rain num-clouds fraction-covered world-w world-h velocity)
-  "WORLD-RAIN is the average rain per world coordinate per iteration.
-FRACTION-COVERED is the fraction of the whole world covered with clouds."
+  x y xvel yvel edge drop-num drop-amount)
+(defun make-clouds (rain-per-coordinate num-clouds fraction-covered drop-amount world-w world-h velocity)
+  "RAIN-PER-COORDINATE is the average rain per world coordinate per iteration.
+FRACTION-COVERED is the fraction of the whole world covered with clouds.
+DROP-AMOUNT is the energy per drop."
   (let* ((cloud-edge (round (sqrt (/ (* world-w world-h fraction-covered) num-clouds))))
-	 (total-rain (* world-w world-h world-rain))
+	 (total-rain (* world-w world-h rain-per-coordinate))
 	 (rain-size (round total-rain num-clouds))
 	 (rains0 (loop for i below num-clouds collect (random rain-size)))
 	 (rains (let ((sum (apply #'+ rains0))) (loop for r in rains0 collect (round (* r (/ total-rain sum)))))))
+    (format t "~&rains:~A~%" rains)
     (loop for r in rains collect
-	 (make-world-cloud
-	  :x (random world-w)
-	  :y (random world-h)
-	  :xvel (- (random velocity) (/ velocity 2))
-	  :yvel (- (random velocity) (/ velocity 2))
-	  :rain r
-	  :edge cloud-edge))))
-(defparameter *world-clouds* (make-clouds .1 3 .25 (array-dimension *world* 0) (array-dimension *world* 1) .1))
+	 (let* ((drop-num (round (/ r drop-amount)))
+		(cloud (make-world-cloud
+			:x (random world-w)
+			:y (random world-h)
+			:xvel (- (random velocity) (/ velocity 2))
+			:yvel (- (random velocity) (/ velocity 2))
+			:drop-num (max drop-num 1)
+			:drop-amount drop-amount
+			:edge cloud-edge)))
+	   (prind r cloud)
+	   cloud))))
+(defparameter *world* (make-world 200 100 50))
+(defparameter *world-clouds* (make-clouds .03 3 .25 100 (array-dimension *world* 0) (array-dimension *world* 1) .1))
 
-(defun make-default-orgs (num energy &optional (genes '(eat in-energy-left-an in-energy-right-bn sub-bn-an walk-an m0 read-as read-next write-as cmp-as-bs jne l0 off-up goto0)))
+(defun make-default-orgs (num energy &optional (genes '(eat in-energy-left-an in-energy-right-bn sub-from-an-bn mrk0 read-as read-next write-as cmp-as-bs jne lbl0 setf-an-1 setf-bn-1 set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-x-an walk-y-an goto0)))
   (loop for i below num collect
-       (make-org genes (random (array-dimension *world* 0)) (random (array-dimension *world* 1)) energy)))
+       (let ((org (make-org genes (random (array-dimension *world* 0)) (random (array-dimension *world* 1)) energy)))
+	 (when (= 0 (array-dimension (org-code org) 0))
+	   (error "Organism ~A has code length 0" org))
+	 org)))
 (defparameter *default-orgs* (make-default-orgs 50 500))
-(defparameter *orgs* *default-orgs*)
+(defparameter *orgs* (copy-orgs *default-orgs*))
 
-(defun copy-orgs (orgs)
-  (mapcar #'copy-org orgs))
-
-(defun default-world ()
+(defun default-world (&key (reset-random-state t))
+  (when reset-random-state
+    (reset-random-state))
   (setf *world-max-energy* 4000)
   (setf *world* (copy-array *default-world*))
   (setf *orgs* (copy-orgs *default-orgs*))
   nil)
 
-(defun world1 (&key (w 200) (h 150) (world-energy 500) (orgs 500) (org-energy 10))
+(defun world1 (&key (w 200) (h 100) (world-energy 500) (orgs 50) (org-energy 500))
   (setf *world* (make-world w h world-energy))
   (setf *orgs* (make-default-orgs orgs org-energy))
   nil)
 
-(defun idleloop (surface cursor)
+(defun idleloop (surface cursor num-frame)
   (declare (optimize (debug 3)))
-  (let ((new-org nil)
+  (let ((next-loop-orgs nil)
 	(max-org-energy 0)
 	(avg-org-energy 0)
 	(length-orgs (length *orgs*))
 	(num-died 0)
 	(num-new 0))
     (labels ((eval-org (iters org)
-	       (with-slots (genes code ip wait x y energy age off as bs an bn genesx) org
+	       (with-slots (genes code ip wait x y energy age off-genes off-length as bs an bn genesx) org
 		 (let* ((offspring nil)
 			(max-ip (1- (array-dimension code 0)))
 			(world-w (array-dimension *world* 0))
@@ -256,40 +278,48 @@ FRACTION-COVERED is the fraction of the whole world covered with clouds."
 			      ;;(prind "dies" org)
 			      (incf num-died)
 			      (return-from eval-org (values :kill offspring)))
+			    (survive ()
+			      (return-from eval-org (values :survive offspring)))
 			    (cell-division (off-x off-y off-energy)
-			      (setf off (nreverse off))
+			      (setf off-genes (nreverse off-genes))
 			      (setf off-energy (min energy (max (floor off-energy) 0)))
 			      (setf off-x (mod off-x world-w))
 			      (setf off-y (mod off-y world-h))
 			      ;;(format t "cell-division x:~A y:~A energy:~A off:~A~%" off-x off-y off-energy off)
-			      (push (make-org off off-x off-y off-energy) offspring)
-			      (push (make-org off x y (- energy off-energy)) offspring)
-			      (setf energy 0)
 			      (incf num-new 1)
-			      (return-from eval-org (values :kill offspring))))
+			      (push (make-org off-genes off-x off-y off-energy) offspring)
+			      (decf energy off-energy)
+			      ;;(push (make-org off-genes x y (- energy off-energy)) offspring)
+			      ;;(setf energy 0) ;to be sure ORG is dead.
+			      (setf off-genes nil)
+			      (setf off-length 0)
+			      (setf genesx genes)
+			      (setf age 0)
+			      ;;(die)
+			      ))
 		     (loop for i below iters do
 			  (when (> wait 0)
 			    (let ((skip (min wait (- iters i))))
 			      (decf wait skip)
 			      (incf i skip))
 			    (when (> wait 0)
-			      (return)))
+			      (survive)))
 			  (tagbody
 			   next-ins
 			     (when (or (> ip max-ip) (<= energy 0))
 			       (die))
-			     (when (<= (random 1000) 1)
-			       (setf ip (random (length code))))
+			     ;;(when (<= (random 100000) 1)
+			     ;;  (setf ip (random (length code))))
 			     (let* ((ins (aref code ip)))
-			       ;;(prind energy ip ins as bs off)
+			       ;;(prind energy ip ins as bs an bn off-genes)
 			       (decf energy)
 			       (macrolet ((make-instructions (keyform &body cases)
 					    (let* ((instructions-list (mapcar #'caar cases))
 						   (n-labels 4)
 						   (markers-list (loop for i below n-labels collect
-								      (intern (format nil "M~A" i))))
+								      (intern (format nil "MRK~A" i))))
 						   (labels-list (loop for i below n-labels collect
-								     (intern (format nil "L~A" i))))
+								     (intern (format nil "LBL~A" i))))
 						   (i-list (append instructions-list markers-list labels-list))
 						   (instructions (make-array (length i-list) :initial-contents i-list))
 						   (instructions-hash-table (make-hash-table :test 'eq))
@@ -311,7 +341,10 @@ FRACTION-COVERED is the fraction of the whole world covered with clouds."
 							    ,@cases
 							    ,@labels-cases
 							    ((end))
-							    (t (assert (and (integerp ,keyform-sym) (>= ,keyform-sym 0))))))
+							    (t
+							     ;;(assert (and (integerp ,keyform-sym) (>= ,keyform-sym 0)))
+							     )
+							    ))
 							)))
 						(prind code)
 						(prind instructions)
@@ -321,7 +354,7 @@ FRACTION-COVERED is the fraction of the whole world covered with clouds."
 				  ((eat)
 				   (incf energy (aref *world* x y))
 				   (setf (aref *world* x y) 0)
-				   (setf wait 1000))
+				   (setf wait 10000))
 				  ((set-as)
 				   (incf ip)
 				   (setf as (arefd code nil ip)))
@@ -336,10 +369,16 @@ FRACTION-COVERED is the fraction of the whole world covered with clouds."
 				   (setf genesx (cdr genesx)))
 				  ((write-as)
 				   (when (is-valid-ins as)
-				     (push as off)))
+				     (when (> off-length 100000)
+				       (die))
+				     (push as off-genes)
+				     (incf off-length)))
 				  ((write-bs)
 				   (when (is-valid-ins bs)
-				     (push bs off)))
+				     (when (> off-length 100000)
+				       (die))
+				     (push bs off-genes)
+				     (incf off-length)))
 				  ((cmp-as-bs)
 				   (setf as (eq as bs)))
 				  ((jne)
@@ -354,6 +393,22 @@ FRACTION-COVERED is the fraction of the whole world covered with clouds."
 				   (setf an 1))
 				  ((set-bn-1)
 				   (setf bn 1))
+				  ((add-to-an-bn)
+				   (setf an (+ an bn)))
+				  ((add-to-bn-an)
+				   (setf bn (+ an bn)))
+				  ((mul-to-an-bn)
+				   (setf an (* an bn)))
+				  ((mul-to-bn-an)
+				   (setf bn (* an bn)))
+				  ((sub-from-an-bn)
+				   (setf an (- an bn)))
+				  ((sub-from-bn-an)
+				   (setf bn (- bn an)))
+				  ((sign-an)
+				   (setf an (signum an)))
+				  ((sign-bn)
+				   (setf bn (signum bn)))
 				  ((in-energy-left-an)
 				   (let ((x (mod (- x (random 10)) world-w)))
 				     (setf an (aref *world* x y))))
@@ -366,78 +421,85 @@ FRACTION-COVERED is the fraction of the whole world covered with clouds."
 				  ((in-energy-right-bn)
 				   (let ((x (mod (+ x (random 10)) world-w)))
 				     (setf an (aref *world* x y))))
-				  ((add-an-bn)
-				   (setf an (+ an bn)))
-				  ((sub-an-bn)
-				   (setf an (- an bn)))
-				  ((sub-bn-an)
-				   (setf an (- bn an)))
-				  ((sign-an)
-				   (setf an (signum an)))
-				  ((sign-bn)
-				   (setf bn (signum bn)))
 				  ((setf-as-an-gt0)
 				   (setf as (> an 0)))
 				  ((setf-as-an-ge0)
 				   (setf as (>= an 0)))
-				  ((off-left)
-				   (cell-division (1- x) y (/ energy 2)))
-				  ((off-right)
-				   (cell-division (1+ x) y (/ energy 2)))
-				  ((off-up)
-				   (cell-division x (1- y) (/ energy 2)))
-				  ((off-down)
-				   (cell-division x (1+ y) (/ energy 2)))
+				  ((setf-an-max-an-bn)
+				   (setf an (max an bn)))
+				  ((setf-bn-max-an-bn)
+				   (setf bn (max an bn)))
+				  ((split-cell-an)
+				   (when (and (>= an 0) (>= energy an))
+				     (cell-division x y an)))
+				  ((split-cell-bn)
+				   (when (and (>= bn 0) (>= energy bn))
+				     (cell-division x y bn)))
 				  ((goto0)
 				   (setf ip 0)
 				   (go next-ins))
-				  ((walk-an)
+				  ((walk-x-an)
 				   (setf x (mod (+ x (signum an)) world-w))
-				   (setf wait 1000))
-				  ((walk-bn)
+				   (setf wait 300))
+				  ((walk-x-bn)
 				   (setf x (mod (+ x (signum bn)) world-w))
-				   (setf wait 1000)))))
-			     (incf ip))))
-		   (values :survive offspring)))))
+				   (setf wait 300))
+				  ((walk-y-an)
+				   (setf y (mod (+ y (signum an)) world-h))
+				   (setf wait 300))
+				  ((walk-y-bn)
+				   (setf y (mod (+ y (signum bn)) world-h))
+				   (setf wait 300))
+				  ((wait-an)
+				   (setf wait (min (max (floor an) 0) 100000))
+				   )
+				  ((wait-bn)
+				   (setf wait (min (max (floor bn) 0) 100000))
+				   )
+				  )))
+			     (incf ip)))
+		     (survive)
+		     )))))
       (loop for org in *orgs* do
-	   (when (eq org cursor)
-	     (format t "org id:~5A wait:~4A energy:~4A age:~2A x:~3A y:~3A~%" (org-id org) (org-wait org) (org-energy org) (org-age org) (org-x org) (org-y org))
-	     (format t "genes:~A~%" (org-genes org)))
+	   (when (and (eq org cursor) (>= (org-energy org) 0))
+	     (format t "genes:~A~%" (org-genes org))
+	     (format t "org id:~5A wait:~4A energy:~4A age:~2A x:~3A y:~3A ip:~3A/~3A~%" (org-id org) (org-wait org) (org-energy org) (org-age org) (org-x org) (org-y org) (org-ip org) (array-dimension (org-code org) 0)))
 	   (let ((e (org-energy org)))
 	     (setf max-org-energy (max max-org-energy e))
 	     (incf avg-org-energy e))
 	   (incf (org-age org))
 	 ;;(prind org)
-	   (multiple-value-bind (status offspring) (eval-org 30 org)
-	     (setf new-org (nconc (if (and (eq status :survive) (< (org-age org) 100))
-				      (list org)
-				      nil)
-				  offspring
-				  new-org))))
+	   (multiple-value-bind (status offspring) (eval-org 200 org)
+	     (setf next-loop-orgs (nconc (if (and (eq status :survive) (< (org-age org) 1000))
+					    (list org)
+					    nil)
+					offspring
+					next-loop-orgs))))
       (setf avg-org-energy (float (/ avg-org-energy length-orgs)))
-      (setf *orgs* new-org)
+      (setf *orgs* next-loop-orgs)
       (let ((max-world-energy 0)
 	    (min-world-energy most-positive-fixnum)
 	    (avg-world-energy 0)
-	    (total-rain (apply #'+ (mapcar #'world-cloud-rain *world-clouds*))))
+	    (total-rain 0))
 	(loop for cloud in *world-clouds* do
-	     (with-slots (x y xvel yvel rain edge) cloud
-	       (loop for i below rain do
+	     (with-slots (x y xvel yvel edge drop-num drop-amount) cloud
+	       (incf total-rain drop-num)
+	       (loop for i below drop-num do
 		    (let* ((rx (mod (+ (floor x) (random edge)) (array-dimension *world* 0)))
 			   (ry (mod (+ (floor y) (random edge)) (array-dimension *world* 1)))
 			   (e (aref *world* rx ry)))
 		      (setf max-world-energy (max max-world-energy e))
 		      (setf min-world-energy (min min-world-energy e))
 		      (incf avg-world-energy e)
-		      (let ((new-e (min *world-max-energy* (+ e 1))))
+		      (let ((new-e (min *world-max-energy* (+ e drop-amount))))
 			(setf (aref *world* rx ry) new-e))))
 	       (setf x (mod (+ x xvel) (array-dimension *world* 0)))
 	       (setf y (mod (+ y yvel) (array-dimension *world* 1)))))
 	(setf avg-world-energy (float (/ avg-world-energy total-rain)))
 	;;(prind length-orgs max-world-energy min-world-energy avg-world-energy max-org-energy avg-org-energy)
 	(when (null cursor)
-	  (format t "(world energy min:~4A avg:~4A max:~4A) (org num:~5A -:~3A +:~3A =:~3A energy avg:~5A max:~5A)~%"
-		  min-world-energy (round avg-world-energy) max-world-energy length-orgs num-died num-new (- num-new num-died) (round avg-org-energy) max-org-energy))
+	  (format t "~A (world energy min:~4A avg:~4A max:~4A) (org num:~5A -:~3A +:~3A =:~3A energy avg:~5A max:~5A)~%"
+		  num-frame min-world-energy (round avg-world-energy) max-world-energy length-orgs num-died num-new (- num-new num-died) (round avg-org-energy) max-org-energy))
 	)))
   (with-safe-pixel-access surface set-pixel
     (let* ((w (sdl-surface-get-w surface))
@@ -469,9 +531,10 @@ FRACTION-COVERED is the fraction of the whole world covered with clouds."
 	     (setf min-dist dist min-org org))))
     min-org))
 
-(defun software-render-texture (&key (total-frames -1) (win-x 388) (win-y 0) (win-w 800) (win-h 600))
+(defun software-render-texture (&key (frames -1) (win-x 388) (win-y 0) (win-w 800) (win-h 400))
   "Software renderer example, drawing a texture on the screen.
 See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_frames_to_the_screen."
+  (declare (optimize (debug 3)))
   (sdl2:with-init (:everything)
     (format t "Using SDL Library Version: ~D.~D.~D~%"
             sdl2-ffi:+sdl-major-version+
@@ -499,7 +562,8 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	     (num-frames 0)
 	     (mouse-x (/ tex-w 2))
 	     (mouse-y (/ tex-h 2))
-	     (cursor nil))
+	     (cursor nil)
+	     (display-random-state (make-random-state t)))
 	(declare (type fixnum num-frames))
 
 	(format t "Window renderer: ~A~%" wrend)
@@ -509,6 +573,9 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 
 	;; main loop
 	(format t "Beginning main loop.~%")
+	(when (= 0 (length *orgs*))
+	  (format t "No organisms left! Starting with default organisms.~%")
+	  (setf *orgs* (copy-orgs *default-orgs*)))
 	(finish-output)
 	(sdl2:with-event-loop (:method :poll)
 	  (:keydown
@@ -517,8 +584,8 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 		 (sym (sdl2:sym-value keysym))
 		 (mod-value (sdl2:mod-value keysym)))
 	     (cond
-	       ((sdl2:scancode= scancode :scancode-w)
-		(prind "w")))
+	       ((sdl2:scancode= scancode :scancode-o) ;overview
+		(setf cursor nil)))
 	     
 	     ;;(format t "Key sym: ~a, code: ~a, mod: ~a~%" sym scancode mod-value)
 	     ))
@@ -538,15 +605,16 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 
 	  (:idle
 	   ()
-	   (if (or (and (>= total-frames 0) (>= num-frames total-frames))
+	   (if (or (and (>= frames 0) (>= num-frames frames))
 		   (null *orgs*))    
 	       (sdl2:push-quit-event)
 	       (progn
-		 (idleloop sur cursor)
+		 (idleloop sur cursor num-frames)
 		 (sdl2:update-texture tex pix :width (* 4 tex-w))
 		 ;;TODO: call SDL_RenderClear(sdlRenderer);
 		 (sdl2:render-copy wrend tex)
-		 (sdl2-ffi.functions::sdl-set-render-draw-color wrend (random 256) (random 256) (random 256) 255)
+		 (let ((*random-state* display-random-state))
+		   (sdl2-ffi.functions::sdl-set-render-draw-color wrend (random 256) (random 256) (random 256) 255))
 		 (cond
 		   ((and (org-p cursor) (> (org-energy cursor) 0))
 		    (let* ((x (org-x cursor)) (y (org-y cursor))
