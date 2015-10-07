@@ -98,7 +98,7 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 	     (,last-y (1- (sdl-surface-get-h ,surface))))
 	 (declare (type fixnum ,pitch-uint32 ,last-x ,last-y))
 	 (flet ((,set-pixel-symbol (x y color)
-		  (declare (optimize (speed 3) (safety 0) (debug 0) (compilation-speed 0))
+		  (declare (optimize (speed 3) (safety 3) (debug 0) (compilation-speed 0))
 			   (type fixnum x y) (type (integer 0 4294967295) color))
 		  (assert (<= 0 x ,last-x))
 		  (assert (<= 0 y ,last-y))
@@ -259,6 +259,8 @@ DROP-AMOUNT is the energy per drop."
   (setf *world* (make-world w h world-energy))
   (setf *orgs* (make-default-orgs orgs org-energy))
   nil)
+
+(defparameter *display-world* t)
 
 (defun idleloop (surface cursor num-frame)
   (declare (optimize (debug 3)))
@@ -471,10 +473,10 @@ DROP-AMOUNT is the energy per drop."
 	 ;;(prind org)
 	   (multiple-value-bind (status offspring) (eval-org 200 org)
 	     (setf next-loop-orgs (nconc (if (and (eq status :survive) (< (org-age org) 1000))
-					    (list org)
-					    nil)
-					offspring
-					next-loop-orgs))))
+					     (list org)
+					     nil)
+					 offspring
+					 next-loop-orgs))))
       (setf avg-org-energy (float (/ avg-org-energy length-orgs)))
       (setf *orgs* next-loop-orgs)
       (let ((max-world-energy 0)
@@ -501,21 +503,22 @@ DROP-AMOUNT is the energy per drop."
 	  (format t "~A (world energy min:~4A avg:~4A max:~4A) (org num:~5A -:~3A +:~3A =:~3A energy avg:~5A max:~5A)~%"
 		  num-frame min-world-energy (round avg-world-energy) max-world-energy length-orgs num-died num-new (- num-new num-died) (round avg-org-energy) max-org-energy))
 	)))
-  (with-safe-pixel-access surface set-pixel
-    (let* ((w (sdl-surface-get-w surface))
-	   (h (sdl-surface-get-h surface)))
-      (loop for y below h do
-	   (loop for x below w do
-		(let* ((c (min 255 (ash (aref *world* x y) -2)))
-		       (color (color-to-argb8888 255 c c c)))
-		  (set-pixel x y color))))
-      (loop for org in *orgs* do
-	   (let* ((x (org-x org))
-		  (y (org-y org))
-		  (e (min 255 (org-energy org))))
-	     (if (= (org-age org) 0)
-		 (set-pixel x y (color-to-argb8888 255 255 0 0))
-		 (set-pixel x y (color-to-argb8888 255 0 e (max 128 e)))))))))
+  (when *display-world*
+    (with-safe-pixel-access surface set-pixel
+      (let* ((w (sdl-surface-get-w surface))
+	     (h (sdl-surface-get-h surface)))
+	(loop for y below h do
+	     (loop for x below w do
+		  (let* ((c (min 255 (ash (aref *world* x y) -2)))
+			 (color (color-to-argb8888 255 c c c)))
+		    (set-pixel x y color))))
+	(loop for org in *orgs* do
+	     (let* ((x (org-x org))
+		    (y (org-y org))
+		    (e (min 255 (org-energy org))))
+	       (if (= (org-age org) 0)
+		   (set-pixel x y (color-to-argb8888 255 255 0 0))
+		   (set-pixel x y (color-to-argb8888 255 0 e (max 128 e))))))))))
 
 (defun nearest-org (x y orgs)
   "Return the organism in ORGS which is nearest to coordinate (X, Y)."
@@ -551,13 +554,8 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	     (tex-h (array-dimension *world* 1))
 	     (wrend (sdl2:create-renderer win -1 '(:software :targettexture)))
 	     (tex (sdl2:create-texture wrend :ARGB8888 :streaming tex-w tex-h))
-	     (sur (sdl2:create-rgb-surface tex-w tex-h 32
-					   :r-mask #x00ff0000
-					   :g-mask #x0000ff00
-					   :b-mask #x000000ff
-					   :a-mask #xff000000))
+	     (sur (sdl2:create-rgb-surface tex-w tex-h 32 :r-mask #x00ff0000 :g-mask #x0000ff00 :b-mask #x000000ff :a-mask #xff000000))
 	     ;; see .../cl-autowrap-20141217-git/cl-plus-c.md: "We may access the various fields as follows:"
-	     (pix (plus-c:c-ref sur SDL2-FFI:SDL-SURFACE :pixels))
 	     (first-frame-time (get-internal-real-time))
 	     (num-frames 0)
 	     (mouse-x (/ tex-w 2))
@@ -585,7 +583,9 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 		 (mod-value (sdl2:mod-value keysym)))
 	     (cond
 	       ((sdl2:scancode= scancode :scancode-o) ;overview
-		(setf cursor nil)))
+		(setf cursor nil))
+	       ((sdl2:scancode= scancode :scancode-d) ;display world
+		(setf *display-world* (not *display-world*))))
 	     
 	     ;;(format t "Key sym: ~a, code: ~a, mod: ~a~%" sym scancode mod-value)
 	     ))
@@ -610,24 +610,25 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	       (sdl2:push-quit-event)
 	       (progn
 		 (idleloop sur cursor num-frames)
-		 (sdl2:update-texture tex pix :width (* 4 tex-w))
-		 ;;TODO: call SDL_RenderClear(sdlRenderer);
-		 (sdl2:render-copy wrend tex)
-		 (let ((*random-state* display-random-state))
-		   (sdl2-ffi.functions::sdl-set-render-draw-color wrend (random 256) (random 256) (random 256) 255))
-		 (cond
-		   ((and (org-p cursor) (> (org-energy cursor) 0))
-		    (let* ((x (org-x cursor)) (y (org-y cursor))
-			   (x1 (* x (/ win-w tex-w)))
-			   (y1 (* y (/ win-h tex-h)))
-			   (x2 (* (1+ x) (/ win-w tex-w)))
-			   (y2 (* (1+ y) (/ win-h tex-h))))
-		      (sdl2-ffi.functions::sdl-render-draw-line wrend x1 y1 x2 y1)
-		      (sdl2-ffi.functions::sdl-render-draw-line wrend x2 y1 x2 y2)
-		      (sdl2-ffi.functions::sdl-render-draw-line wrend x2 y2 x1 y2)
-		      (sdl2-ffi.functions::sdl-render-draw-line wrend x1 y2 x1 y1)))
-		   (t (setf cursor nil)))
-		 (sdl2:render-present wrend)
+		 (when *display-world*
+		   (sdl2:update-texture tex (plus-c:c-ref sur SDL2-FFI:SDL-SURFACE :pixels) :width (* 4 tex-w))
+		   ;;TODO: call SDL_RenderClear(sdlRenderer);
+		   (sdl2:render-copy wrend tex)
+		   (let ((*random-state* display-random-state))
+		     (sdl2-ffi.functions::sdl-set-render-draw-color wrend (random 256) (random 256) (random 256) 255))
+		   (cond
+		     ((and (org-p cursor) (> (org-energy cursor) 0))
+		      (let* ((x (org-x cursor)) (y (org-y cursor))
+			     (x1 (min (1- win-w) (max 0 (* x (/ win-w tex-w)))))
+			     (y1 (min (1- win-h) (max 0 (* y (/ win-h tex-h)))))
+			     (x2 (min (1- win-w) (max 0 (* (1+ x) (/ win-w tex-w)))))
+			     (y2 (min (1- win-h) (max 0 (* (1+ y) (/ win-h tex-h))))))
+			(sdl2-ffi.functions::sdl-render-draw-line wrend x1 y1 x2 y1)
+			(sdl2-ffi.functions::sdl-render-draw-line wrend x2 y1 x2 y2)
+			(sdl2-ffi.functions::sdl-render-draw-line wrend x2 y2 x1 y2)
+			(sdl2-ffi.functions::sdl-render-draw-line wrend x1 y2 x1 y1)))
+		     (t (setf cursor nil)))
+		   (sdl2:render-present wrend))
 		 (incf num-frames)))
 	   )
 
