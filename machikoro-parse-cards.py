@@ -12,7 +12,7 @@ def parse_normal(fields):
 	s += '                  :symbol %s\n' % (":"+symbol.lower())
 	s += '                  :dice (list %s)\n' % " ".join(dice_list)
 	s += '                  :cost %i\n' % int(cost)
-	s += '                  :multisingle %s\n' % (":multi" if multisingle=="m" else ":single")
+	s += '                  :activation %s\n' % (":any" if multisingle=="m" else ":self")
 	s += '                  :color %s\n' % (":"+color.lower())
 	s += '                  :description "%s"\n' % escape(description)
 	s += '                  :edition "%s")' % escape(edition)
@@ -54,10 +54,10 @@ for l in f:
 		s = parse_large(fields)
 		cards_large.append(s)
 
-out = open("/home/toni/tmp/mk.lisp","w")
+out = open("/home/toni/lisp/machikoro-cards.lisp","w")
 
 s = ''
-s += '(let* ((placeholder (make-normal-card :dice \'(1) :cost 0 :multisingle :multi))\n'
+s += '(let* ((placeholder (make-normal-card :dice \'(1) :cost 0 :activation :any))\n'
 s += '       (c (make-array %i :element-type \'normal-card :initial-element placeholder)))\n' % len(cards_normal)
 for i,c in enumerate(cards_normal):
 	s += ('  (setf (aref c %i)\n' % i)+c+")\n"
