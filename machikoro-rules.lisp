@@ -1,6 +1,62 @@
 (load "~/quicklisp/setup.lisp")
 (ql:quickload :alexandria)
 
+(defmacro prind (&rest args)
+  "Print args"
+  ;; TODO: modify the pretty print dispatch table so that it prints representations readable by #'READ. (especially modify the table so that printing a float respects *print-base*.)
+  (let ((i (gensym "I")))
+    `(let ((*print-pretty* t)
+	   (*print-right-margin* most-positive-fixnum))
+       ,@(loop for a in args collect
+	      (if (eq a T)
+		  `(format t "~%")
+		  `(progn
+		     (format t "~A:" ,(format nil "~A" a))
+		     (dolist (,i (multiple-value-list ,a))
+		       (prin1 ,i)
+		       (princ " ")))))
+       (format t "~%"))))
+
+(defun shuffle! (&rest sequences)
+  "Destructively shuffle the elements of all SEQUENCES in the same manner."
+  (when (not (null sequences))
+    (let ((length (length (car sequences))))
+      (assert (every (lambda (x) (= (length x) length)) (cdr sequences)) () "All sequences must have the same length")
+      (loop for i below (1- length) do
+	   (let* ((j (+ i 1 (random (- length i 1)))))
+	     (loop for seq in sequences do
+		  (let ((i-elt (elt seq i))
+			(j-elt (elt seq j)))
+		    (setf (elt seq i) j-elt (elt seq j) i-elt)))))))
+  (apply #'values sequences))
+
+(let ((a (loop for i below 100 collect i))
+      (b (loop for i below 100 collect i)))
+  (shuffle! a b)
+  (assert (every #'= a b)))
+
+(defun copy-subseq (to-sequence to-start from-sequence from-start &optional (from-end (length from-sequence)))
+  "Overwrite a subsequence of TO-SEQUENCE with a subsequence from FROM-SEQUENCE.
+FROM-START specifies the index where copying starts, FROM-END the index where copying ends, TO-START the index that is first copied to."
+  (loop
+     for i from from-start below from-end
+     for j from to-start do
+       (setf (aref to-sequence j) (aref from-sequence i)))
+  to-sequence)
+
+(defun sigmoid (x)
+  (declare (optimize (speed 3))
+	   (type single-float x))
+  (cond
+    ((<= -88.7 x)
+     (/ 1 (+ 1 (exp (- x)))))
+    (t
+     0.0)))
+
+(defun sample1 (&rest elements)
+  (let ((l (length elements)))
+    (elt elements (random l))))
+
 ;;;; Cards
 
 (defstruct normal-card
@@ -115,15 +171,7 @@ Returns whether the type of the dealt card was already present in the stack or n
 (defun make-new-game (edition stack-size num-players starting-coins)
   "Make a new game with EDITION, STACK-SIZE different cards in the starting stack, NUM-PLAYERS having STARTING-COINS each."
   (flet ((make-new-player (starting-coins)
-	   (make-player :cards (alexandria:copy-array (edition-starting-cards edition)) :coins starting-coins))
-	 (shuffle! (seq)
-	   (let ((length (length seq)))
-	     (loop for i below (1- length) do
-		  (let* ((j (+ i 1 (random (- length i 1))))
-			 (i-elt (elt seq i))
-			 (j-elt (elt seq j)))
-		    (setf (elt seq i) j-elt (elt seq j) i-elt))))
-	   seq))
+	   (make-player :cards (alexandria:copy-array (edition-starting-cards edition)) :coins starting-coins)))
     (let* ((deck (shuffle! (alexandria:flatten (loop for i from 0 for n in (edition-number-normal-cards +base-edition+) collect (loop for x below n collect i)))))
 	   (players-list (loop for i below num-players collect (make-new-player starting-coins)))
 	   (players (make-array num-players :initial-contents players-list))
@@ -160,7 +208,7 @@ Returns whether the type of the dealt card was already present in the stack or n
 			      (format t "~%"))
 			    (incf printed-cards)
 			    (format t "  ~A~S:~S" (normal-card-name card) (normal-card-dice card) count)))))
-		 (format t "  ")
+		 (format t "~%")
 		 (loop for card in large-cards do
 		      (let ((count (card-count card)))
 			(when (> count 0)
@@ -184,7 +232,7 @@ Returns whether the type of the dealt card was already present in the stack or n
 	 (card (game-card game card-number))
 	 (cost (if (typep card 'normal-card) (normal-card-cost card) (large-card-cost card)))
 	 (player-cards (player-cards player)))
-    (format t "===> PLAYER ~S BUYS ~S FOR ~S~%" player-number (normal-card-name card) cost)
+    ;;(format t "===> PLAYER ~S BUYS ~S FOR ~S~%" player-number (if (typep card 'normal-card) (normal-card-name card) (large-card-name card)) cost)
     (assert (or (typep card 'large-card) (> (aref stack card-number) 0)) () "No ~S card left in game card stack!" card)
     (assert (>= (player-coins player) cost) () "Player ~S needs ~S coins to buy card ~S, but has only ~S left." player-number cost card (player-coins player))
     (decf (player-coins player) cost)
@@ -225,10 +273,16 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 (defun player-has-card (game player-or-player-number card-or-card-number)
   (> (player-get-card-count game player-or-player-number card-or-card-number) 0))
 
+(defun player-won-p (game player-number)
+  (and (player-has-card game player-number (find-card "Bahnhof"))
+       (player-has-card game player-number (find-card "Einkaufszentrum"))
+       (player-has-card game player-number (find-card "Freizeitpark"))
+       (player-has-card game player-number (find-card "Funkturm"))))
+
 (defun game-eval-dice-roll! (game player-number roll)
   "Carry out the effects when the die/dice rolled (the sum) ROLL, and it is PLAYER-NUMBER's turn."
   (assert (< 0 roll 13))
-  (format t "===> PLAYER ~S ROLLED ~S~%" player-number roll)
+  ;;(format t "===> PLAYER ~S ROLLED ~S~%" player-number roll)
   (let ((shoppingmall+1 (player-get-card-count game player-number (find-card "Einkaufszentrum")))
 	(players (game-players game))
 	(edition (game-edition game)))
@@ -300,39 +354,51 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 	       (player-pay player1-number player-number 2))))
       )))
 
-(defun make-ai-player-turn (selector-dice-12 selector-reroll selector-card)
+(defun make-ai-player-turn (selector-dice12 selector-reroll selector-card)
   "Return a function that, when called, makes a turn for an ai-player."
   (labels ((player-turn-once (game player-number)
 	     (let* ((player (aref (game-players game) player-number))
 		    (player-cards (player-cards player))
 		    (stack (game-stack game))
-		    (dice-12 (funcall selector-dice-12 game))
+		    (dice-12 (funcall selector-dice12 game player-number))
 		    (roll1 (1+ (random 6)))
 		    (roll2 (if (= dice-12 2) (1+ (random 6)) 0))
 		    (roll-equal-p (= roll1 roll2)))
-	       (when (funcall selector-reroll game roll1 roll2)
-		 (setf dice-12 (funcall selector-dice-12 game))
+	       (when (funcall selector-reroll game player-number roll1 roll2)
+		 (setf dice-12 (funcall selector-dice12 game player-number))
 		 (setf roll1 (1+ (random 6))
 		       roll2 (if (= dice-12 2) (1+ (random 6)) 0)
 		       roll-equal-p (= roll1 roll2)))
 	       (game-eval-dice-roll! game player-number (+ roll1 roll2))
-	       (let ((card-preferences (funcall selector-card game))
+	       (let ((card-preferences (funcall selector-card game player-number))
 		     (max-card-number -1)
 		     (max-card-preference -1))
 		 ;; Remove cards that we have already and cannot have duplicates of, or that are too expensive.
+		 ;;(prind card-preferences)
 		 (loop for card-number below (length card-preferences) do
 		      (let* ((card (game-card game card-number))
 			     (cost (if (typep card 'normal-card) (normal-card-cost card) (large-card-cost card))))
+			;;(prind card-number (normal-card-name card) cost)
 			(cond
-			  ((< (player-coins player) cost))
-			  ((and (typep card 'large-card) (> (aref player-cards card-number) 0)))
-			  ((and (typep card 'normal-card) (eq (normal-card-color card) :pink) (> (aref player-cards card-number) 0)))
-			  ((and (typep card 'normal-card) (< (aref stack card-number) 1))))
-			(let ((card-preference (aref card-preferences card-number)))
-			  (when (> card-preference max-card-preference)
-			    (setf max-card-number card-number
-				  max-card-preference card-preference)))))
-		 (buy-card! game player-number max-card-number)
+			  ((< (player-coins player) cost)
+			   ;;(prind "too expensive" (player-coins player) cost)
+			   )
+			  ((and (typep card 'large-card) (> (aref player-cards card-number) 0))
+			   ;;(prind "has large card already")
+			   )
+			  ((and (typep card 'normal-card) (eq (normal-card-color card) :pink) (> (aref player-cards card-number) 0))
+			   ;;(prind "has normal pink card already")
+			   )
+			  ((and (typep card 'normal-card) (< (aref stack card-number) 1))
+			   ;;(prind "not on stack")
+			   )
+			  (t
+			   (let ((card-preference (aref card-preferences card-number)))
+			     (when (> card-preference max-card-preference)
+			       (setf max-card-number card-number
+				     max-card-preference card-preference)))))))
+		 (when (/= -1 max-card-number)
+		   (buy-card! game player-number max-card-number))
 		 roll-equal-p)))
 	   (player-turn (game player-number)
 	     (when (and (player-turn-once game player-number)
@@ -372,8 +438,207 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 ;;(remove-if (lambda (x) (not (equal "base" (normal-card-edition x)))) +normal-cards+)
 ;;(remove-if (lambda (x) (not (equal "base" (large-card-edition x)))) +large-cards+)
 
-#|
-(defun game-loop (game)
-  (loop do
-       (
-|#
+(defstruct nnet
+  (weights-list nil :type list)) ;lists of (SIMPLE-ARRAY SINGLE-FLOAT 2)
+
+(defun eval-nnet (nnet input)
+  "Inputting INPUT into the NNET, propagate forward until the last layer is reached. Return the last layer."
+  (declare (optimize (speed 3) (safety 0))
+	   (type (simple-array single-float 1) input))
+  (let* ((weights-list (nnet-weights-list nnet)))
+    (assert (= (length input) (array-dimension (car weights-list) 0)))
+    (dolist (weights weights-list)
+      (declare (type (simple-array single-float 2) weights))
+      (let* ((input-size (array-dimension weights 0))
+	     (output-size (array-dimension weights 1))
+	     (output (make-array output-size :element-type 'single-float)))
+	(declare (type (simple-array single-float 1) output))
+	(loop for j from 0 below output-size do
+	     (setf (aref output j)
+		   (sigmoid (do ((i 0 (1+ i)) (sum 0.0)) ((>= i input-size) sum)
+			      (declare (type single-float sum))
+			      (incf sum (* (aref input i) (aref weights i j)))))))
+	(setf input output))))
+  input)
+
+(defun nnet-get-layer-sizes (nnet)
+  (let* ((wl (nnet-weights-list nnet)))
+    (cons (array-dimension (car wl) 0)
+	  (mapcar (lambda (w) (array-dimension w 1)) wl))))
+
+(defun make-nnet-offspring (nnet1 nnet2)
+  (flet ((weights-offspring (weights1 weights2 in on)
+	   "IN and ON are the number of inputs and outputs, respectively."
+	   (declare (type (simple-array single-float 2) weights1 weights2))
+	   (let* ((i1 (array-dimension weights1 0)) (o1 (array-dimension weights1 1))
+		  (i2 (array-dimension weights2 0)) (o2 (array-dimension weights2 1))
+		  (weightsn (make-array (list in on) :element-type 'single-float)))
+	     (declare (type (simple-array single-float 2) weightsn))
+	     (loop for i below in do
+		  (loop for o below on do
+		       (setf (aref weightsn i o)
+			     (+ (random .1) -0.05
+				(apply #'sample1 (let ((poss (append (when (and (< i i1) (< o o1)) (list (aref weights1 i o)))
+								     (when (and (< i i2) (< o o2)) (list (aref weights2 i o))))))
+						   (if (null poss) '(0) poss)))))))
+	     weightsn)))
+    (let* ((wl1 (nnet-weights-list nnet1)) (l1 (length wl1))
+	   (wl2 (nnet-weights-list nnet2)) (l2 (length wl2))
+	   (wln nil))
+      (assert (= l1 l2)) ;maybe TODO: write an algorithm that tries to match layers between nnets with different number of layers.
+      ;; TODO: the following code sucks.
+      (let* ((layer-sizes1 (nnet-get-layer-sizes nnet1))
+	     (layer-sizes2 (nnet-get-layer-sizes nnet2))
+	     (layer-sizes (append (list (car layer-sizes1))
+				  (mapcar (lambda (ls1 ls2) (+ (sample1 ls1 ls2) (if (= 0 (random 4)) (- (random 3) 1) 0)))
+					  (subseq layer-sizes1 1 (1- (length layer-sizes1)))
+					  (subseq layer-sizes2 1 (1- (length layer-sizes2))))
+				  (last layer-sizes1))))
+	(mapcar (lambda (w1 w2 in on) (push (weights-offspring w1 w2 in on) wln))
+		wl1 wl2
+		layer-sizes (cdr layer-sizes)))
+      (make-nnet :weights-list (nreverse wln)))))
+
+(defun make-new-nnet (layer-sizes)
+  (let ((wl (mapcar (lambda (in on) (make-array (list in on) :element-type 'single-float :initial-element 0.0))
+		    layer-sizes
+		    (cdr layer-sizes))))
+    (make-nnet :weights-list wl)))
+
+(defstruct organism
+  ;; TODO: add slot EDITION, and check that game-loop was passed the same edition.
+  (id -1 :type integer)
+  (genes-dice12 nil :type nnet)
+  (genes-reroll nil :type nnet)
+  (genes-card nil :type nnet)
+  (played 0 :type (and unsigned-byte integer))
+  (won 0 :type (and unsigned-byte integer))
+  (lastrank 0 :type integer)
+  (ranksum 0.0 :type single-float)
+  (printpos -1 :type integer))
+
+(defmethod print-object ((object organism) stream)
+  (print-unreadable-object (object stream :type t :identity nil)
+    (format t "id:~5D (~3D,~4,1F) ~4,2F%(~4D)"
+	    (organism-id object)
+	    (organism-lastrank object)
+	    (/ (organism-ranksum object) (organism-played object))
+	    (/ (organism-won object) (organism-played object))
+	    (organism-played object))))
+
+(defvar *next-organism-id* 0)
+(defvar *last-game-loop-organisms* nil "The organisms of the last game-loop")
+
+(defun game-loop (edition stack-size player-count iterations &key (initial-organisms *last-game-loop-organisms*))
+  (declare (optimize (debug 3)))
+  (let* ((num-normal-cards (length (edition-normal-cards edition)))
+	 (num-cards (+ num-normal-cards (length (edition-large-cards edition))))
+	 (input-size (+ 1 num-normal-cards (* player-count (+ 1 num-cards)))) ;bias + cards on the stack + player cards + player coins
+	 (num-organisms (* 10 player-count))
+	 (num-keep (ceiling (* num-organisms 0.9))))
+    (labels ((make-new-organism ()
+	       (let* ((genes-dice12 (make-new-nnet (list input-size input-size 1)))
+		      (genes-reroll (make-new-nnet (list (+ input-size 2) input-size 1)))
+		      (genes-card (make-new-nnet (list input-size input-size num-cards))))
+		 (make-organism :id (incf *next-organism-id*) :genes-dice12 genes-dice12 :genes-reroll genes-reroll :genes-card genes-card)))
+	     (copy-to-input (input start game player-number)
+	       (let* ((players (game-players game))
+		      (stack (game-stack game)))
+		 (setf (aref input start) 1.0)
+		 (incf start)
+		 (copy-subseq input 1 (map '(simple-array single-float 1) #'float stack) 0)
+		 (incf start (length stack))
+		 (loop for i from 0 below (length players) do
+		      (let* ((player1-number (mod (+ player-number i) (length players)))
+			     (player (aref players player1-number)))
+			(copy-subseq input start (map '(simple-array single-float 1) #'float (player-cards player)) 0)
+			(incf start (length (player-cards player)))
+			(setf (aref input start) (float (player-coins player)))
+			(incf start)))
+		 start))
+	     (make-ai-player-from-organism (org)
+	       (flet ((selector-dice12 (game player-number)
+			(let* ((input (make-array input-size :element-type 'single-float)))
+			  (copy-to-input input 0 game player-number)
+			  (let ((output (eval-nnet (organism-genes-dice12 org) input)))
+			    (if (< (elt output 0) 0.5) 1 2))))
+		      (selector-reroll (game player-number roll1 roll2)
+			(let* ((input (make-array (+ input-size 2) :element-type 'single-float)))
+			  (setf (aref input 0) (float roll1))
+			  (setf (aref input 1) (float roll2))
+			  (copy-to-input input 2 game player-number)
+			  (let ((output (eval-nnet (organism-genes-reroll org) input)))
+			    (if (< (elt output 0) 0.5) nil t))))
+		      (selector-card (game player-number)
+			(let* ((input (make-array input-size :element-type 'single-float)))
+			  (copy-to-input input 0 game player-number)
+			  (eval-nnet (organism-genes-card org) input))))
+		 (make-ai-player-turn #'selector-dice12 #'selector-reroll #'selector-card)))
+	     (make-offspring (parent1 parent2)
+	       (make-organism :id (incf *next-organism-id*)
+			      :genes-dice12 (make-nnet-offspring (organism-genes-dice12 parent1) (organism-genes-dice12 parent2))
+			      :genes-reroll (make-nnet-offspring (organism-genes-reroll parent1) (organism-genes-reroll parent2))
+			      :genes-card (make-nnet-offspring (organism-genes-card parent1) (organism-genes-card parent2))))
+	     (print-organisms (orgs)
+	       (let* ((orgs-no (map 'list (lambda (x) x) (remove-if (lambda (x) (>= (organism-printpos x) 0)) orgs)))
+		      (orgs-yes (sort (remove-if (lambda (x) (< (organism-printpos x) 0)) orgs) #'< :key #'organism-printpos))
+		      (printpos-to-org (make-array num-organisms))
+		      (printed 0))
+		 (let ((last-org-yes-index (length orgs-yes))
+		       (next-org-yes-index 0))
+		   (loop for printpos below num-organisms do
+			(setf (aref printpos-to-org printpos) 
+			      (if (and (< next-org-yes-index last-org-yes-index)
+				       (= (organism-printpos (aref orgs-yes next-org-yes-index)) printpos))
+				  (prog1 (aref orgs-yes next-org-yes-index) (incf next-org-yes-index))
+				  (prog1 (car orgs-no) (setf (organism-printpos (car orgs-no)) printpos) (pop orgs-no))))))
+		 (loop for printpos below num-organisms do
+		      (let ((org (aref printpos-to-org printpos)))
+			(format t "~S  " org)
+			(incf printed)
+			(when (>= printed 3) (setf printed 0) (format t "~%"))))
+		 (format t "~&"))))
+      (let* ((orgs (let* ((orgs (make-array num-organisms :initial-contents (loop for i below num-organisms collect (make-new-organism)))))
+		     (copy-subseq orgs 0 initial-organisms 0 (min num-organisms (length initial-organisms)))
+		     orgs)))
+	(assert (and (/= num-keep num-organisms) (/= 0 num-keep)))
+	(do ((iteration iterations (1- iteration)))
+	    ((= iteration 0))
+	  (format t "iterations left: ~S~%" iteration)
+	  (shuffle! orgs)
+	  (loop for player1-index from 0 below num-organisms by player-count do
+	     ;;(format t "iteration:~S players:~S~%" iteration (loop for player-number from player1-index below (+ player1-index player-count) collect (aref orgs player-number)))
+	       (loop for player-number from player1-index below (+ player1-index player-count) do
+		    (incf (organism-played (aref orgs player-number))))
+	       (let* ((game (make-new-game edition stack-size player-count 3))
+		      (ais (make-array player-count :initial-contents (loop for i below player-count collect
+									   (make-ai-player-from-organism (aref orgs (+ player1-index i)))))))
+		 (block game
+		   (loop for turn from 0 do
+			(loop for player-number below player-count do
+			     (funcall (aref ais player-number) game player-number)
+			     (when (player-won-p game player-number)
+			       (let ((player-index (+ player1-index player-number)))
+				 ;;(print-game game)
+				 ;;(format t "player ~S won~%" player-index)
+				 (incf (organism-won (aref orgs player-index)))
+				 (return-from game))))))))
+	  (flet ((organism-better (org1 org2)
+		   (let* ((p1 (organism-played org1)) (p2 (organism-played org2))
+			  (w1 (organism-won org1)) (w2 (organism-won org2))
+			  (r1 (/ w1 p1)) (r2 (/ w2 p2)))
+		     (if (= r1 r2)
+			 (> w1 w2)
+			 (> r1 r2)))))
+	    (setf orgs (sort orgs #'organism-better)))
+	  (loop for i below num-organisms do
+	       (let ((org (aref orgs i)))
+		 (setf (organism-lastrank org) i)
+		 (incf (organism-ranksum org) i)))
+	  (setf *last-game-loop-organisms* orgs)
+	  (print-organisms orgs)
+	  (loop for i from num-keep below num-organisms do
+	       (let* ((parent1 (aref orgs (random num-keep)))
+		      (parent2 (aref orgs (random num-keep)))
+		      (offspring (make-offspring parent1 parent2)))
+		 (setf (aref orgs i) offspring))))))))
