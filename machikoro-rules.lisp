@@ -159,6 +159,8 @@ FROM-START specifies the index where copying starts, FROM-END the index where co
   (stack #() :type (array integer)) ;array of INTEGERs, with the index of the array being the normal card number and the value equal to the number of available cards of that normal card type
   (deck nil :type list)) ;list of normal card numbers
 
+(defvar *print-game-events* nil "When non-NIL, print game events.")
+
 (defun deal-card! (game)
   "Deal one card from the deck of the GAME to the stack of the GAME.
 Returns whether the type of the dealt card was already present in the stack or not."
@@ -166,6 +168,8 @@ Returns whether the type of the dealt card was already present in the stack or n
 	 (new-card-number (pop (game-deck game)))
 	 (new-card-stack-number (aref stack new-card-number)))
     (incf (aref stack new-card-number))
+    (when *print-game-events*
+      (format t "CARD ~A IS DEALT FROM THE DECK.~%" (normal-card-name (funcall (edition-map-number-function (game-edition game)) new-card-number))))
     (/= 0 new-card-stack-number)))
 
 (defun make-new-game (edition stack-size num-players starting-coins)
@@ -232,7 +236,8 @@ Returns whether the type of the dealt card was already present in the stack or n
 	 (card (game-card game card-number))
 	 (cost (if (typep card 'normal-card) (normal-card-cost card) (large-card-cost card)))
 	 (player-cards (player-cards player)))
-    ;;(format t "===> PLAYER ~S BUYS ~S FOR ~S~%" player-number (if (typep card 'normal-card) (normal-card-name card) (large-card-name card)) cost)
+    (when *print-game-events*
+      (format t "===> PLAYER ~S BUYS ~S FOR ~S~%" player-number (if (typep card 'normal-card) (normal-card-name card) (large-card-name card)) cost))
     (assert (or (typep card 'large-card) (> (aref stack card-number) 0)) () "No ~S card left in game card stack!" card)
     (assert (>= (player-coins player) cost) () "Player ~S needs ~S coins to buy card ~S, but has only ~S left." player-number cost card (player-coins player))
     (decf (player-coins player) cost)
@@ -282,20 +287,28 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 (defun game-eval-dice-roll! (game player-number roll)
   "Carry out the effects when the die/dice rolled (the sum) ROLL, and it is PLAYER-NUMBER's turn."
   (assert (< 0 roll 13))
-  ;;(format t "===> PLAYER ~S ROLLED ~S~%" player-number roll)
   (let ((shoppingmall+1 (player-get-card-count game player-number (find-card "Einkaufszentrum")))
 	(players (game-players game))
 	(edition (game-edition game)))
     (labels ((activated-card-number (player-number card)
 	       "If CARD is activated this turn, returns the number of CARDS the PLAYER-NUMBER has, 0 otherwise."
 	       (if (find roll (normal-card-dice card))
-		   (player-get-card-count game player-number card)
+		   (let ((count (player-get-card-count game player-number card)))
+		     (when (and *print-game-events* (> count 0))
+		       (format t "PLAYER ~S ACTIVATES CARD ~S ~S TIMES.~%" player-number (normal-card-name card) count))
+		     count)
 		   0))
 	     (player-pay (from-player-number to-player-number coins)
-	       (let ((coins (min (player-coins (aref players from-player-number)) coins)))
-		 (decf (player-coins (aref players from-player-number)) coins)
-		 (incf (player-coins (aref players to-player-number)) coins)))
+	       (let ((coins2 (min (player-coins (aref players from-player-number)) coins)))
+		 (when (and *print-game-events* (/= coins 0))
+		   (if (/= coins2 coins)
+		       (format t "PLAYER ~S OWES ~S COINS TO PLAYER ~S, BUT HAS ONLY ~S COINS~%" from-player-number coins to-player-number coins2)
+		       (format t "PLAYER ~S PAYS ~S COINS TO PLAYER ~S~%" from-player-number coins2 to-player-number)))
+		 (decf (player-coins (aref players from-player-number)) coins2)
+		 (incf (player-coins (aref players to-player-number)) coins2)))
 	     (bank-pay (to-player-number coins)
+	       (when (and *print-game-events* (/= coins 0))
+		 (format t "BANK PAYS ~S COINS TO PLAYER ~S~%" coins to-player-number))
 	       (incf (player-coins (aref players to-player-number)) coins))
 	     (player-count-card-symbol (player-number card-symbol)
 	       (let ((count 0)
@@ -326,7 +339,7 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 	   (bank-pay player-number (* 5 (activated-card-number player-number (find-card "Bergwerk"))))
 	   (bank-pay player-number (* 3 (activated-card-number player-number (find-card "Apfelplantage")))))
       ;; Turns are activated in the following order: 3. :PINK
-      (when (player-has-card game player-number (find-card "Bürohaus"))
+      (when (> (activated-card-number player-number (find-card "Bürohaus")) 0)
 	;; TODO:
 	;; #S(NORMAL-CARD
 	;;    :NAME "Bürohaus"
@@ -338,7 +351,7 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 	;;    :DESCRIPTION "Tausche 1 Karte mit einem Mitspieler deiner Wahl. Kein \"tower\" Unternehmen."
 	;;    :EDITION "base")
 	)
-      (when (player-has-card game player-number (find-card "Fernsehsender"))
+      (when (> (activated-card-number player-number (find-card "Fernsehsender")) 0)
 	;; TODO: FIXME: There should be a mechanism of choosing a player that has to pay.
 	(let ((player-number-max-coins -1) (max-coins -1))
 	  (loop for i+ below (1- (length players)) do
@@ -348,7 +361,7 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 		   (setf max-coins player-coins
 			 player-number-max-coins player1-number))))
 	  (player-pay player-number-max-coins player-number 5)))
-      (when (player-has-card game player-number (find-card "Stadion"))
+      (when (> (activated-card-number player-number (find-card "Stadion")) 0)
 	(loop for i+ below (1- (length players)) do
 	     (let* ((player1-number (mod (+ player-number 1 i+) (length players))))
 	       (player-pay player1-number player-number 2))))
@@ -364,11 +377,22 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 		    (roll1 (1+ (random 6)))
 		    (roll2 (if (= dice-12 2) (1+ (random 6)) 0))
 		    (roll-equal-p (= roll1 roll2)))
-	       (when (funcall selector-reroll game player-number roll1 roll2)
+	       (when *print-game-events*
+		 (format t "===> PLAYER ~S ROLLED ~S" player-number roll1)
+		 (when (= dice-12 2) (format t "+~S=~S" roll2 (+ roll1 roll2))))
+	       (when (and (player-has-card game player-number (find-card "Funkturm"))
+			  (funcall selector-reroll game player-number roll1 roll2))
+		 (when *print-game-events*
+		   (format t ", BUT CHOOSES TO ROLL AGAIN: "))
 		 (setf dice-12 (funcall selector-dice12 game player-number))
 		 (setf roll1 (1+ (random 6))
 		       roll2 (if (= dice-12 2) (1+ (random 6)) 0)
-		       roll-equal-p (= roll1 roll2)))
+		       roll-equal-p (= roll1 roll2))
+		 (when *print-game-events*
+		   (format t "PLAYER ~S ROLLED ~S" player-number roll1)
+		   (when (= dice-12 2) (format t "+~S=~S" roll2 (+ roll1 roll2)))))
+	       (when *print-game-events*
+		 (format t "~%"))
 	       (game-eval-dice-roll! game player-number (+ roll1 roll2))
 	       (let ((card-preferences (funcall selector-card game player-number))
 		     (max-card-number -1)
@@ -517,7 +541,7 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
   (ranksum 0.0 :type single-float)
   (printpos -1 :type integer))
 
-(defmethod print-object ((object organism) stream)
+(defun print-organism (object stream)
   (print-unreadable-object (object stream :type t :identity nil)
     (format t "id:~5D (~3D,~4,1F) ~4,2F%(~4D)"
 	    (organism-id object)
@@ -526,22 +550,11 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 	    (/ (organism-won object) (organism-played object))
 	    (organism-played object))))
 
-(defvar *next-organism-id* 0)
-(defvar *last-game-loop-organisms* nil "The organisms of the last game-loop")
-
-(defun game-loop (edition stack-size player-count iterations &key (initial-organisms *last-game-loop-organisms*))
-  (declare (optimize (debug 3)))
+(defun make-ai-player-from-organism (edition num-players org)
   (let* ((num-normal-cards (length (edition-normal-cards edition)))
 	 (num-cards (+ num-normal-cards (length (edition-large-cards edition))))
-	 (input-size (+ 1 num-normal-cards (* player-count (+ 1 num-cards)))) ;bias + cards on the stack + player cards + player coins
-	 (num-organisms (* 10 player-count))
-	 (num-keep (ceiling (* num-organisms 0.9))))
-    (labels ((make-new-organism ()
-	       (let* ((genes-dice12 (make-new-nnet (list input-size input-size 1)))
-		      (genes-reroll (make-new-nnet (list (+ input-size 2) input-size 1)))
-		      (genes-card (make-new-nnet (list input-size input-size num-cards))))
-		 (make-organism :id (incf *next-organism-id*) :genes-dice12 genes-dice12 :genes-reroll genes-reroll :genes-card genes-card)))
-	     (copy-to-input (input start game player-number)
+	 (input-size (+ 1 num-normal-cards (* num-players (+ 1 num-cards))))) ;bias + cards on the stack + player cards + player coins
+  (labels ((copy-to-input (input start game player-number)
 	       (let* ((players (game-players game))
 		      (stack (game-stack game)))
 		 (setf (aref input start) 1.0)
@@ -556,24 +569,59 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 			(setf (aref input start) (float (player-coins player)))
 			(incf start)))
 		 start))
-	     (make-ai-player-from-organism (org)
-	       (flet ((selector-dice12 (game player-number)
-			(let* ((input (make-array input-size :element-type 'single-float)))
-			  (copy-to-input input 0 game player-number)
-			  (let ((output (eval-nnet (organism-genes-dice12 org) input)))
-			    (if (< (elt output 0) 0.5) 1 2))))
-		      (selector-reroll (game player-number roll1 roll2)
-			(let* ((input (make-array (+ input-size 2) :element-type 'single-float)))
-			  (setf (aref input 0) (float roll1))
-			  (setf (aref input 1) (float roll2))
-			  (copy-to-input input 2 game player-number)
-			  (let ((output (eval-nnet (organism-genes-reroll org) input)))
-			    (if (< (elt output 0) 0.5) nil t))))
-		      (selector-card (game player-number)
-			(let* ((input (make-array input-size :element-type 'single-float)))
-			  (copy-to-input input 0 game player-number)
-			  (eval-nnet (organism-genes-card org) input))))
-		 (make-ai-player-turn #'selector-dice12 #'selector-reroll #'selector-card)))
+	   (selector-dice12 (game player-number)
+	     (let* ((input (make-array input-size :element-type 'single-float)))
+	       (copy-to-input input 0 game player-number)
+	       (let ((output (eval-nnet (organism-genes-dice12 org) input)))
+		 (if (< (elt output 0) 0.5) 1 2))))
+	   (selector-reroll (game player-number roll1 roll2)
+	     (let* ((input (make-array (+ input-size 2) :element-type 'single-float)))
+	       (setf (aref input 0) (float roll1))
+	       (setf (aref input 1) (float roll2))
+	       (copy-to-input input 2 game player-number)
+	       (let ((output (eval-nnet (organism-genes-reroll org) input)))
+		 (if (< (elt output 0) 0.5) nil t))))
+	   (selector-card (game player-number)
+	     (let* ((input (make-array input-size :element-type 'single-float)))
+	       (copy-to-input input 0 game player-number)
+	       (eval-nnet (organism-genes-card org) input))))
+    (make-ai-player-turn #'selector-dice12 #'selector-reroll #'selector-card))))
+
+(defun run-game (edition stack-size player-organism-list)
+  (declare (optimize (debug 3)))
+  (let* ((num-players (length player-organism-list))
+	 (game (make-new-game edition stack-size num-players 3))
+	 (ais (make-array num-players :initial-contents
+			  (map 'list (lambda (player-org) (make-ai-player-from-organism edition num-players player-org))
+			       player-organism-list))))
+    (block game
+      (loop for turn from 0 do
+	   (loop for player-number below num-players do
+		(when *print-game-events*
+		  (format t "TURN ~S:~%" turn)
+		  (print-game game))
+		(funcall (aref ais player-number) game player-number)
+		(when (player-won-p game player-number)
+		  (when *print-game-events*
+		    (print-game game)
+		    (format t "===> PLAYER ~S WON~%" player-number))
+		  (return-from game (values player-number turn))))))))
+
+(defvar *next-organism-id* 0)
+(defvar *last-game-loop-organisms* nil "The organisms of the last game-loop")
+
+(defun game-loop (edition stack-size num-players iterations &key (initial-organisms *last-game-loop-organisms*))
+  (declare (optimize (debug 3)))
+  (let* ((num-normal-cards (length (edition-normal-cards edition)))
+	 (num-cards (+ num-normal-cards (length (edition-large-cards edition))))
+	 (input-size (+ 1 num-normal-cards (* num-players (+ 1 num-cards)))) ;bias + cards on the stack + player cards + player coins
+	 (num-organisms (* 10 num-players))
+	 (num-keep (ceiling (* num-organisms 0.7))))
+    (labels ((make-new-organism ()
+	       (let* ((genes-dice12 (make-new-nnet (list input-size input-size 1)))
+		      (genes-reroll (make-new-nnet (list (+ input-size 2) input-size 1)))
+		      (genes-card (make-new-nnet (list input-size input-size num-cards))))
+		 (make-organism :id (incf *next-organism-id*) :genes-dice12 genes-dice12 :genes-reroll genes-reroll :genes-card genes-card)))
 	     (make-offspring (parent1 parent2)
 	       (make-organism :id (incf *next-organism-id*)
 			      :genes-dice12 (make-nnet-offspring (organism-genes-dice12 parent1) (organism-genes-dice12 parent2))
@@ -587,14 +635,15 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 		 (let ((last-org-yes-index (length orgs-yes))
 		       (next-org-yes-index 0))
 		   (loop for printpos below num-organisms do
-			(setf (aref printpos-to-org printpos) 
+			(setf (aref printpos-to-org printpos)
 			      (if (and (< next-org-yes-index last-org-yes-index)
 				       (= (organism-printpos (aref orgs-yes next-org-yes-index)) printpos))
 				  (prog1 (aref orgs-yes next-org-yes-index) (incf next-org-yes-index))
 				  (prog1 (car orgs-no) (setf (organism-printpos (car orgs-no)) printpos) (pop orgs-no))))))
 		 (loop for printpos below num-organisms do
 		      (let ((org (aref printpos-to-org printpos)))
-			(format t "~S  " org)
+			(print-organism org t) (princ "  " t)
+			;;(format t "~S  " org)
 			(incf printed)
 			(when (>= printed 3) (setf printed 0) (format t "~%"))))
 		 (format t "~&"))))
@@ -606,23 +655,19 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 	    ((= iteration 0))
 	  (format t "iterations left: ~S~%" iteration)
 	  (shuffle! orgs)
-	  (loop for player1-index from 0 below num-organisms by player-count do
-	     ;;(format t "iteration:~S players:~S~%" iteration (loop for player-number from player1-index below (+ player1-index player-count) collect (aref orgs player-number)))
-	       (loop for player-number from player1-index below (+ player1-index player-count) do
-		    (incf (organism-played (aref orgs player-number))))
-	       (let* ((game (make-new-game edition stack-size player-count 3))
-		      (ais (make-array player-count :initial-contents (loop for i below player-count collect
-									   (make-ai-player-from-organism (aref orgs (+ player1-index i)))))))
-		 (block game
-		   (loop for turn from 0 do
-			(loop for player-number below player-count do
-			     (funcall (aref ais player-number) game player-number)
-			     (when (player-won-p game player-number)
-			       (let ((player-index (+ player1-index player-number)))
-				 ;;(print-game game)
-				 ;;(format t "player ~S won~%" player-index)
-				 (incf (organism-won (aref orgs player-index)))
-				 (return-from game))))))))
+	  (let ((turns-sum 0)
+		(num-games 0))
+	    (loop for player1-index from 0 below num-organisms by num-players do
+	       ;;(format t "iteration:~S players:~S~%" iteration (loop for player-number from player1-index below (+ player1-index num-players) collect (aref orgs player-number)))
+		 (loop for player-number from player1-index below (+ player1-index num-players) do
+		      (incf (organism-played (aref orgs player-number))))
+		 (let* ((player-orgs (loop for i below num-players collect (aref orgs (+ player1-index i)))))
+		   (multiple-value-bind (winner-index turns) (run-game edition stack-size player-orgs)
+		     (incf turns-sum turns) (incf num-games)
+		     (let ((winner-org (elt player-orgs winner-index)))
+		       ;;(format t "player ~S won~%" (organism-id winner-org))
+		       (incf (organism-won winner-org))))))
+	    (format t "Average number of turns: ~F~%" (/ turns-sum num-games)))
 	  (flet ((organism-better (org1 org2)
 		   (let* ((p1 (organism-played org1)) (p2 (organism-played org2))
 			  (w1 (organism-won org1)) (w2 (organism-won org2))
