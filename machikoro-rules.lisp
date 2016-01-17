@@ -1,6 +1,8 @@
 (load "~/quicklisp/setup.lisp")
 (ql:quickload :alexandria)
 
+;;;; AUXILIARY
+
 (defmacro prind (&rest args)
   "Print args"
   ;; TODO: modify the pretty print dispatch table so that it prints representations readable by #'READ. (especially modify the table so that printing a float respects *print-base*.)
@@ -61,7 +63,7 @@ FROM-START specifies the index where copying starts, FROM-END the index where co
   (let ((l (length elements)))
     (elt elements (random l))))
 
-;;;; Cards
+;;;; CARD
 
 (defstruct normal-card
   (name "" :type string)
@@ -86,7 +88,7 @@ FROM-START specifies the index where copying starts, FROM-END the index where co
   (or (find-if (lambda (x) (equal card-name (normal-card-name x))) +normal-cards+)
       (find-if (lambda (x) (equal card-name (large-card-name x))) +large-cards+)))
 
-;;;; Editions
+;;;; EDITION
 
 (defstruct edition
   (normal-cards nil :type sequence) ;sequence of NORMAL-CARDs
@@ -150,7 +152,7 @@ FROM-START specifies the index where copying starts, FROM-END the index where co
       ;;TODO: FIXME: allow large card names here as well)
       (mapcar #'card-name-to-instance sc))))
 
-;;;; Game
+;;;; GAME
 
 (defstruct player
   (cards #() :type (array integer)) ;array of INTEGERs, each integer being the number of cards the player has with that card index (in the edition of the game currently played).
@@ -402,6 +404,17 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 		     (max-card-number -1)
 		     (max-card-preference -1))
 		 ;; Remove cards that we have already and cannot have duplicates of, or that are too expensive.
+		 (when *print-game-events*
+		   (format t "PLAYER ~S PREFERS" player-number)
+		   (let ((preferences-list (map 'list (lambda (card price pref) (list card price pref))
+						(append (mapcar #'normal-card-name (edition-normal-cards (game-edition game)))
+							(mapcar #'large-card-name (edition-large-cards (game-edition game))))
+						(append (mapcar #'normal-card-cost (edition-normal-cards (game-edition game)))
+							(mapcar #'large-card-cost (edition-large-cards (game-edition game))))
+						card-preferences)))
+		     (setf preferences-list (sort preferences-list #'> :key #'cadr))
+		     (loop for (name price pref) in preferences-list do (format t " ~A(~S coins):~5,3F" name price pref))
+		     (format t "~%")))
 		 ;;(prind card-preferences)
 		 (loop for card-number below (length card-preferences) do
 		      (let* ((card (game-card game card-number))
@@ -434,7 +447,6 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 	       (player-turn-once game player-number))))
     #'player-turn))
 
-
 ;; Example:
 (let ((game (make-new-game +base-edition+ 15 2 12)))
   (print-game game)
@@ -465,6 +477,8 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 
 ;;(remove-if (lambda (x) (not (equal "base" (normal-card-edition x)))) +normal-cards+)
 ;;(remove-if (lambda (x) (not (equal "base" (large-card-edition x)))) +large-cards+)
+
+;;;; NNET
 
 (defstruct nnet
   (weights-list nil :type list)) ;lists of (SIMPLE-ARRAY SINGLE-FLOAT 2)
@@ -534,6 +548,8 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 		    (cdr layer-sizes))))
     (make-nnet :weights-list wl)))
 
+;;;; ORGANISM
+
 (defstruct organism
   ;; TODO: add slot EDITION, and check that game-loop was passed the same edition.
   (id -1 :type integer)
@@ -546,14 +562,50 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
   (ranksum 0.0 :type single-float)
   (printpos -1 :type integer))
 
-(defun print-organism (object stream)
-  (print-unreadable-object (object stream :type t :identity nil)
-    (format t "id:~5D (~3D,~4,1F) ~4,2F%(~4D)"
+(defun string-organism (object)
+  (declare (optimize (debug 3)))
+  (let ((played (organism-played object)))
+    (format nil "id:~5D (~3D,~A) ~4,2F%(~4D)"
 	    (organism-id object)
 	    (organism-lastrank object)
-	    (/ (organism-ranksum object) (organism-played object))
-	    (/ (organism-won object) (organism-played object))
+	    (if (> played 0) (format nil "~4,1F" (/ (organism-ranksum object) played)) "  NA")
+	    (if (> played 0) (/ (organism-won object) played) 0)
 	    (organism-played object))))
+
+(defun print-organism (object stream)
+  (format stream "#<~A ~A>" (type-of object) (string-organism object)))
+
+(defun print-organisms (orgs)
+  (let* ((num-organisms (length orgs))
+	 (orgs-no (map 'list (lambda (x) x) (remove-if (lambda (x) (>= (organism-printpos x) 0)) orgs)))
+	 (orgs-yes (sort (remove-if (lambda (x) (< (organism-printpos x) 0)) orgs) #'< :key #'organism-printpos))
+	 (printpos-to-org (make-array num-organisms))
+	 (printed 0))
+    (let ((last-org-yes-index (length orgs-yes))
+	  (next-org-yes-index 0))
+      (loop for printpos below num-organisms do
+	   (setf (aref printpos-to-org printpos)
+		 (if (and (< next-org-yes-index last-org-yes-index)
+			  (= (organism-printpos (aref orgs-yes next-org-yes-index)) printpos))
+		     (prog1 (aref orgs-yes next-org-yes-index) (incf next-org-yes-index))
+		     (prog1 (car orgs-no) (setf (organism-printpos (car orgs-no)) printpos) (pop orgs-no))))))
+    (loop for printpos below num-organisms do
+	 (let ((org (aref printpos-to-org printpos)))
+	   (print-organism org t) (princ "  " t)
+	   ;;(format t "~S  " org)
+	   (incf printed)
+	   (when (>= printed 3) (setf printed 0) (format t "~%"))))
+    (format t "~&")))
+
+(defun organism-better (org1 org2)
+  (let* ((p1 (organism-played org1)) (p2 (organism-played org2))
+	 (w1 (organism-won org1)) (w2 (organism-won org2))
+	 (r1 (if (> p1 0) (/ w1 p1) 0)) (r2 (if (> p2 0) (/ w2 p2) 0)))
+    (if (= r1 r2)
+	(> w1 w2)
+	(> r1 r2))))
+
+;;;; GAME
 
 (defun make-ai-player-from-organism (edition num-players org)
   (let* ((num-normal-cards (length (edition-normal-cards edition)))
@@ -632,27 +684,7 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 	       (make-organism :id (incf *next-organism-id*)
 			      :genes-dice12 (make-nnet-offspring (organism-genes-dice12 parent1) (organism-genes-dice12 parent2))
 			      :genes-reroll (make-nnet-offspring (organism-genes-reroll parent1) (organism-genes-reroll parent2))
-			      :genes-card (make-nnet-offspring (organism-genes-card parent1) (organism-genes-card parent2))))
-	     (print-organisms (orgs)
-	       (let* ((orgs-no (map 'list (lambda (x) x) (remove-if (lambda (x) (>= (organism-printpos x) 0)) orgs)))
-		      (orgs-yes (sort (remove-if (lambda (x) (< (organism-printpos x) 0)) orgs) #'< :key #'organism-printpos))
-		      (printpos-to-org (make-array num-organisms))
-		      (printed 0))
-		 (let ((last-org-yes-index (length orgs-yes))
-		       (next-org-yes-index 0))
-		   (loop for printpos below num-organisms do
-			(setf (aref printpos-to-org printpos)
-			      (if (and (< next-org-yes-index last-org-yes-index)
-				       (= (organism-printpos (aref orgs-yes next-org-yes-index)) printpos))
-				  (prog1 (aref orgs-yes next-org-yes-index) (incf next-org-yes-index))
-				  (prog1 (car orgs-no) (setf (organism-printpos (car orgs-no)) printpos) (pop orgs-no))))))
-		 (loop for printpos below num-organisms do
-		      (let ((org (aref printpos-to-org printpos)))
-			(print-organism org t) (princ "  " t)
-			;;(format t "~S  " org)
-			(incf printed)
-			(when (>= printed 3) (setf printed 0) (format t "~%"))))
-		 (format t "~&"))))
+			      :genes-card (make-nnet-offspring (organism-genes-card parent1) (organism-genes-card parent2)))))
       (let* ((orgs (let* ((orgs (make-array num-organisms :initial-contents (loop for i below num-organisms collect (make-new-organism)))))
 		     (copy-subseq orgs 0 initial-organisms 0 (min num-organisms (length initial-organisms)))
 		     orgs)))
@@ -674,14 +706,7 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 		       ;;(format t "player ~S won~%" (organism-id winner-org))
 		       (incf (organism-won winner-org))))))
 	    (format t "Average number of turns: ~F~%" (/ turns-sum num-games)))
-	  (flet ((organism-better (org1 org2)
-		   (let* ((p1 (organism-played org1)) (p2 (organism-played org2))
-			  (w1 (organism-won org1)) (w2 (organism-won org2))
-			  (r1 (/ w1 p1)) (r2 (/ w2 p2)))
-		     (if (= r1 r2)
-			 (> w1 w2)
-			 (> r1 r2)))))
-	    (setf orgs (sort orgs #'organism-better)))
+	  (setf orgs (sort orgs #'organism-better))
 	  (loop for i below num-organisms do
 	       (let ((org (aref orgs i)))
 		 (setf (organism-lastrank org) i)
@@ -702,4 +727,15 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
   (train +base-edition+ 12 4 10)
   (sb-sprof:stop-profiling)
   (sb-sprof:report))
+|#
+
+#|
+(let ((orgs (alexandria:copy-array *last-organisms*)))
+  (setf orgs (sort orgs #'organism-better))
+  (loop for org across orgs for i from 0 do
+       (format t "~3D. ~S~%" i (print-organism org nil)))
+  (let ((winners (loop for i below 100 collect
+		      (run-game +base-edition+ 12 (mapcar (lambda (x) (elt orgs x)) '(24 7 24 24))))))
+    (mapcar (lambda (player-num) (cons player-num (count player-num winners)))
+	    '(0 1 2 3))))
 |#
