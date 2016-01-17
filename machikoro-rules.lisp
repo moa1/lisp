@@ -38,12 +38,16 @@
 (defun copy-subseq (to-sequence to-start from-sequence from-start &optional (from-end (length from-sequence)))
   "Overwrite a subsequence of TO-SEQUENCE with a subsequence from FROM-SEQUENCE.
 FROM-START specifies the index where copying starts, FROM-END the index where copying ends, TO-START the index that is first copied to."
+  (declare (type sequence to-sequence from-sequence)
+	   (type (and unsigned-byte fixnum) to-start from-start from-end)
+	   (optimize (speed 3)))
   (loop
      for i from from-start below from-end
      for j from to-start do
-       (setf (aref to-sequence j) (aref from-sequence i)))
+       (setf (elt to-sequence j) (elt from-sequence i)))
   to-sequence)
 
+(declaim (inline sigmoid))
 (defun sigmoid (x)
   (declare (optimize (speed 3))
 	   (type single-float x))
@@ -467,20 +471,21 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 
 (defun eval-nnet (nnet input)
   "Inputting INPUT into the NNET, propagate forward until the last layer is reached. Return the last layer."
-  (declare (optimize (speed 3) (safety 0))
-	   (type (simple-array single-float 1) input))
+  (declare (optimize (speed 3) (safety 0) (debug 0) (compilation-speed 0) (space 0))
+	   (type (simple-array single-float 1) input)
+	   (inline sigmoid))
   (let* ((weights-list (nnet-weights-list nnet)))
-    (assert (= (length input) (array-dimension (car weights-list) 0)))
     (dolist (weights weights-list)
       (declare (type (simple-array single-float 2) weights))
+      (assert (= (length input) (array-dimension weights 0)))
       (let* ((input-size (array-dimension weights 0))
 	     (output-size (array-dimension weights 1))
 	     (output (make-array output-size :element-type 'single-float)))
 	(declare (type (simple-array single-float 1) output))
-	(loop for j from 0 below output-size do
+	(loop for j fixnum from 0 below output-size do
 	     (setf (aref output j)
 		   (sigmoid (do ((i 0 (1+ i)) (sum 0.0)) ((>= i input-size) sum)
-			      (declare (type single-float sum))
+			      (declare (type single-float sum) (type fixnum i))
 			      (incf sum (* (aref input i) (aref weights i j)))))))
 	(setf input output))))
   input)
@@ -608,19 +613,20 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 		  (return-from game (values player-number turn))))))))
 
 (defvar *next-organism-id* 0)
-(defvar *last-game-loop-organisms* nil "The organisms of the last game-loop")
+(defvar *last-organisms* nil "The organisms from the last call to #'TRAIN")
 
-(defun game-loop (edition stack-size num-players iterations &key (initial-organisms *last-game-loop-organisms*))
+(defun train (edition stack-size num-players iterations &key (initial-organisms *last-organisms*))
   (declare (optimize (debug 3)))
   (let* ((num-normal-cards (length (edition-normal-cards edition)))
 	 (num-cards (+ num-normal-cards (length (edition-large-cards edition))))
+	 ;; TODO: remove the duplication of INPUT-SIZE here and in #'MAKE-AI-PLAYER-FROM-ORGANISM.
 	 (input-size (+ 1 num-normal-cards (* num-players (+ 1 num-cards)))) ;bias + cards on the stack + player cards + player coins
 	 (num-organisms (* 10 num-players))
 	 (num-keep (ceiling (* num-organisms 0.7))))
     (labels ((make-new-organism ()
-	       (let* ((genes-dice12 (make-new-nnet (list input-size input-size 1)))
-		      (genes-reroll (make-new-nnet (list (+ input-size 2) input-size 1)))
-		      (genes-card (make-new-nnet (list input-size input-size num-cards))))
+	       (let* ((genes-dice12 (make-new-nnet (list input-size 10 1)))
+		      (genes-reroll (make-new-nnet (list (+ input-size 2) 10 1)))
+		      (genes-card (make-new-nnet (list input-size 10 num-cards))))
 		 (make-organism :id (incf *next-organism-id*) :genes-dice12 genes-dice12 :genes-reroll genes-reroll :genes-card genes-card)))
 	     (make-offspring (parent1 parent2)
 	       (make-organism :id (incf *next-organism-id*)
@@ -680,10 +686,20 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 	       (let ((org (aref orgs i)))
 		 (setf (organism-lastrank org) i)
 		 (incf (organism-ranksum org) i)))
-	  (setf *last-game-loop-organisms* orgs)
+	  (setf *last-organisms* orgs)
 	  (print-organisms orgs)
 	  (loop for i from num-keep below num-organisms do
 	       (let* ((parent1 (aref orgs (random num-keep)))
 		      (parent2 (aref orgs (random num-keep)))
 		      (offspring (make-offspring parent1 parent2)))
 		 (setf (aref orgs i) offspring))))))))
+
+#|
+(progn
+  (ql:quickload :sb-sprof)
+  (sb-sprof:reset)
+  (sb-sprof:start-profiling :mode :cpu)
+  (train +base-edition+ 12 4 10)
+  (sb-sprof:stop-profiling)
+  (sb-sprof:report))
+|#
