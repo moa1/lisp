@@ -342,8 +342,7 @@
                   :color :rot
                   :description "Hast du einen \"Hafen\" gebaut, erhältst du 3 Münzen von dem Mitspieler, der eine \"1\" gewürfelt hat."
                   :edition "?"))
-  (alexandria:define-constant +normal-cards+ c :test #'equalp)
-  (assert (null (find-if (lambda (x) (equal "" (normal-card-name x))) +normal-cards+))))
+  (alexandria:define-constant +normal-cards+ c :test #'equalp))
 
 (let* ((placeholder (make-large-card :symbol :large :cost 0))
        (c (make-array 7 :element-type 'large-card :initial-element placeholder)))
@@ -389,5 +388,4 @@
                  :cost 30
                  :description "Baust du in deinem Zug kein Unternehmen oder Großprojekt, erhältst du 10 Münzen aus der Bank."
                  :edition "?"))
-  (alexandria:define-constant +large-cards+ c :test #'equalp)
-  (assert (null (find-if (lambda (x) (equal "" (large-card-name x))) +large-cards+))))
+  (alexandria:define-constant +large-cards+ c :test #'equalp))

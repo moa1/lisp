@@ -61,8 +61,7 @@ s += '(let* ((placeholder (make-normal-card :dice \'(1) :cost 0 :activation :any
 s += '       (c (make-array %i :element-type \'normal-card :initial-element placeholder)))\n' % len(cards_normal)
 for i,c in enumerate(cards_normal):
 	s += ('  (setf (aref c %i)\n' % i)+c+")\n"
-s += '  (alexandria:define-constant +normal-cards+ c :test #\'equalp)\n'
-s += '  (assert (null (find-if (lambda (x) (equal "" (normal-card-name x))) +normal-cards+))))\n'
+s += '  (alexandria:define-constant +normal-cards+ c :test #\'equalp))\n'
 out.write(s)
 
 out.write("\n")
@@ -72,8 +71,7 @@ s += '(let* ((placeholder (make-large-card :symbol :large :cost 0))\n'
 s += '       (c (make-array %i :element-type \'large-card :initial-element placeholder)))\n' % len(cards_large)
 for i,c in enumerate(cards_large):
 	s += ('  (setf (aref c %i)\n' % i)+c+")\n"
-s += '  (alexandria:define-constant +large-cards+ c :test #\'equalp)\n'
-s += '  (assert (null (find-if (lambda (x) (equal "" (large-card-name x))) +large-cards+))))\n'
+s += '  (alexandria:define-constant +large-cards+ c :test #\'equalp))\n'
 out.write(s)
 
 out.close()
