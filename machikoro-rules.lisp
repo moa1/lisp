@@ -115,7 +115,9 @@ FROM-START specifies the index where copying starts, FROM-END the index where co
 	      (,sc (make-array (+ ,nc-length ,lc-length) :initial-element 0)))
 	 (flet ((,map-c-fn (,card)
 		  (declare (type card ,card))
-		  (let ((,number (or (position ,card ,nc :test #'equalp) (position ,card ,lc :test #'equalp))))
+		  (let ((,number (if (typep ,card 'normal-card)
+				     (position ,card ,nc :test #'equalp)
+				     (+ ,nc-length (position ,card ,lc :test #'equalp)))))
 		    (assert (integerp ,number) () "Cannot find ~S in the normal-cards or large-cards of edition ~S" ,card ,name)
 		    ,number))
 		(,map-n-fn (,number)
@@ -128,6 +130,8 @@ FROM-START specifies the index where copying starts, FROM-END the index where co
 	   (mapcar (lambda (,card) (assert (typep ,card 'large-card))) ,lc)
 	   (loop for ,card in ,starting-cards do
 		(incf (aref ,sc (,map-c-fn ,card))))
+	   (mapcar (lambda (,card) (assert (equal ,card (funcall #',map-n-fn (funcall #',map-c-fn ,card)))))
+		   (append ,nc ,lc))
 	   (defconstant ,name
 	     (make-edition :normal-cards ,nc
 			   :large-cards ,lc
@@ -406,7 +410,7 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 						(mapcar #'card-name cards)
 						(mapcar #'card-cost cards)
 						card-preferences)))
-		     (setf preferences-list (sort preferences-list #'> :key #'cadr))
+		     (setf preferences-list (sort preferences-list #'> :key #'third))
 		     (loop for (name price pref) in preferences-list do (format t " ~A(~S coins):~5,3F" name price pref))
 		     (format t "~%")))
 		 ;;(prind card-preferences)
@@ -527,7 +531,7 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
       (let* ((layer-sizes1 (nnet-get-layer-sizes nnet1))
 	     (layer-sizes2 (nnet-get-layer-sizes nnet2))
 	     (layer-sizes (append (list (car layer-sizes1))
-				  (mapcar (lambda (ls1 ls2) (+ (sample1 ls1 ls2) (if (= 0 (random 4)) (- (random 3) 1) 0)))
+				  (mapcar (lambda (ls1 ls2) (max 1 (+ (sample1 ls1 ls2) (if (= 0 (random 8)) (- (random 3) 1) 0))))
 					  (subseq layer-sizes1 1 (1- (length layer-sizes1)))
 					  (subseq layer-sizes2 1 (1- (length layer-sizes2))))
 				  (last layer-sizes1))))
