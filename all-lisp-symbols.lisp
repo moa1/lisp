@@ -1003,7 +1003,58 @@
 ;; TODO: investigate differences: (SET-DIFFERENCE *LISP-FUNCTIONS* *LISP-FUNCTIONS-HACK*). It seems like they are mostly due to generic functions.
 ;; Note: on SBCL 1.3.1.debian, (SET-DIFFERENCE *LISP-FUNCTIONS-HACK* *LISP-FUNCTIONS*) == NIL.
 
-;; TODO: split this into Lisp types, global variables, keywords, declaration specifiers, ...
+(defun lisp-functions-hack-types ()
+  "Return functions grouped by printed prefix"
+  (let* ((type-and-functions
+	  (mapcar (lambda (x)
+		    (let ((s (format nil "~S" (symbol-function x))))
+		      (cons (subseq s 0 (position #\Space s)) x)))
+		  *lisp-functions*))
+	 (types
+	  (remove-duplicates
+	   (mapcar #'car type-and-functions)
+	   :test #'string=)))
+    (mapcar (lambda (type)
+	      (remove-if (lambda (type1) (string/= type type1))
+			 type-and-functions :key #'car))
+	    types)))
+
+;; CL-USER> (lisp-implementation-version) ;SBCL
+;; something like "1.3.0"
+;; CL-USER> (lisp-implementation-version) ;CLISP
+;; something like "2.49"
+
+;; differences between SBCL and CLISP in *LISP-SPECIAL-OPERATORS*:
+;; CL-USER> (set-difference *lisp-special-operators* *lisp-special-operators-clisp*)
+;; NIL
+;; CL-USER> (set-difference *lisp-special-operators-clisp* *lisp-special-operators*)
+;; (WHEN UNLESS PSETQ PROG2 PROG1 OR MULTIPLE-VALUE-SETQ MULTIPLE-VALUE-LIST MULTIPLE-VALUE-BIND DECLARE COND CASE AND)
+
+;; differences between SBCL and CLISP in *LISP-MACROS*:
+;; CL-USER> (set-difference *lisp-macros* *lisp-macros-clisp*)
+;; (PPRINT-POP PPRINT-EXIT-IF-LIST-EXHAUSTED)
+;; CL-USER> (set-difference *lisp-macros-clisp* *lisp-macros*)
+;; (MAKE-METHOD LOCALLY DECLARE)
+
+;; differences between SBCL and CLISP in *LISP-COMPILER-MACRO-FUNCTIONS*:
+;; CL-USER> (set-difference *lisp-compiler-macro-functions* *lisp-compiler-macro-functions-clisp*)
+;; (APPEND FIND-CLASS FORMAT LAST MAKE-INSTANCE READ-FROM-STRING SLOT-BOUNDP SYMBOL-VALUE)
+;; CL-USER> (set-difference *lisp-compiler-macro-functions-clisp* *lisp-compiler-macro-functions*)
+;; NIL
+
+;; differences between SBCL and CLISP in *LISP-FUNCTIONS*:
+;; CL-USER> (set-difference *lisp-functions* *lisp-functions-clisp*)
+;; NIL
+;; CL-USER> (set-difference *lisp-functions-clisp* *lisp-functions*)
+;; NIL
+
+;; differences between SBCL and CLISP in *LISP-NOT-FBOUNDP*:
+;; CL-USER> (set-difference *lisp-not-fboundp* *lisp-not-fboundp-clisp*)
+;; (MAKE-METHOD DECLARE)
+;; CL-USER> (set-difference *lisp-not-fboundp-clisp* *lisp-not-fboundp*)
+;; (PPRINT-POP PPRINT-EXIT-IF-LIST-EXHAUSTED)
+
+;; TODO: split this (maybe not programmatically) into Lisp types, global variables, keywords, declaration specifiers, ...
 (defparameter *lisp-not-fboundp*
   (remove-if #'fboundp *lisp-symbols*)
   "Common Lisp symbols which are not fbound.")
