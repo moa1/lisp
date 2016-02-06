@@ -40,3 +40,11 @@
   (if (= 0 n)
       initial
       (golden-ratio (1- n) (1+ (/ 1 initial)))))
+
+(let ((bc 0))
+  (defun define-defstruct-foo (ac)
+    "Although CLHS on DEFSTRUCT says \"The consequences of redefining a defstruct structure are undefined.\", the following works in SBCL."
+    (defstruct (foo (:constructor make-foo (c)))
+      (a (incf ac))
+      (b (incf bc))
+      c)))
