@@ -1,4 +1,4 @@
-;; I don't understand why there are 5 fields of #'GET-SETF-EXPANSION. Maybe to be able to guarantee left-to-right evaluation in macros?
+;; The 5 fields of #'GET-SETF-EXPANSION are necessary to be able to implement PSETF. See "DEFINE-SETF-EXPANDER LASTGUY-example" below for a rationale of the 5th field, GETTER.
 ;; DEFINE-SETF-EXPANDER is the more general form of DEFSETF.
 
 (defmacro prind (&rest args)
@@ -76,11 +76,19 @@
 ;; (SB-KERNEL:%INSTANCE-SET (THE BLA #:OBJ) 3 #:NEW634)
 ;; (SB-KERNEL:%INSTANCE-REF (THE BLA #:OBJ) 3)
 
-
+(defun psetf-example ()
+  (let ((place '(bla-a x)))
+    (multiple-value-bind (temps vals stores setter getter)
+	(get-setf-expansion place nil)
+      (prind place ":" temps vals stores setter getter)))
+  (macroexpand '(psetf
+		 (bla-a x) (bla-b x)
+		 (bla-b x) (bla-a x))))
 
 ;; From CLHS Macro DEFINE-SETF-EXPANDER
 (defun lastguy (x) (car (last x)))
 
+;; The DEFINE-SETF-EXPANDER LASTGUY-example demonstrates why the fifth field, GETTER, is required in #'GET-SETF-EXPANSION and #'DEFINE-SETF-EXPANDER.
 (define-setf-expander lastguy (x &environment env)
   "Set the last element in a list to the given value."
   (multiple-value-bind (dummies vals newval setter getter)
@@ -114,3 +122,5 @@
 ;; (#:G612)
 ;; (PROGN (RPLACA (LAST (LASTGUY C)) #:G612) #:G612)
 ;; (LASTGUY (LASTGUY C))
+
+;; see in CLHS "Macro DEFINE-SETF-EXPANDER" the SETF expander for LDB for an example with multiple arguments.
