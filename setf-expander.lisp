@@ -124,3 +124,44 @@
 ;; (LASTGUY (LASTGUY C))
 
 ;; see in CLHS "Macro DEFINE-SETF-EXPANDER" the SETF expander for LDB for an example with multiple arguments.
+
+(defun flet1 ()
+  (let ((cons (cons 1 2)))
+    (setf (lastguy cons) 5)
+    cons))
+
+(defun flet2 ()
+  (values
+   (flet (((setf bla) (value cons)
+	    (setf (car cons) value)))
+     (let ((cons (list 1 2 3)))
+       (setf (bla cons) 5)
+       cons))
+   (flet (((setf lastguy) (value cons) ;This function is not used, because in CLHS on FLET it says "Also, within the scope of flet, global setf expander definitions of the function-name defined by flet do not apply. Note that this applies to (defsetf f ...), not (defmethod (setf f) ...)." In CLHS Glossary on "function name", it is defined as "A symbol or a list (setf symbol) that is the name of a function in that environment." So the function-name of (SETF LASTGUY) is (SETF LASTGUY), not LASTGUY, so in the form (SETF (LASTGUY CONS) 5) below the global setf expander definition of LASTGUY does apply. Note that if we name the function LASTGUY instead of (SETF LASTGUY), then the global setf expansion definition of LASTGUY does not apply, and (SETF LASTGUY) is undefined in the body of FLET. (As is demonstrated in #'FLET-ERROR1 below.)
+	    (setf (car cons) value)))
+     (let ((cons (list 1 2 3)))
+       (setf (lastguy cons) 5)
+       cons)))) ;returns (VALUES (5 2 3) (1 2 5))
+
+;; CLHS on FLET says "Also, within the scope of flet, global setf expander definitions of the function-name defined by flet do not apply. Note that this applies to (defsetf f ...), not (defmethod (setf f) ...).". Therefore the form (SETF (LASTGUY CONS) 5) refers to an unknown setf expansion.
+;; (defun flet-error1 ()
+;;   (flet ((lastguy (cons)
+;; 	   (car cons)))
+;;     (let ((cons (cons 1 2)))
+;;       (setf (lastguy cons) 5)
+;;       cons)))
+
+(defun flet3 ()
+  (let ((cons (list 1 2 3)))
+    (flet ((lastguy (cons)
+	     (setf (lastguy cons) 5))) ;global setf-expander defintions only do not apply in the body of FLET and LABELS, but they do apply in the definitions.
+      (lastguy cons)
+      cons))) ;returns (1 2 5)
+
+(defun macrolet1 ()
+  (let ((cons2 (list 8 9)))
+    (macrolet ((lastguy (cons)
+		 'cons2))
+      (let ((cons (cons 1 2)))
+	(setf (lastguy cons) 5) ;CLHS on MACROLET says "Within the body of macrolet, global setf expander definitions of the names defined by the macrolet do not apply; rather, setf expands the macro form and recursively process the resulting form.", thus (LASTGUY CONS) is expanded to CONS2.
+	(values cons cons2))))) ;returns (VALUES (1 . 2) 5)
