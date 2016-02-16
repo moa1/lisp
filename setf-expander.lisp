@@ -158,6 +158,29 @@
       (lastguy cons)
       cons))) ;returns (1 2 5)
 
+(defsetf bar baru)
+(defun bar (c)
+  (car c))
+(defun baru (c n)
+  (rplaca c n))
+(defsetf bar baru)
+(defun flet-error2 ()
+  (flet ((bar (c)
+	   (cdr c)))
+    (let ((x (cons 1 2)))
+      (setf (bar x) 5)))) ;execution must raise an error since (CLHS FLET) "within the scope of FLET, global setf expander definitions of the function-name defined by FLET do not apply. Note that this applies to (defsetf f ...), not (defmethod (setf f) ...)."
+
+(defmethod (setf bar2) (n c) ;note that N and C must be swapped compared to #'BARU.
+  ;;(format t "method (setf bar2)~%")
+  (rplaca c n))
+(defun flet4 ()
+  (let ((x (cons 1 2)))
+    (flet ((bar2 (c)
+	     (format t "bar2~%")
+	     (car c)))
+      (declare (ignorable #'bar2))
+      (setf (bar2 x) 5)))) ;returns (5 . 2)
+
 (defun macrolet1 ()
   (let ((cons2 (list 8 9)))
     (macrolet ((lastguy (cons)
