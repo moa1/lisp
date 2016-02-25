@@ -23,6 +23,7 @@
   (print-dissect "`(,@a b)"))
 (test1)
 
+#+sbcl
 (defun test-sbcl ()
   (labels ((dissect-comma (a)
 	     "A must be of type SB-IMPL::COMMA"
