@@ -1,3 +1,6 @@
+(load "/home/toni/quicklisp/setup.lisp")
+(ql:quickload :utils)
+
 ;; Package ITERATE produces code like this:
 ;; CL-USER> (macroexpand '(iter (for i from 1 to 10)
 ;; 			(collect i)))
@@ -67,5 +70,36 @@
 ;; (0.035200004 0.0036045944 30)
 ;; 256
 
-(defun compare2-collect-if-vs-cons (n)
-  (utils:timesec (lambda () (collect-using-if n))))
+(defun time-collect-using-if (n repeats)
+  (utils:timeit (repeats)
+    (collect-using-if n)))
+
+(defun time-collect-using-cons (n repeats)
+  (utils:timeit (repeats)
+    (collect-using-cons n)))
+
+;; On zweihorn:
+;; CL-USER> (time-collect-using-if 5 1000000)
+;; 0.885
+;; CL-USER> (time-collect-using-if 5 1000000)
+;; 0.945
+;; CL-USER> (time-collect-using-if 5 1000000)
+;; 0.885
+;; CL-USER> (time-collect-using-cons 5 1000000)
+;; 0.99
+;; CL-USER> (time-collect-using-cons 5 1000000)
+;; 1.008
+;; CL-USER> (time-collect-using-cons 5 1000000)
+;; 1.01
+;; CL-USER> (time-collect-using-if 5000 1000)
+;; 0.61
+;; CL-USER> (time-collect-using-if 5000 1000)
+;; 0.675
+;; CL-USER> (time-collect-using-if 5000 1000)
+;; 0.629
+;; CL-USER> (time-collect-using-cons 5000 1000)
+;; 0.592
+;; CL-USER> (time-collect-using-cons 5000 1000)
+;; 0.546
+;; CL-USER> (time-collect-using-cons 5000 1000)
+;; 0.611
