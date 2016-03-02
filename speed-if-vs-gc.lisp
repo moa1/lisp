@@ -103,3 +103,86 @@
 ;; 0.546
 ;; CL-USER> (time-collect-using-cons 5000 1000)
 ;; 0.611
+
+;; On eckplatz2:
+;; CL-USER> (time-collect-using-if 5 10000000)
+;; 0.741
+;; CL-USER> (time-collect-using-if 5 10000000)
+;; 0.741
+;; CL-USER> (time-collect-using-if 5 10000000)
+;; 0.743
+;; CL-USER> (time-collect-using-cons 5 10000000)
+;; 0.859
+;; CL-USER> (time-collect-using-cons 5 10000000)
+;; 0.856
+;; CL-USER> (time-collect-using-cons 5 10000000)
+;; 0.859
+;; CL-USER> (time-collect-using-if 5000 10000)
+;; 0.668
+;; CL-USER> (time-collect-using-if 5000 10000)
+;; 0.668
+;; CL-USER> (time-collect-using-if 5000 10000)
+;; 0.673
+;; CL-USER> (time-collect-using-cons 5000 10000)
+;; 0.673
+;; CL-USER> (time-collect-using-cons 5000 10000)
+;; 0.716
+;; CL-USER> (time-collect-using-cons 5000 10000)
+;; 0.64
+
+(defun measure-times ()
+  (defparameter *time-if-1*
+    (progn
+      (gc :full t)
+      (loop for i below 100 collect (time-collect-using-if 5 1000000))))
+  (defparameter *time-cons-1*
+    (progn
+      (gc :full t)
+      (loop for i below 100 collect (time-collect-using-cons 5 1000000))))
+  (defparameter *time-if-2*
+    (progn
+      (gc :full t)
+      (loop for i below 100 collect (time-collect-using-if 5000 1000))))
+  (defparameter *time-cons-2*
+    (progn
+      (gc :full t)
+      (loop for i below 100 collect (time-collect-using-cons 5000 1000)))))
+
+(defun all-vs-all (list1 list2)
+  "Compare all times in LIST1 with all times in LIST2.
+Return 1. what fraction of comparisons had a faster time in LIST1 than LIST2 and 2. in those cases, what the average time difference was between time2 and time1, and 3. in the other cases what the average time difference was between time2 and time1. (This means that the first average time difference is always positive or NIL, and the second average time difference is always negative or NIL.)"
+  (let ((count-faster-1 0)
+	(abstime-faster-1 0.0)
+	(abstime-faster-2 0.0))
+    ;; Compare all times in LIST1 with all times in LIST2 and count how often a time in LIST1 was faster than one in LIST2 and by what amount.
+    (loop for time1 in list1 do
+	 (loop for time2 in list2 do
+	      (if (< time1 time2)
+		  (progn
+		    (incf count-faster-1)
+		    (incf abstime-faster-1 (- time2 time1)))
+		  (progn
+		    (incf abstime-faster-2 (- time2 time1))))))
+    ;; Return 1. what fraction of comparisons had a faster time in LIST1 than LIST2 and 2. in those cases, what the average time difference was between time2 and time1, and 3. in the other cases what the average time difference was between time2 and time1. (This means that the first average time difference is always positive or NIL, and the second average time difference is always negative or NIL.)
+    (let* ((length1 (length list1))
+	   (length2 (length list2))
+	   (comparisons (* length1 length2))
+	   (count-faster-1-frac (float (/ count-faster-1 comparisons)))
+	   (count-faster-2 (- comparisons count-faster-1))
+	   (abstime-faster-1-avg (when (> count-faster-1 0)
+				   (float (/ abstime-faster-1 count-faster-1))))
+	   (abstime-faster-2-avg (when (> count-faster-2 0)
+				   (float (/ abstime-faster-2 count-faster-2)))))
+      (values count-faster-1-frac abstime-faster-1-avg abstime-faster-2-avg))))
+
+;; On eckplatz2:
+;; CL-USER> (measure-times)
+;; *TIME-CONS-2*
+;; CL-USER> (all-vs-all *time-if-1* *time-cons-1*)
+;; 1.0
+;; 0.011950243
+;; NIL
+;; CL-USER> (all-vs-all *time-if-2* *time-cons-2*)
+;; 0.3647
+;; 0.003707433
+;; -0.0025532895
