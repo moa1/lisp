@@ -5,10 +5,7 @@
 (ql:quickload :cffi)
 
 (defclass jit-state (standard-object)
-  ((ptr :initarg :ptr :reader jit-state-ptr))
-  (:documentation "jit-state-t object"))
-
-(defparameter *free-number* 0)
+  ((ptr :initarg :ptr :reader jit-state-ptr)))
 
 (defun allocate-and-use (bytes)
   (declare (optimize (speed 3) (debug 0)))
@@ -19,13 +16,26 @@
   #+null (cffi:foreign-alloc :char :initial-element 1 :count bytes))
 ;;(utils:timesec (lambda () (free-state-ptr (allocate-and-use 10000))))
 
+(defparameter *free-number* 0)
 (defun free-state-ptr (state-ptr)
   (incf *free-number*)
   (cffi:foreign-free state-ptr))
 
+(defparameter *new-state-number* 0)
+(defparameter *new-state-number-max-before-gc* 1000)
+(defparameter *new-state-number-full* 0)
+(defparameter *new-state-number-max-before-full-gc* 50000)
 (defun new-state (bytes)
-  "Create a new JIT state that is automatically garbage-collected.
-Note that you may NOT call #'FN-JIT-CLEAR-STATE or #'FN-JIT-DESTROY-STATE on PTR."
+  (incf *new-state-number*)
+  (incf *new-state-number-full*)
+  (when (and *new-state-number-max-before-gc* (> *new-state-number* *new-state-number-max-before-gc*))
+    (setf *new-state-number* 0)
+    (format t "Automatic garbage collection~%")
+    (tg:gc))
+  (when (and *new-state-number-max-before-full-gc* (> *new-state-number-full* *new-state-number-max-before-full-gc*))
+    (setf *new-state-number-full* 0)
+    (format t "Automatic full garbage collection~%")
+    (tg:gc :full t))
   (let* ((ptr (allocate-and-use bytes)) ;use the allocated region to make sure it is in physical memory.
 	 (new (make-instance 'jit-state :ptr ptr)))
     (tg:finalize new (lambda () (free-state-ptr ptr)))
@@ -33,7 +43,6 @@ Note that you may NOT call #'FN-JIT-CLEAR-STATE or #'FN-JIT-DESTROY-STATE on PTR
 
 ;; on pc1400, CLISP is killed when (test 300000 :rep 100 :explicit-gc nil) arrives at: "free has been called 856 times" "65/100 (allocating 33 times 300000 bytes)"
 ;; on pc1400, SBCL is killed for (test 2721 :rep 100 :explicit-gc nil), but (test 2720 :rep 100 :explicit-gc nil) works.
-
 
 (defun test (bytes &key (mb 10) (rep 10) (explicit-gc nil))
   "Allocate a number of chunks with BYTES length so that MB Megabytes are allocated in total. Repeat this REP times."
