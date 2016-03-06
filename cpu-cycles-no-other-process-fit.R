@@ -32,22 +32,33 @@ lines(x[0:970]/7*1.5e6,y[31:1000]*1500,col="red")
 
 # see cpu-cycles-no-other-process-fit.maxima, which tries to estimate the parameters of the gamma-distributed wait-time. For this program, we need the measured cumulative histogram of the gamma-part of the runtimes.
 
-h <- hist(a[a<2.2e7], breaks=20)
+#h <- hist(a[a<2.2e7], breaks=20)
+#h <- hist(a[a<0.9e4], breaks=100)
+computehist <- function(bins) {
+	modea <- median(a) #TODO: estimate the real mode
+	mina <- min(a)
+	breaks <- (0:(bins-1))*round((modea-mina)/(bins+2))+mina
+	cat("breaks",breaks,"\n")
+	h <- hist(a[a<breaks[bins]], breaks=breaks)
+	return(h)
+}
+h <- computehist(30)
 
 density <- h$counts/sum(h$counts)
+
+histdens <- density
+histcum <- cumsum(density)
+histbreaks <- as.integer(h$breaks)
+
 
 Rtomaxima <- function(list) {
 	l <- length(list)
 	s <- paste("[",paste(list[-l],",",sep="",collapse=" ")," ",list[l],"]",sep="")
 	return(s)
 }
-
 cat("histcum: ",Rtomaxima(density),";\n",sep="")
 cat("histbreaks: ",Rtomaxima(as.integer(h$breaks)),";\n",sep="")
 
-histdens <- density
-histcum <- cumsum(density)
-histbreaks <- as.integer(h$breaks)
 
 # the values estimated (by hand) of the above hist data:
 # i.e. k=5.175, theta=0.525 (i.e. rate=1/0.525), r=20322500, scale=0.85e-8
@@ -79,15 +90,18 @@ ferrorsum <- function(k,theta,r,scale) {
 	return(sum(sapply(1:length(histcum), ferror, k,theta,r,scale)))
 }
 
-plotpars <- function(k,theta,r,scale,yscale=1) {
+plotpars <- function(k,theta,r,scale) {
 	plot(histbreaks[-length(histbreaks)], histcum, col="black")
-	#x <- histbreaks[-length(histbreaks)]
+	x <- histbreaks[-length(histbreaks)]
 	y <- pgamma((x-r)*scale,k,1/theta)
 	lines(x,y,col="red")
 	# plot density
 	points(x, histdens/max(histdens), col="grey")
+#	points(x, histdens, col="grey")
 	ydens <- dgamma((x-r)*scale,k,1/theta)
 	lines(x,ydens/max(ydens),col="green")
+#	lines(x,ydens,col="green")
+	return(ferrorsum(k,theta,r,scale))
 }
 
 optimizepars <- function(k,theta,r,scale,maxchange=0.1) {
@@ -118,3 +132,7 @@ optimizepars <- function(k,theta,r,scale,maxchange=0.1) {
 # plotpars(5.175, 1.125, 20422500, 8.5e-6)
 # plotpars(7.534688, 1.810431, 20473988, 1.9888e-05)
 # plotpars(19.91387, 5.332401, 20099556, 0.0001002135)
+
+# plotpars(2, 0.5, min(a), 0.001)
+# optimizepars(16.77494, 0.07895269, 6654, 0.004225396)
+# optimizepars(27.51461, 0.4056076, 6301, 0.01423088)
