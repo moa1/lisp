@@ -1,5 +1,9 @@
 ;;;; Quadrat-Rätsel
 
+(load "~/quicklisp/setup.lisp")
+(ql:quickload :cl-heap)
+(ql:quickload :cl-cont)
+
 ;;Frage von Susi: gibt es eine Anordnung von Quadraten mit lauter verschiedenen Kantenlängen (bei dem das kleinste Quadrat Kantenlänge 2 hat, das größte Länge 50, und Kantenlängen dazwischen sind ganzzahlig. Es müssen aber nicht alle aufeinanderfolgenden (ganzzahligen) Kantenlängen vorhanden sein.), und die Kantenlänge des gesamten Quadrats ist 112.
 ;;Antwort von Susi: ja, und die minimale Kantenlänge des gesamten Quadrats, das aus der Summe von Quadraten mit kleinen Kantenlängen besteht, ist 112.
 ;; Dieses Skript soll die Anordnung der Zusammensetzung der Kanten des großen Quadrats berechnen.
@@ -132,10 +136,10 @@
 
 (defun square?-buggy (x)
   "Apparently this function does not return correct values, for example (square? 298149294) returns T, but python says that sqrt(298149294)==17267.000144784848."
-  (let* ((s (sqrt x))
+  (let* ((s (sqrt x)))
     (if (= (floor s) s)
 	t
-	nil))))
+	nil)))
 
 (defun square?-buggy2 (x)
   "Return T if X is a square of an integer number, NIL otherwise.
@@ -171,3 +175,99 @@ I'm not sure this is correct for all X. It probably doesn't work for large X, wh
 		 (print (list n (floor (sqrt s)))))
 	       (rec (1+ n) s))))
     (rec 1 0)))
+
+
+;;;; Samis Lösung des ursprünglichen Rätsels von Susi.
+
+(defstruct container
+  (lowest-gaps (make-instance 'cl-heap:fibonacci-heap) :type cl-heap:fibonacci-heap)
+  (sorted-gaps-in-y (make-hash-table)))
+
+(defun init-container (container-edge-length)
+  "Create a new container with edge length CONTAINER-EDGE-LENGTH."
+  (let ((container (make-container)))
+    ))
+(defun add-square (edge-length gap container)
+  "Add to CONTAINER the square with an edge length of EDGE-LENGTH and its leftmost lowest corner at x coordinate LEFT-LOWER-X and at y coordinate LEFT-LOWER-Y.
+Return CONTAINER and a pointer to the newly created gap on top of the square."
+  ;; remove GAP and create two gaps GAP1 and GAP2. (Only create gap2 if there is still space on the right in GAP.) Insert GAP1 and GAP2 into the heap and the hash-table. If there are adjacent gaps on the y-coordinate of GAP1, remove them and extend GAP1 on the left and/or right. Return GAP1.
+  ;;(cl-heap:delete-from-heap 
+  )
+(defun remove-square (edge-length  square container)
+  "Remove from CONTAINER the square with an edge length of EDGE-LENGTH and its leftmost lowest corner at x coordinate LEFT-LOWER-X and at y coordinate LEFT-LOWER-Y.
+Return CONTAINER."
+  ;; Find the gap on top of the square and remove it. Then split it into 3 gaps so that the middle gap covers the top of the square. Insert the left and right gap. Move the middle gap to the bottom of the square.
+  )
+(defun lowest-gap (container)
+  "Return the leftmost corner of the lowest gap in the container CONTAINER as the list (LEFT-LOWER-X LEFT-LOWER-Y WIDTH)."
+  (let ((gaps (cl-heap:peep-at-heap (container-lowest-gaps container))))
+    (car gaps)))
+
+(defun place ( rest-use rest-nouse)
+  "Samis Lösung geht so: Lege den nächsten Klotz immer in die unterste Zeile, in der etwas frei ist, und dort möglichst weit links. Lege dann den nächsten möglichen Klotz. Fange dabei immer mit dem größten Klotz an, und wenn dieser nicht passt, probiere den nächsten. Wenn alle Klötze gelegt sind, das Rätsel aber nicht beendet ist (weil im großen Quadrat noch freie Stellen sind), mache einen Backtrack: entferne den zuletzt gelegten Klotz und ersetze ihn durch den Nächsten. Wenn es keinen Nächsten mehr gibt (weil alle zum Backtracken geführt haben), entferne den zweitletzt gelegten Klotz und ersetze ihn durch den nächsten, etc."
+  (if (null rest-use)
+      'no-solution
+      ()))
+
+;;;; Sami's Lösung mit seiner Datenstruktur
+;; ist noch nicht fertig wenn ich mich richtig erinnere, TODO: fertigmachen
+
+(defun place-squares (bigl smalls)
+  (setf smalls (sort (copy-seq smalls) #'>))
+  (print (list "smalls" smalls))
+  (let* ((nsmalls (length smalls)))
+    (labels ((insert (small-seq mini minh nparts partsw partsh)
+	       (let* ((partsw1 (make-array bigl))
+		      (partsh1 (make-array bigl))
+		      (i 0))
+		 (loop for i below mini do (setf (aref partsw1 i) (aref partsw i)))
+		 (loop for i from mini for small in small-seq do
+		      (setf (aref partsw1 i) small)
+		      (setf (aref partsh1 i) (+ minh small)))
+		 (loop for i from (+ mini (length small-seq)) for j from (1+ mini) below nparts do
+		      (setf (aref partsw1 i) (aref partsw j))
+		      (setf (aref partsh1 i) (aref partsh j)))
+		 ;; TODO: compress partsw1, partsh1
+		 (values partsw1 partsh1)))
+	     (try (smalls nparts partsw partsh)
+	       (loop until (null smalls) do
+		    (labels ((valley ()
+			       (let ((minh bigl)
+				     (mini -1))
+				 (do* ((i 0 (1+ i))
+				       (h (aref partsh i) (aref partsh i)))
+				      ((>= i nparts))
+				   (print (list i h))
+				   (when (< h minh)
+				     (setf minh h)
+				     (setf mini i)))
+				 (values mini minh)))
+			     (combinations (smalls w)
+			       "Find a combination of lengths in SMALLS so that their sum equals W."
+			       (cl-cont:with-call/cc
+				 (labels ((rec (smalls result resultw)
+					    ;;(print (list w smalls result resultw))
+					    (cond
+					      ((> resultw w) nil)
+					      ((= resultw w) (cl-cont:call/cc (lambda (k) (values result k))))
+					      (t (loop for rest-smalls on smalls for s = (car rest-smalls) do
+						      (rec (cdr rest-smalls) (cons s result) (+ resultw s)))))))
+				   (rec smalls nil 0)))))
+		      (multiple-value-bind (mini minh) (valley)
+			(let* ((minw (aref partsw mini)))
+			  (multiple-value-bind (comb next-combination-function) (combinations smalls minw)
+			    (loop while (not (null comb)) do
+				 (print (list "minw" minw "comb" comb))
+			       ;;(multiple-value-bind (partsw1 partsh1) (insert comb mini minh nparts partsw partsh)
+				 (setf comb (funcall next-combination-function))
+				 ))
+			  (return-from place-squares)))))))
+      (let ((nparts 1)
+	    (partsw (make-array bigl :initial-element bigl))
+	    (partsh (make-array bigl :initial-element 0)))
+	(setf (aref partsw 0) (car smalls)
+	      (aref partsw 1) (- bigl (car smalls))
+	      (aref partsh 0) (car smalls)
+	      (aref partsh 1) 0
+	      nparts 2)
+	(try smalls nparts partsw partsh)))))
