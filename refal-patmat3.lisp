@@ -1,6 +1,8 @@
 (load "~/quicklisp/setup.lisp")
-(ql:quickload :dlist2)
-(use-package :dlist2)
+(ql:quickload :dlist3)
+(use-package :dlist3)
+
+;; TODO: don't use package dlist, write a dllist package, which is like dlist, but the semantics is like this: (dlist-first d) points to the left-most element, and (dlist-last d) points to the element after the right-most element. this makes checking if we passed an empty dlist easier, because in that case (dlist-first d) == (dlist-last d). (Another advantge is that we don't need to re-use NIL as the empty DLIST. We will always have at least one element per DLIST.) However, there is a downside to simpler code: storage of a dlist with n elements takes up (1+ n) elements.
 
 ;; necessary here, b/c otherwise compilation of refal-eval fails.
 (defun make-counter (&optional (counter 0))
@@ -13,7 +15,7 @@
 	(values (lambda () (decf c))
 		(lambda (counter-delta) (incf c counter-delta))))))
 
-;;;; Refal pattern matching
+;; Refal pattern matching
 
 (defun make-svar ()
   (gensym "S."))
@@ -94,8 +96,9 @@ Return the unmodified CLOSED if VAR is bound to a value equal to VAL (under equa
 	      closed
 	      (throw 'patmat 'fail))))))
 
+;;;; Pattern matching
+
 (defun map-open-dcons-list-to-dlist (open)
-  "Used for debugging."
   (labels ((rec (open result)
 	     (if (null open)
 		 (reverse result)
@@ -161,7 +164,7 @@ This function returns NIL as the open variables, because there can't be open var
 			  ((evar) (if (eq (next pat-l-next) pat-r)
 				      ;; there is no more unbound variable after the variable named by PAT, therefore bind PAT to the compound or term determined by EXP-L and EXP-R.
 				      (values
-				       ;; don't copy when binding e-variables to the EXPression, just (make-instance 'dlist :left exp-l :right exp-r) or something like that. only copy when concatenating the variables to the result dlist.
+				       ;; TODO: don't copy when binding e-variables to the EXPression, just (make-instance 'dlist :left exp-l :right exp-r) or something like that. only copy when concatenating the variables to the result dlist.
 				       (bind-closed pat (make-instance 'dlist :first exp-l :last exp-r) closed)
 				       open-l)
 				      (close-r exp-l exp-r pat-l pat-r closed open-l nil)))
@@ -377,8 +380,6 @@ EXP: expression, PAT: pattern, CLOSED: ((a . value) (b . 1))."
 ;; In refal/html/ch_1.3.html it says "A t-variable takes any term as its value (recall that a term is either a symbol or an expression in structure brackets). An e-variable can take any expression as its value.", so I think t-variables differ from e-variables in that they may not bind NIL, but e-variables may. EDIT: I am now pretty sure that t-variables also may not bind to sublists (t-variables bind only if the sublist is in brackets), only e-variables may. Exercises 1.3(b) and (c) support that: "Write patterns that can be described in words as follows: [(a) ...] (b) an expression which contains at least two identical terms on the top level of structure; (c) a non-empty expression." and their answers (file refal/html/answers.html) are: "(b) e.1 t.X e.2 t.X e.3 ; (c) t.1 e.2 or e.1 t.2".
 ;; Chapter 1.3, exercise 1.4(b) says: "Find the results of the following matchings: (a) 'abbab' : e.1 t.X t.X e.2 (b) 'ab(b)ab' : e.1 t.X t.X e.2" and their answers are: "(a) t.X becomes b ; (b) failure;", so I think that t-variables may be either a symbol/number/character or an expression in structure brackets (meaning described as a regexp: "." OR "\(.*\)").
 
-
-;;;; Parsing of REFAL programs
 
 ;; TODO (or rather, reminder) when implementing the rest of refal-patmat.lisp: only copy e-variables when concatenating the variables to the result dlist. (And only copy an e-variable if it occurs more than once; if it occurs only once, we can probably just splice it into the result dlist.)
 
@@ -633,8 +634,6 @@ S	  pprogram))
 
 (assert (not (null (parse-program* *prog-trans-ital-engl*))))
 
-;;;; Evaluation of parsed REFAL programs
-
 (defun default-no-function (f n a)
   (declare (ignore f n a))
   (throw 'refal-eval-error 'unknown-function-error))
@@ -659,11 +658,8 @@ S	  pprogram))
 ;; Each control-stack entry consists of the following: view-field, insertion/continue position of this view, variable bindings for this view field, function to be called when the current view-field is completely evaluated (or NIL if it is a sub-list).
 ;; (defun EVAL-VIEW (current-view current-view-next-position control-stack &key f b c no-op) ...)
 
-(defparameter *bla* 0)
-
 (defun eval-call-builtin (n a)
   (case n
-    ((bla) (print (incf *bla*)) (dlist))
     ((+) (if (numeric-list-p a)
 	     (make-consts :list (dlist (apply #'+ a)))
 	     (throw 'refal-eval-error 'numeric-error)))
@@ -705,15 +701,7 @@ S	  pprogram))
 	  ;;(print (list "could not recognize function: f" f "n" n "a" a))
 	  (throw 'refal-eval-error 'recognition-error)))))
 
-;; TODO: instead of COPY-DLIST-ing the DLISTs to be inserted (using function DLIST-NCONC), I could also store adjacent DLISTs as leaves of a tree, so that when I want to insert a new DLIST, I would wrap the DLIST in a TREE-object, and insert it into the right position in the tree. (The tree needs to have an order defined on its leaves). The list which is to be represented by this tree would be defined implicitly by the depth-first traversal of the tree. To be able to access the NEXT item in the tree, I would have to define an iterator on that data structure, which consists of the currently processed DLIST, and a stack of parent-DLISTs (and probably also nodes in the tree leading to the currently processed DLIST), that the currently processed DLIST is part of. Besides converting function EVAL-VIEW, I would have to convert function PATMAT and EVAL-CALL-BUILTIN and EVAL-CALL-USERDEF to use this data structure. This should have the speed advantage that when inserting an e-variable into an existing view field, I would not have to copy the e-variable, but could quickly store a pointer to e-variable's content in the tree. The assignment of e-variables during pattern matching would have to be done by copying. (Iterate over the atoms in the depth-first representation of the tree, delimited by the left and the right pointer and cons up a new dlist.)
-;; TODO: implement tail-recursion of a function
 (defun eval-view (current-view left-position control-stack functions bindings c no-op)
-  (declare (type dlist current-view)
-	   (type dcons left-position)
-	   (type list control-stack bindings)
-	   (type fixnum c))
-  (when (<= c 0)
-    (return-from eval-view (values 'counter-error current-view left-position control-stack functions bindings c no-op)))
   (let ((head-dcons (next left-position)))
     ;;(print (list "eval-view current-view" current-view "head-dcons" head-dcons "head" (data head-dcons) "control-stack" control-stack))
     ;;(print (list "eval-view current-view" current-view "head" (data head-dcons) "control-stack" control-stack))
@@ -722,24 +710,21 @@ S	  pprogram))
     ;;(print (list "eval-view current-view" current-view "head-dcons" head-dcons))
     (if (eq head-dcons (dlist-last current-view))
 	(if (null control-stack)
-	    (values 'halt current-view)
+	    current-view
 	    (destructuring-bind (function view-1 left-position-1 bindings-1)
 		(car control-stack)
 	      ;;(print (list "view-1" view-1 "left-position-1" left-position-1))
-	      ;;(print (list "function" function "dlist-length" (dlist-length current-view) "control-stack-length" (length control-stack)))
 	      (if (null function)
-		  ;; when the function name is nil, it means that CURRENT-VIEW is a sub-list that we have just evaluated.
 		  ;; the sub-list in view-1 has already been replaced with its evaluation because we modify the current-view in-place.
-		  (eval-view view-1 left-position-1 (cdr control-stack) functions bindings-1 (1- c) no-op)
+		  (eval-view view-1 left-position-1 (cdr control-stack) functions bindings-1 c no-op)
 		  ;; now current-view holds the evaluated arguments to function FUNCTION
 		  (multiple-value-bind (result bindings-f)
-		      (eval-call-userdef functions function current-view) ;TODO: the counter C should really be decremented by function PATMAT, but for that, I need to make PATMAT interruptible and restartable (like EVAL-VIEW itself is already).
+		      (eval-call-userdef functions function current-view)
 		    (if (eq result 'unknown-function-error)
 			(progn
 			  ;; TODO: maybe update eval-call-builtin to accept dlists if it's not too complicated, but actually I think it is too complicated.
 			  (setf result (eval-call-builtin function (dlist->list current-view :deep t)))
 			  (when (eq result 'unknown-function-error)
-			    ;; TODO: instead of throwing an error here, call the (user-defined) function NO-OP, and store its result in RESULT.
 			    (throw 'refal-eval-error 'unknown-function-error))
 			  (setf result (dlist result)))
 			;; result needs to be deep copied because it is the unevaluated template and could contain sub-lists or function calls.
@@ -753,10 +738,10 @@ S	  pprogram))
 		      (dlist-nconc (make-instance 'dlist :first (dlist-first view-1) :last left-position-1)
 				   result
 				   (make-instance 'dlist :first left-position-1 :last (dlist-last view-1)))
-		      ;; the following re-definition of result is necessary, b/c the original dconses (dlist-first result) and (dlist-last result) are not in the new dlist of view-1 (they were thrown away by dlist-nconc).
+		      ;; the following re-definition of result is necessary, b/c the original (dlist-first result) and (dlist-last result) are not in the new dlist of view-1 (they were thrown away by dlist-nconc).
 		      (let ((result (if result-empty? (dlist) (make-instance 'dlist :first (prev result-old-first) :last (next result-old-last)))))
 			;;(print (list "result" result))
-			(eval-view result (dlist-first result) (cons (list nil view-1 left-position-1 bindings-1) (cdr control-stack)) functions bindings-f (1- c) no-op)))))))
+			(eval-view result (dlist-first result) (cons (list nil view-1 left-position-1 bindings-1) (cdr control-stack)) functions bindings-f c no-op)))))))
 	(let ((head (data head-dcons)))
 	  (etypecase head
 	    (consts
@@ -766,20 +751,20 @@ S	  pprogram))
 			    consts-list
 			    (make-instance 'dlist :first head-dcons :last (dlist-last current-view)))
 	       ;;(print (list "consts-list" consts-list))
-	       (eval-view current-view (prev (dlist-last consts-list)) control-stack functions bindings (1- c) no-op)))
+	       (eval-view current-view (prev (dlist-last consts-list)) control-stack functions bindings c no-op)))
 	    (s-variable
 	     (let ((binding (assoc head bindings)))
 	       (when (null binding)
 		 (throw 'refal-eval-error 'unknown-variable))
 	       (setf (data head-dcons) (cdr binding))
-	       (eval-view current-view head-dcons control-stack functions bindings (1- c) no-op)))
+	       (eval-view current-view head-dcons control-stack functions bindings c no-op)))
 	    (t-variable
 	     (let ((binding (assoc head bindings)))
 	       (when (null binding)
 		 (throw 'refal-eval-error 'unknown-variable))
 	       ;; the binding doesn't need to be deep-copied because multiple insertions of the same variable contain only data, no code that needs to be evaluated further.
 	       (setf (data head-dcons) (let ((binding (cdr binding))) (if (dlistp binding) (copy-dlist binding) binding)))
-	       (eval-view current-view head-dcons control-stack functions bindings (1- c) no-op)))
+	       (eval-view current-view head-dcons control-stack functions bindings c no-op)))
 	    (e-variable
 	     (let ((binding (assoc head bindings)))
 	       (when (null binding)
@@ -789,50 +774,32 @@ S	  pprogram))
 		 (dlist-nconc (make-instance 'dlist :first (dlist-first current-view) :last head-dcons)
 			      binding
 			      (make-instance 'dlist :first head-dcons :last (dlist-last current-view)))
-		 (eval-view current-view (prev (dlist-last binding)) control-stack functions bindings (1- c) no-op))))
+		 (eval-view current-view (prev (dlist-last binding)) control-stack functions bindings c no-op))))
 	    (dlist
-	     (eval-view head (dlist-first head) (cons (list nil current-view head-dcons bindings) control-stack) functions bindings (1- c) no-op))
+	     (eval-view head (dlist-first head) (cons (list nil current-view head-dcons bindings) control-stack) functions bindings c no-op))
 	    (call
 	     ;;(print (list "call name" (call-name head) "args" (call-args head)))
 	     ;; arguments needs to be a deep copy because (call-args head) is the unevaluated template and can contain unevaluated sub-lists and function calls.
 	     (let ((arguments (copy-dlist (call-args head) :deep-copy t)))
-	       (eval-view arguments (dlist-first arguments) (cons (list (call-name head) current-view head-dcons bindings) control-stack) functions bindings (1- c) no-op))))))))
+	       (eval-view arguments (dlist-first arguments) (cons (list (call-name head) current-view head-dcons bindings) control-stack) functions bindings c no-op))))))))
 
 (defun refal-eval (program view &key (c (make-counter)) (no-op #'default-no-function) view-function)
   "Input: a not yet parsed refal PROGRAM and a VIEW field.
 Output: the result, when applying the VIEW field to the function named VIEW-FUNCTION (default: first function) in PROGRAM."
-#|
-  (with-open-file (stream "/run/shm/refal-eval.txt" :direction :output :if-exists :supersede :if-does-not-exist :create)
-    (format stream "(program ~A) (view ~A) (c ~A) (view-function ~A)~%" program view c view-function))
-|#
   (let ((pprogram (parse-program* program)))
     (if (or (null pprogram) (not (listp view)))
 	'parsing-error
 	(catch 'refal-eval-error
 	  (when (null view-function)
 	    (setf view-function (caar program)))
-	  (let* ((view (dlist (make-call :name view-function :args (parse-result view))))
-		 (status nil)
-		 (current-view view)
-		 (left-position (dlist-first view))
-		 (control-stack nil)
-		 (functions pprogram)
-		 (bindings nil))
-	    (loop until (eq status 'halt) do
-		 (let ((c-value (funcall c)))
-		   (when (<= c-value 0)
-		     (throw 'refal-eval-error 'counter-error))
-		   (multiple-value-bind (status2 current-view2 left-position2 control-stack2 functions2 bindings2 c2 no-op2)
-		       (eval-view current-view left-position control-stack functions bindings 1 no-op)
-		     (declare (ignore c2 no-op2))
-		     (setf status status2 current-view current-view2 left-position left-position2 control-stack control-stack2 functions functions2 bindings bindings2))))
-	    (dlist->list current-view :deep t))))))
+	  (let ((view (dlist (make-call :name view-function :args (parse-result view)))))
+	    (dlist->list (eval-view view (dlist-first view) nil pprogram nil c no-op) :deep t))))))
 
 (let ((view (list->dlist '(s.1 t.1 e.1))))
-  (assert (dlist= (nth-value 1 (eval-view view (dlist-first view) nil nil `((s.1 . 1) (t.1 . 2) (e.1 . ,(dlist 'a 'b 'c))) most-positive-fixnum nil))
+  (assert (dlist= (eval-view view (dlist-first view) nil nil `((s.1 . 1) (t.1 . 2) (e.1 . ,(dlist 'a 'b 'c))) 0 nil)
 		  (list->dlist '(1 2 a b c)))))
 (let ((view (list->dlist '(s.1 (t.1) e.1))))
-  (assert (dlist= (nth-value 1 (eval-view view (dlist-first view) nil nil `((s.1 . 1) (t.1 . 2) (e.1 . ,(dlist 'a 'b 'c))) most-positive-fixnum nil))
+  (assert (dlist= (eval-view view (dlist-first view) nil nil `((s.1 . 1) (t.1 . 2) (e.1 . ,(dlist 'a 'b 'c))) 0 nil)
 		  (list->dlist '(1 (2) a b c)))))
 (assert (equal (refal-eval '((f1 ((s.1) )))
 			     '(2.5))
@@ -927,38 +894,313 @@ Output: the result, when applying the VIEW field to the function named VIEW-FUNC
 	 (result (refal-eval-replace program-walker view)))
     (assert (equal result view))))
 
+(defun specific-random-state ()
+  (let ((random-state #+sbcl '#S(RANDOM-STATE :STATE #.(MAKE-ARRAY 627 :ELEMENT-TYPE '(UNSIGNED-BYTE 32)
+                                     :INITIAL-CONTENTS
+                                     '(0 2567483615 459 342356071 3531489510
+                                       2331605190 910510831 3852095994
+                                       4202880162 1527001109 1423137360
+                                       1497663022 11727107 2966933401
+                                       2813248289 4231446232 1298940309
+                                       2003327448 3410065843 338997485
+                                       2581164106 1825993724 2896753516
+                                       3280497728 3610815070 624026016
+                                       1451757706 1348391397 3106175362
+                                       3584823840 3051798390 2947295603
+                                       1664100055 2803849467 3920647366
+                                       1693707886 490731719 302461619
+                                       3737999297 1394839664 4228713627
+                                       1697243927 1958593516 4282874565
+                                       3969917809 3518298967 3417696408
+                                       3041927890 462301860 569657629
+                                       1158413058 4037726451 2655892867
+                                       2228663279 3536157597 614999141
+                                       247219327 639389729 379663007 1237710599
+                                       1413421193 266283264 2973365297
+                                       3441228628 3525041971 3188687859
+                                       421587397 3271095977 613947257
+                                       2049087192 3671195113 893763367
+                                       1301529008 535423016 59024731 3388416732
+                                       3097531775 1656668087 322602302
+                                       2185327525 2798166193 590435172
+                                       2623992906 3555566275 3891919751
+                                       764963539 356565127 433005935 2845910488
+                                       347746604 2313044898 3731380088
+                                       3376022583 3614653152 1884299836
+                                       3623125032 118489741 4035206462
+                                       3932959384 3023718315 3364191260
+                                       2245140121 1333071173 2054927196
+                                       2207128959 446854282 2168099879
+                                       2900458807 1724201022 3793771891
+                                       2617694133 301813571 313726463
+                                       1290141575 4181567244 2039846765
+                                       2061670507 2170371104 4231698981
+                                       1967418915 1517728564 713436507
+                                       553233325 3175121003 1755935476
+                                       3856957552 2720647366 3396466985
+                                       674662271 1807143535 2143932277
+                                       3119863456 594645515 517231231
+                                       3333810332 1583738791 529013062
+                                       425407806 361673727 3861545406
+                                       3227055049 793042916 2053590196
+                                       2954318366 4117060584 804799153
+                                       1243136012 3369015107 2108839289
+                                       2371037911 929795473 60793658 3478557054
+                                       2740070287 2305359292 2338163338
+                                       1195787871 2801488327 384611551
+                                       1887103223 1702440399 348020356
+                                       2854693453 564463937 2145972519
+                                       459107265 366630108 3506293016
+                                       2018002996 403046825 795528816
+                                       2370859746 2419827044 1147694397
+                                       2016579573 3224051923 1883031447
+                                       745200135 2298517560 385272032
+                                       2172153055 69489288 2629291163
+                                       1129222570 965659200 1155796049
+                                       3928619149 1659190775 1537083257
+                                       3471671777 2174138364 3051061010
+                                       2040561856 313465648 599774017
+                                       1753703409 933511560 466554574 267173538
+                                       2185195631 4094730659 2833774394
+                                       3279791375 910811291 1474602565
+                                       4233456620 1140655447 3660760279
+                                       1187407560 4288222814 455840018
+                                       719310903 973071888 4145529182
+                                       1242025915 2772660878 416732638
+                                       3036790309 4214532125 2080798503
+                                       1198620460 1304193484 3133550204
+                                       129298334 2251674348 3943715771
+                                       257939585 3374280140 1254037535
+                                       3658834551 3130342464 69922196
+                                       1934298010 3304439724 3091871582
+                                       3686720449 3262141780 3897999143
+                                       1964694553 2101821337 1486173869
+                                       1068753904 4094895082 2262227164
+                                       1615595154 2676899399 2121789744
+                                       2304962548 2102964776 2944534556
+                                       1995741696 61974444 4085785442
+                                       2192937711 2599295070 3288774604
+                                       1777259253 4031098415 921014748
+                                       171508675 1237852088 1239168217
+                                       820917217 3264664027 222950123
+                                       2875259163 3667518194 2441152677
+                                       344178408 1559478973 4293254217
+                                       743782196 37681975 1291102430 2002818375
+                                       747389544 3275566238 3956971939
+                                       1981820012 689082530 2304993907
+                                       4220370413 287079016 552850515
+                                       1776970372 290473974 382589397
+                                       1415569603 3966303834 1504900275
+                                       2792480605 2510281068 3419609447
+                                       3073140306 2107290405 4229297061
+                                       316094428 2310476804 1920400586
+                                       757356561 4225625100 2882513183
+                                       2599621865 3907351779 205069488
+                                       2409035038 2925016874 266395043
+                                       1773908431 3904118629 1147734296
+                                       300375969 2286717561 3564248522
+                                       3495498719 1023803051 945456547
+                                       1264364535 3231608563 1378655916
+                                       3846558795 1556598467 926540887
+                                       3410108984 929408372 706372534
+                                       3403142580 1115994939 986595585
+                                       2007565629 543512255 2418473068
+                                       3825463277 1531869277 1642414192
+                                       2046312211 1296515696 1562742994
+                                       1848834470 2759026753 2013813965
+                                       329384848 3158010380 619680419
+                                       2462142382 3540074558 4062930309
+                                       3405007752 3693995437 3070022794
+                                       3735994777 2297555538 3988710477
+                                       3511088731 1301887930 4095215042
+                                       4023294730 3614360577 1182979211
+                                       260454173 1325514449 2341585004
+                                       1801572076 60195649 3306042421
+                                       3701314928 1650537004 696393296
+                                       1227754209 3614308529 155852724
+                                       3303884471 4269552420 4220679938
+                                       441734492 3577448193 2149516342
+                                       3816976454 3985069136 1570316162
+                                       1610904123 1956549018 3883864033
+                                       2714214744 4117701521 1418508986
+                                       2927279455 2682121715 1627258994
+                                       2402725982 3068749684 2112476842
+                                       2664548074 3923891900 1977236077
+                                       630152456 3018667797 1598781580
+                                       159075906 1898305707 271055881
+                                       3229247773 2454673633 1407583344
+                                       1737592538 1902696259 1845898862
+                                       482330873 2264877980 637351596
+                                       1901132154 1319007120 2333267171
+                                       998505585 4282560935 504523050
+                                       1641739403 4108123736 3556981237
+                                       2710898870 4051560986 2490719873
+                                       414464851 261440870 3208044958
+                                       1128224283 1958804751 2094740042
+                                       1109676315 1467347069 2902731556
+                                       1348457958 443060129 3756421876
+                                       3112831914 2464736583 678306321
+                                       340863420 1839855771 2673489230
+                                       3765511803 2161005337 1819096756
+                                       1705175721 321692852 3257776644
+                                       634810272 1395115670 1379581059
+                                       3161857328 205644762 2885167874
+                                       3839758006 3015134811 3459946759
+                                       2936545016 1783273096 3482452452
+                                       546156936 1585022986 3871559550 50866935
+                                       2730304177 1560369716 1441276093
+                                       1886176732 4245509335 1390484423
+                                       1498994828 2181637891 176332687
+                                       1274570902 3888845820 3198841227
+                                       3275199641 3184359130 3372879515
+                                       2603643576 1641135947 2262810253
+                                       827744497 1920085539 192673116
+                                       1748874440 2861548757 2707952706
+                                       1884519319 694598487 414938621 477524198
+                                       2533639185 4016935996 3764406212
+                                       3141263681 345262425 3019663839
+                                       2819188486 1290322549 328227962
+                                       4063561793 2029599851 2005959022
+                                       2008965792 1714094596 17719375
+                                       2798977865 3670851562 2490910722
+                                       3791128697 1334022894 107859597
+                                       1675825105 3457762305 790710923
+                                       747003369 3631307388 381899322
+                                       1017711874 368026066 2304894888
+                                       3966238897 3911224296 3877365412
+                                       21809795 3635055734 1777446963
+                                       1236379298 2404581663 137975924
+                                       665504771 1569629486 3770187407
+                                       2514770236 1624498690 1383422909
+                                       3191706511 2725669271 645935718
+                                       3258319282 716798710 2161085541
+                                       2240588074 478683702 2411706703
+                                       124483497 3841702244 3152473350
+                                       3639772494 372343803 4023035020
+                                       1059942317 1833908388 828949747
+                                       1721658905 1979373920 3157575587
+                                       203666631 471175682 564680895 2808502943
+                                       2751530411 4251805242 1613180502
+                                       3310240096 3343523010 3717756947
+                                       2680159318 1709542511 3053045519
+                                       4181219402 1478032163 3212255056
+                                       907550976 1623460999 510898614
+                                       2315417921 1948965158 1388117905
+                                       3506145128 574100255 1132395905
+                                       4107155016 1274514825 4035043485
+                                       3436711560 573429070 2240963303
+                                       4241093724 2441281561 3646049126
+                                       244262740 639914648 667065410 2975092258
+                                       1941802615 3713231663 3321212043
+                                       1863008084 3710651319 485908780
+                                       572464902 1317007614 1100184214
+                                       3232057334 1969145531 4002617049
+                                       2246793623 803033061 1524204879
+                                       3380853201 2955332832 3374886794
+                                       3655724309 3696319408 4291537153
+                                       541650108 3019281367 2835527281
+                                       1339202218 4096643635 806422991
+                                       2552384368 1710065464 2756887688
+                                       1140454553 3295426802 3793653831)))
+		      #+clisp #S(RANDOM-STATE
+   #*0101001010001110101111101000100101000100001011100110110111000110)))
+    (make-random-state random-state)))
 
+;;;; Implementation of a better sxhash for lists
+;; this is copied from SBCL
+;; originally this was "(ftype (sfunction". what's an sfunction? 
+(declaim (ftype (function ((and fixnum unsigned-byte)
+			   (and fixnum unsigned-byte))
+			  (and fixnum unsigned-byte))
+                mix))
+(declaim (inline mix))
+(defun mix (x y)
+  (declare (optimize (speed 3) (safety 0)))
+  (declare (type (and fixnum unsigned-byte) x y))
+  (let* ((xy (+ (* x 3) y)))
+    (logand most-positive-fixnum
+            (logxor 441516657
+                    xy
+                    (ash xy -5)))))
 
+;;(declaim (inline lsxhash))
+(defun lsxhash (x)
+  "Return a hash value for value X.
+X, (car X), and (cdr X) may be a list, a symbol, or a number."
+  ;; FIXME: handle circular lists
+  (declare (optimize (speed 3) (safety 0) (compilation-speed 0) (space 0)))
+  ;;(declare (values (and fixnum unsigned-byte))) ;inferred automatically (see describe 'lsxhash)
+  (declare (ftype (function (t) (and fixnum unsigned-byte))))
+  ;; in SBCL, etypecase takes 80% of the time of defmethod-ing on the different types of X: (let ((h (make-hash-table))) (timediff (lsxhash h) (mlsxhash h) :showtimes t))
+  (etypecase x
+    (single-float (sxhash x))
+    (double-float (sxhash x))
+    (ratio (sxhash x))
+    (fixnum (sxhash x)) ;;in SBCL, close numbers seem to have close hashes.
+    (string (sxhash x)) ;;in SBCL, (sxhash "ABC") == (sxhash 'abc).
+    ;;(number (sxhash x))
+    (symbol (sxhash x))
+    ;; here, X can't be nil since (symbolp nil) == T.
+    (list (mix (lsxhash (car x)) (lsxhash (cdr x))))
+    (hash-table (let ((ret 448291823))
+		  (declare (type (and fixnum unsigned-byte) ret))
+		  (setf ret (mix (sxhash (hash-table-count x))
+				 (mix ret (sxhash (hash-table-test x)))))
+		  ;; use logxor for speed and so that the order of key/value pairs does not matter
+		  (maphash (lambda (k v) (setf ret (logxor ret (mix (lsxhash k) (lsxhash v)))))
+			   x)
+		  ret))
+    (simple-array (let* ((size (array-total-size x))
+			 (dim (array-dimensions x))
+			 (type (array-element-type x))
+			 (ret 518591303))
+		    (declare (type (and fixnum unsigned-byte) ret))
+		    (setf ret (mix (mix ret (sxhash type))
+				   (lsxhash dim)))
+		    (ecase type
+		      ((fixnum)
+		       (loop for i below size do
+			    (let ((e (row-major-aref x i)))
+			      (declare (type fixnum e))
+			      (setf ret (mix ret (sxhash e))))))
+		      ((t)
+		       (loop for i below size do
+			    (let ((e (row-major-aref x i)))
+			      (setf ret (mix ret (lsxhash e))))))
+		      )
+		    ret))))
 
+(defun test (&optional (evaluator #'refal-eval-replace))
+  #+sbcl (gc :full t)
+  #+clisp (gc)
+  (let* ((*random-state* (specific-random-state))
+	 (joy-ops '(+ and branch branch1 concat cons dip / dup equal gensym i ifte list * nill not or patmat patsub pop pred quote rem si sample < stack step - succ swap times true uncons unstack while define))
+	 (generator `((genenv
+		       ((e.1) [ sample 1 0 -1 ] [ sample walk-x walk-y ] e.1))
+		      (gengen
+		       ((e.1) [ helper (e.1) ]
+			;; allow inserting symbols at the end
+			[ extend [ insert ] [ sample ,@(loop for i below 400 collect 'del) ins nop mod ] ]))
+		      (helper
+		       (((s.1 e.1) e.2) [ helper (e.1) e.2 [ extend s.1
+			[ sample
+			del ins mod ,@(loop for i below 400 collect 'nop) ] ] ]
+			;;		     nop ] ] ]
+			)
+		       ((((e.3) e.1) e.2) [ helper (e.1) e.2 ([ helper (e.3) ]) ])
+		       ((() e.2) e.2))
+		      (insert
+		       (() [ sample 0 1 () \\ [ \\ ] ,@joy-ops ]))
+		      (extend
+		       ((s.1 del) )
+		       ((s.1 ins) [ insert ] [ extend s.1 [ sample ins nop nop nop ] ])
+		       ((s.1 mod) [ insert ])
+		       ((s.1 nop) s.1)))))
+    ;;(utils:timesec (lambda () (funcall evaluator generator generator :c (make-counter 1000000) :view-function 'gengen)))
+    (time
+     (loop for i below 50 collect
+	  (let ((ret (progn (funcall evaluator generator generator :c (make-counter 1000000) :view-function 'gengen))))
+	    (lsxhash ret))))
+    ))
 
-(defun test ()
-  (let ((program-1 '((HELPER
-		      (((S.1 E.1) E.2) [ HELPER (E.1) E.2 ])
-		      ((((E.3) E.1) E.2) [ HELPER ((E.1)) E.2 ([ HELPER (E.3) ]) ])
-		      ((NIL E.2) E.2))
-		     ))
-	(program-noexhaust '((helper
-			      ((e.1) [ bla ] [ helper e.1 ]))))
-	;; when evaluating the following using EVAL-VIEW, memory usage is, at each call of helper:
-	;; 1: (e.1)0 (view)1 (for the first A)
-	;; 2: (e.1)1 (view)2
-	;; 3: (e.1)2 (view)3
-	;; ... (so view memory goes up linearly)
-	;; however, we are copying e.1 for each insertion, and save the original e.1 in BINDINGS, so memory usage is cumulative and we have
-	;; 1: (sum) 1
-	;; 2: (sum) 1+2=3
-	;; 3: (sum) 1+2+3=6
-	;; n: (sum) n*(n+1)/2 (so memory goes up quadratically)
-	(program '((helper
-		    ((e.1) [ bla ] [ helper a e.1 ]))))
-	(view '((GENENV
-		 ((ER.1) SAMPLE))))
-	(view-function 'helper))
-    (refal-eval program view :view-function view-function)))
-
-(defun test2 ()
-  (let ((program '((helper
-		    ((e.1) [ bla ] a [ helper ]))))
-	(view '())
-	(view-function 'helper))
-    (refal-eval program view :view-function view-function)))
+(test)

@@ -13,6 +13,12 @@
 	       '(nil) '(nil))))
 (test)
 
+;; the LISP HyperSpec says in Section "22.1.2 Printer Dispatching": "Otherwise (if the value of *print-pretty* is false), the object's print-object method is used; see Section 22.1.3 (Default Print-Object Methods).". However, when defining
+(defmethod print-object ((object float) stream)
+  (print "hello"))
+;; and calling (print 1.0) the output is not "hello", but "1.0".
+;; This may however be not a bug, since both CLISP and SBCL have this behavior.
+
 ;; the following is not really a bug in a lisp, but a floating-point inaccuracy: y*28 is different from summing y 28 times.
 (let* ((y (floating:parse-hex-c-readable "0x0.924925"))
        (yr (rational y))

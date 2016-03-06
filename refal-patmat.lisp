@@ -700,9 +700,12 @@ Output: the result, when applying the VIEW field to the function named VIEW-FUNC
   (and (listp a)
        (loop for i in a always (numberp i))))
 
+(defparameter *bla* 0)
+
 (defun eval-call-builtin (f n a &key c no-op)
   (declare (ignore f c no-op))
   (case n
+    ((bla) (print (incf *bla*)) (dlist))
     ((+) (if (numeric-list-p a) (list (list (apply #'+ a))) (throw 'refal-eval-error 'numeric-error)))
     ((-) (if (and (numeric-list-p a) (not (null a))) (list (list (apply #'- a))) (throw 'refal-eval-error 'numeric-error)))
     ((*) (if (numeric-list-p a) (list (list (apply #'* a))) (throw 'refal-eval-error 'numeric-error)))
@@ -801,3 +804,20 @@ Output: the result, when applying the VIEW field to the function named VIEW-FUNC
   (let* ((view '(1 2 (3) 4))
 	 (result (refal-eval program-walker view)))
     (assert (equal result view))))
+
+
+
+
+
+(defun test ()
+  (let ((program-1 '((HELPER
+		      (((S.1 E.1) E.2) [ HELPER (E.1) E.2 ])
+		      ((((E.3) E.1) E.2) [ HELPER ((E.1)) E.2 ([ HELPER (E.3) ]) ])
+		      ((NIL E.2) E.2))
+		     ))
+	(program '((helper
+		    ((e.1) [ helper [ bla ] a e.1 ]))))
+	(view '((GENENV
+		 ((ER.1) SAMPLE))))
+	(view-function 'helper))
+    (refal-eval program view :view-function view-function)))
