@@ -3,7 +3,7 @@
 
 ;;git id c7a04e19198f4f295865ca4fbf9b7b0598dd8b91 provokes sbcl bug when calling rbm-learn:
 ;;(defparameter *rbm* (rbm-learn *data* (new-rbm 6 2 :v-binary 6 :h-binary 2) .1 0 .0002 1000))
-;;this provokes an sbcl bug in version 1.0.40.0.debian, 1.0.57.0.debian.
+;;this provokes an sbcl bug in version 1.0.40.0.debian, 1.0.57.0.debian. (But is not really a bug, since I asked for "(safety 0)".
 (defun test ()
   (declare (optimize (safety 0)))
   (loop while t do
@@ -12,3 +12,22 @@
 		 (the fixnum (* a b)))
 	       '(nil) '(nil))))
 (test)
+
+;; the following is not really a bug in a lisp, but a floating-point inaccuracy: y*28 is different from summing y 28 times.
+(let* ((y (floating:parse-hex-c-readable "0x0.924925"))
+       (yr (rational y))
+       (y+28  (let ((r 0)) (loop for i below 28 do (incf r y)) r))
+       (yr+28 (let ((r 0)) (loop for i below 28 do (incf r yr)) r))
+       (y*28  (* y 28))
+       (yr*28 (* yr 28)))
+  (values (format nil "~16,10000/floating:floating/ y" y)
+	  (format nil "~16,10000/floating:floating/ yr" yr)
+	  (format nil "~16,10000/floating:floating/ y+28" y+28)
+	  (format nil "~16,10000/floating:floating/ yr+28" yr+28)
+	  (format nil "~16,10000/floating:floating/ y*28" y*28)
+	  (format nil "~16,10000/floating:floating/ yr*28" yr*28)))
+;; and also simply adding to a number.
+(let* ((x (floating:parse-hex-c-readable "0x3.FFFFFC"))
+       (x+28 (+ x 28)))
+  (values (format nil "~16,100/floating:floating/ x" x)
+	  (format nil "~16,100/floating:floating/ x+28" x+28)))
