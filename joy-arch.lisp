@@ -331,6 +331,7 @@ This function must not modify stk, only copy it (otherwise test values might be 
 			(cons (list-replace-symbols l bind) (cddr stk)))))
 	 (pop     (cdr stk))
 	 (pred    (cons (1- (car stk)) (cdr stk)))
+	 (q       (cons (car stk) '(q))) ;quine
 	 (quote   (cons (list (car stk)) (cdr stk)))
 	 (rem     (cons (mod (cadr stk) (car stk)) (cddr stk)))
 	 ;; #+sbcl
