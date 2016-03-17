@@ -213,6 +213,7 @@ Return CONTAINER."
 ;; ist noch nicht fertig wenn ich mich richtig erinnere, TODO: fertigmachen
 
 (defun place-squares (bigl smalls)
+  "I think this function can be tested with (place-squares 112 *smalls-solution*)."
   (setf smalls (sort (copy-seq smalls) #'>))
   (print (list "smalls" smalls))
   (let* ((nsmalls (length smalls)))
