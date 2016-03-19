@@ -154,6 +154,14 @@ The register index will be chosen in increasing order for each TYPE"
       (retr r))))
 (assert (= (funcall-lifun '1+-i 5) 6))
 
+(deflifun 1--i (:int x) :int "decrement a 32-bit integer."
+  (with-regs ((r r))
+    (with-args ((in i))
+      (getarg r in)
+      (lightningfn:subi r r 1)
+      (retr r))))
+(assert (= (funcall-lifun '1--i 5) 4))
+
 (deflifun plus2-i (:int x :int y) :int "add two 32-bit integers."
   (with-regs ((x r) (y r))
     (with-args ((in-x i) (in-y i))
@@ -216,12 +224,28 @@ The register index will be chosen in increasing order for each TYPE"
       (lightningfn:negr c c)
       (lightningfn:remr x x y)
       (lightningfn:andr c c y)
+      (lightningfn:nei y x 0) ;this handles the special case that if the remainder is 0, then don't add c
+      (lightningfn:negr y y)
+      (lightningfn:andr c c y)
       (lightningfn:addr x x c)
       (retr x))))
 (assert (= (funcall-lifun 'mod-i 56 10) 6))
 (assert (= (funcall-lifun 'mod-i -56 10) 4))
 (assert (= (funcall-lifun 'mod-i 56 -10) -4))
 (assert (= (funcall-lifun 'mod-i -56 -10) -6))
+(assert (= (funcall-lifun 'mod-i 74 -74) 0)) ;fails
+
+#|
+(loop for i below 1000 do
+     (flet ((random/=0 ()
+	      (let ((x (* (1+ (random 100)) (1- (* (random 2) 2)))))
+		x)))
+       (let ((x (random/=0)) (y (random/=0)))
+	 (let ((lisp-result (mod x y))
+	       (lightningfn-result (funcall-lifun 'mod-i x y)))
+	   (format t "x:~A y:~A lisp-result:~A lightningfn-result:~A~%" x y lisp-result lightningfn-result)
+	   (assert (= lisp-result lightningfn-result))))))
+|#
 
 (deflifun and2-i (:int x :int y) :int "bitwise AND of two 32-bit integers."
   (with-regs ((x r) (y r))
@@ -267,3 +291,11 @@ The register index will be chosen in increasing order for each TYPE"
       (lightningfn:rshr x x y)
       (retr x))))
 (assert (= (funcall-lifun 'rshr-i 93 2) 23))
+
+(deflifun ltr (:int x :int y) :int "return (x < y)"
+  (with-regs ((x r) (y r))
+    (with-args ((in-x i) (in-y i))
+      (getarg x in-x)
+      (getarg y in-y)
+      (lightningfn:ltr x x y)
+      (retr x))))
