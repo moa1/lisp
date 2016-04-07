@@ -87,18 +87,20 @@ FROM-START specifies the index where copying starts, FROM-END the index where co
   (number-normal-cards nil :type sequence) ;sequence of INTEGERs
   (map-card-function (constantly nil) :type (function (card) integer)) ;function mapping CARD to its index
   (map-number-function (constantly nil) :type (function (integer) card)) ;function mapping card number to CARD
-  (starting-cards #() :type (array integer))) ;an array of size (+ (length NORMAL-CARDS) (length LARGE-CARDS)), with each element being the number of cards with that index
+  (starting-cards #() :type (array integer)) ;an array of size (+ (length NORMAL-CARDS) (length LARGE-CARDS)), with each element being the number of cards with that index
+  (stack-size 0 :type (and unsigned-byte integer)))
 
-(defmacro defedition (name normal-cards normal-cards-total-number large-cards starting-cards)
+(defmacro defedition (name normal-cards normal-cards-total-number large-cards starting-cards stack-size)
   (declare (type symbol name))
   (alexandria:once-only ((nc normal-cards)
 			 (lc large-cards)
 			 (nctot normal-cards-total-number)
 			 starting-cards)
-    (alexandria:with-gensyms (map-c-fn map-n-fn card number nc-length lc-length sc)
+    (alexandria:with-gensyms (map-c-fn map-n-fn card number nc-length lc-length sc ss)
       `(let* ((,nc-length (length ,nc))
 	      (,lc-length (length ,lc))
-	      (,sc (make-array (+ ,nc-length ,lc-length) :initial-element 0)))
+	      (,sc (make-array (+ ,nc-length ,lc-length) :initial-element 0))
+	      (,ss ,stack-size))
 	 (flet ((,map-c-fn (,card)
 		  (declare (type card ,card))
 		  (let ((,number (if (typep ,card 'normal-card)
@@ -124,7 +126,8 @@ FROM-START specifies the index where copying starts, FROM-END the index where co
 			   :number-normal-cards ,nctot
 			   :map-card-function #',map-c-fn
 			   :map-number-function #',map-n-fn
-			   :starting-cards ,sc)))))))
+			   :starting-cards ,sc
+			   :stack-size ,ss)))))))
 
 (let ((nc '(("Stadion" . 4) ("Fernsehsender" . 4) ("Bürohaus" . 4)
 	    ("Bergwerk" . 6) ("Apfelplantage" . 6) ("Bäckerei" . 6) ("Mini-Markt" . 6) ("Molkerei" . 6) ("Möbelfabrik" . 6) ("Markthalle" . 6) ("Weizenfeld" . 6) ("Bauernhof" . 6) ("Wald" . 6) ("Familienrestaurant" . 6) ("Café" . 6)))
@@ -138,7 +141,15 @@ FROM-START specifies the index where copying starts, FROM-END the index where co
       (mapcar #'cdr nc)
       (mapcar #'card-name-to-instance lc)
       ;;TODO: FIXME: allow large card names here as well)
-      (mapcar #'card-name-to-instance sc))))
+      (mapcar #'card-name-to-instance sc)
+      12)
+    (defedition +base-edition-15+
+	(mapcar #'card-name-to-instance (mapcar #'car nc))
+      (mapcar #'cdr nc)
+      (mapcar #'card-name-to-instance lc)
+      ;;TODO: FIXME: allow large card names here as well)
+      (mapcar #'card-name-to-instance sc)
+      15)))
 
 ;;;; GAME
 
@@ -166,14 +177,15 @@ Returns whether the type of the dealt card was already present in the stack or n
       (format t "CARD ~A IS DEALT FROM THE DECK.~%" (card-name (funcall (edition-map-number-function (game-edition game)) new-card-number))))
     (/= 0 new-card-stack-number)))
 
-(defun make-new-game (edition stack-size num-players starting-coins)
-  "Make a new game with EDITION, STACK-SIZE different cards in the starting stack, NUM-PLAYERS having STARTING-COINS each."
+(defun make-new-game (edition num-players starting-coins)
+  "Make a new game with EDITION, NUM-PLAYERS having STARTING-COINS each."
   (flet ((make-new-player (starting-coins)
 	   (make-player :cards (alexandria:copy-array (edition-starting-cards edition)) :coins starting-coins)))
     (let* ((deck (shuffle! (alexandria:flatten (loop for i from 0 for n in (edition-number-normal-cards +base-edition+) collect (loop for x below n collect i)))))
 	   (players-list (loop for i below num-players collect (make-new-player starting-coins)))
 	   (players (make-array num-players :initial-contents players-list))
 	   (number-normal-cards (length (edition-normal-cards edition)))
+	   (stack-size (edition-stack-size edition))
 	   (game (make-game :edition edition
 			    :players players
 			    :stack (make-array number-normal-cards :initial-element 0)
@@ -432,7 +444,7 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
     #'player-turn))
 
 ;; Example:
-(let ((game (make-new-game +base-edition+ 15 2 12)))
+(let ((game (make-new-game +base-edition-15+ 2 12)))
   (print-game game)
   (game-eval-dice-roll! game 0 1)
   (buy-card! game 0 (funcall (edition-map-card-function (game-edition game)) (find-card "Café")))
@@ -444,7 +456,7 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
   (assert (= 12 (player-coins (aref (game-players game) 0))))
   (assert (= 13 (player-coins (aref (game-players game) 1))))
   )
-(let ((game (make-new-game +base-edition+ 15 2 12)))
+(let ((game (make-new-game +base-edition-15+ 2 12)))
   (print-game game)
   (buy-card! game 0 (funcall (edition-map-card-function (game-edition game)) (find-card "Stadion")))
   (print-game game)
@@ -561,10 +573,10 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 	       (eval-nnet (organism-genes-card org) input))))
     (make-ai-player-turn #'selector-dice12 #'selector-reroll #'selector-card))))
 
-(defun run-game (edition stack-size player-organism-list)
+(defun run-game (edition player-organism-list)
   (declare (optimize (debug 3)))
   (let* ((num-players (length player-organism-list))
-	 (game (make-new-game edition stack-size num-players 3))
+	 (game (make-new-game edition num-players 3))
 	 (ais (make-array num-players :initial-contents
 			  (map 'list (lambda (player-org) (make-ai-player-from-organism edition num-players player-org))
 			       player-organism-list))))
@@ -584,7 +596,7 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 (defvar *next-organism-id* 0)
 (defvar *last-organisms* nil "The organisms from the last call to #'TRAIN")
 
-(defun train (edition stack-size num-players iterations &key (initial-organisms *last-organisms*))
+(defun train (edition num-players iterations &key (initial-organisms *last-organisms*))
   (declare (optimize (debug 3)))
   (let* ((num-normal-cards (length (edition-normal-cards edition)))
 	 (num-cards (+ num-normal-cards (length (edition-large-cards edition))))
@@ -617,7 +629,7 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 		 (loop for player-number from player1-index below (+ player1-index num-players) do
 		      (incf (organism-played (aref orgs player-number))))
 		 (let* ((player-orgs (loop for i below num-players collect (aref orgs (+ player1-index i)))))
-		   (multiple-value-bind (winner-index turns) (run-game edition stack-size player-orgs)
+		   (multiple-value-bind (winner-index turns) (run-game edition player-orgs)
 		     (incf turns-sum turns) (incf num-games)
 		     (let ((winner-org (elt player-orgs winner-index)))
 		       ;;(format t "player ~S won~%" (organism-id winner-org))
@@ -641,7 +653,7 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
   (ql:quickload :sb-sprof)
   (sb-sprof:reset)
   (sb-sprof:start-profiling :mode :cpu)
-  (train +base-edition+ 12 4 10)
+  (train +base-edition+ 4 10)
   (sb-sprof:stop-profiling)
   (sb-sprof:report))
 |#
@@ -652,7 +664,7 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
   (loop for org across orgs for i from 0 do
        (format t "~3D. ~S~%" i (print-organism org nil)))
   (let ((winners (loop for i below 100 collect
-		      (run-game +base-edition+ 12 (mapcar (lambda (x) (elt orgs x)) '(24 7 24 24))))))
+		      (run-game +base-edition+ (mapcar (lambda (x) (elt orgs x)) '(24 7 24 24))))))
     (mapcar (lambda (player-num) (cons player-num (count player-num winners)))
 	    '(0 1 2 3))))
 |#

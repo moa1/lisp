@@ -185,10 +185,10 @@
   (defun load-pixbufs ()
     (setf frame (gdk-pixbuf-new :rgb nil 8 *background-width* *background-height*)))
 
-  (defun setup-new-game (edition stack-size player-organism-list)
+  (defun setup-new-game (edition player-organism-list)
     (let ((num-players (length player-organism-list)))
       (assert (<= 1 num-players 4))
-      (setf game (make-new-game edition stack-size num-players 3))
+      (setf game (make-new-game edition num-players 3))
       (setf ais (make-array num-players :initial-contents
 			    (map 'list (lambda (player-org)
 					 (cond
@@ -208,7 +208,7 @@
 	   (format t "~3D. ~S~%" i (print-organism org nil)))
       (let ((player-organism-list (mapcar (lambda (x) (elt orgs x)) '(7 7 7 7))))
 	(setf (elt player-organism-list 0) :human)
-	(setup-new-game +base-edition+ 12 player-organism-list)))
+	(setup-new-game +base-edition+ player-organism-list)))
     (let ((res (run-turns)))
       (prog1 res
 	(assert (eq res :human)))))
@@ -373,6 +373,6 @@
 
 #|
 (load "/home/toni/lisp/machikoro-gtk.lisp")
-(train +base-edition+ 12 4 2000)
+(train +base-edition+ 4 2000)
 (demo-pixbufs)
 |#
