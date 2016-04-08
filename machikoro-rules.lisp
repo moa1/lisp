@@ -82,6 +82,7 @@ FROM-START specifies the index where copying starts, FROM-END the index where co
 ;;;; EDITION
 
 (defstruct edition
+  (name "" :type string)
   (normal-cards nil :type sequence) ;sequence of NORMAL-CARDs
   (large-cards nil :type sequence) ;sequence of LARGE-CARDs
   (number-normal-cards nil :type sequence) ;sequence of INTEGERs
@@ -90,44 +91,37 @@ FROM-START specifies the index where copying starts, FROM-END the index where co
   (starting-cards #() :type (array integer)) ;an array of size (+ (length NORMAL-CARDS) (length LARGE-CARDS)), with each element being the number of cards with that index
   (stack-size 0 :type (and unsigned-byte integer)))
 
-(defmacro defedition (name normal-cards normal-cards-total-number large-cards starting-cards stack-size)
-  (declare (type symbol name))
-  (alexandria:once-only ((nc normal-cards)
-			 (lc large-cards)
-			 (nctot normal-cards-total-number)
-			 starting-cards)
-    (alexandria:with-gensyms (map-c-fn map-n-fn card number nc-length lc-length sc ss)
-      `(let* ((,nc-length (length ,nc))
-	      (,lc-length (length ,lc))
-	      (,sc (make-array (+ ,nc-length ,lc-length) :initial-element 0))
-	      (,ss ,stack-size))
-	 (flet ((,map-c-fn (,card)
-		  (declare (type card ,card))
-		  (let ((,number (if (typep ,card 'normal-card)
-				     (position ,card ,nc :test #'equalp)
-				     (+ ,nc-length (position ,card ,lc :test #'equalp)))))
-		    (assert (integerp ,number) () "Cannot find ~S in the normal-cards or large-cards of edition ~S" ,card ,name)
-		    ,number))
-		(,map-n-fn (,number)
-		  (declare (type integer ,number))
-		  (assert (and (<= 0 ,number) (< ,number (+ ,nc-length ,lc-length))) () "Card number out ~S of range (0 ~S) in edition ~S" ,number (+ ,nc-length ,lc-length) ,name)
-		  (if (< ,number ,nc-length)
-		      (elt ,nc ,number)
-		      (elt ,lc (- ,number ,nc-length)))))
-	   (mapcar (lambda (,card) (assert (typep ,card 'normal-card))) ,nc)
-	   (mapcar (lambda (,card) (assert (typep ,card 'large-card))) ,lc)
-	   (loop for ,card in ,starting-cards do
-		(incf (aref ,sc (,map-c-fn ,card))))
-	   (mapcar (lambda (,card) (assert (equal ,card (funcall #',map-n-fn (funcall #',map-c-fn ,card)))))
-		   (append ,nc ,lc))
-	   (defconstant ,name
-	     (make-edition :normal-cards ,nc
-			   :large-cards ,lc
-			   :number-normal-cards ,nctot
-			   :map-card-function #',map-c-fn
-			   :map-number-function #',map-n-fn
-			   :starting-cards ,sc
-			   :stack-size ,ss)))))))
+(defun make-edition-real (name normal-cards normal-cards-total-number large-cards starting-cards stack-size)
+  (let* ((nc-length (length normal-cards))
+	 (lc-length (length large-cards))
+	 (sc (make-array (+ nc-length lc-length) :initial-element 0)))
+    (flet ((map-c-fn (card)
+	     (declare (type card card))
+	     (let ((number (if (typep card 'normal-card)
+			       (position card normal-cards :test #'equalp)
+			       (+ nc-length (position card large-cards :test #'equalp)))))
+	       (assert (integerp number) () "Cannot find ~S in the normal-cards or large-cards of edition ~S" card name)
+	       number))
+	   (map-n-fn (number)
+	     (declare (type integer number))
+	     (assert (and (<= 0 number) (< number (+ nc-length lc-length))) () "Card number out ~S of range (0 ~S) in edition ~S" number (+ nc-length lc-length) name)
+	     (if (< number nc-length)
+		 (elt normal-cards number)
+		 (elt large-cards (- number nc-length)))))
+      (mapcar (lambda (card) (assert (typep card 'normal-card))) normal-cards)
+      (mapcar (lambda (card) (assert (typep card 'large-card))) large-cards)
+      (loop for card in starting-cards do
+	   (incf (aref sc (map-c-fn card))))
+      (mapcar (lambda (card) (assert (equal card (funcall #'map-n-fn (funcall #'map-c-fn card)))))
+	      (append normal-cards large-cards))
+      (make-edition :name name
+		    :normal-cards normal-cards
+		    :large-cards large-cards
+		    :number-normal-cards normal-cards-total-number
+		    :map-card-function #'map-c-fn
+		    :map-number-function #'map-n-fn
+		    :starting-cards sc
+		    :stack-size stack-size))))
 
 (let ((nc '(("Stadion" . 4) ("Fernsehsender" . 4) ("Bürohaus" . 4)
 	    ("Bergwerk" . 6) ("Apfelplantage" . 6) ("Bäckerei" . 6) ("Mini-Markt" . 6) ("Molkerei" . 6) ("Möbelfabrik" . 6) ("Markthalle" . 6) ("Weizenfeld" . 6) ("Bauernhof" . 6) ("Wald" . 6) ("Familienrestaurant" . 6) ("Café" . 6)))
@@ -136,20 +130,22 @@ FROM-START specifies the index where copying starts, FROM-END the index where co
   (flet ((card-name-to-instance (name)
 	   (or (find name +normal-cards+ :test 'equal :key #'card-name)
 	       (find name +large-cards+ :test 'equal :key #'card-name))))
-    (defedition +base-edition+
-	(mapcar #'card-name-to-instance (mapcar #'car nc))
-      (mapcar #'cdr nc)
-      (mapcar #'card-name-to-instance lc)
-      ;;TODO: FIXME: allow large card names here as well)
-      (mapcar #'card-name-to-instance sc)
-      12)
-    (defedition +base-edition-15+
-	(mapcar #'card-name-to-instance (mapcar #'car nc))
-      (mapcar #'cdr nc)
-      (mapcar #'card-name-to-instance lc)
-      ;;TODO: FIXME: allow large card names here as well)
-      (mapcar #'card-name-to-instance sc)
-      15)))
+    (defconstant +base-edition+
+      (make-edition-real "base-edition"
+			 (mapcar #'card-name-to-instance (mapcar #'car nc))
+			 (mapcar #'cdr nc)
+			 (mapcar #'card-name-to-instance lc)
+			 ;;TODO: FIXME: allow large card names here as well)
+			 (mapcar #'card-name-to-instance sc)
+			 12))
+    (defconstant +base-edition-15+
+      (make-edition-real "base-edition-15"
+			 (mapcar #'card-name-to-instance (mapcar #'car nc))
+			 (mapcar #'cdr nc)
+			 (mapcar #'card-name-to-instance lc)
+			 ;;TODO: FIXME: allow large card names here as well)
+			 (mapcar #'card-name-to-instance sc)
+			 15))))
 
 ;;;; GAME
 
@@ -536,7 +532,8 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 
 ;;;; GAME
 
-(defun make-ai-player-from-organism (edition num-players org)
+(defun make-nnet-ai-player-from-organism (edition num-players org)
+  "This function makes an nnet AI player, and depends on the nnet functions and the game defined by EDITION."
   (let* ((num-normal-cards (length (edition-normal-cards edition)))
 	 (num-cards (+ num-normal-cards (length (edition-large-cards edition))))
 	 (input-size (+ 1 num-normal-cards (* num-players (+ 1 num-cards))))) ;bias + cards on the stack + player cards + player coins
@@ -578,7 +575,7 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
   (let* ((num-players (length player-organism-list))
 	 (game (make-new-game edition num-players 3))
 	 (ais (make-array num-players :initial-contents
-			  (map 'list (lambda (player-org) (make-ai-player-from-organism edition num-players player-org))
+			  (map 'list (lambda (player-org) (make-nnet-ai-player-from-organism edition num-players player-org))
 			       player-organism-list))))
     (block game
       (loop for turn from 0 do
@@ -600,7 +597,7 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
   (declare (optimize (debug 3)))
   (let* ((num-normal-cards (length (edition-normal-cards edition)))
 	 (num-cards (+ num-normal-cards (length (edition-large-cards edition))))
-	 ;; TODO: remove the duplication of INPUT-SIZE here and in #'MAKE-AI-PLAYER-FROM-ORGANISM.
+	 ;; TODO: remove the duplication of INPUT-SIZE here and in #'MAKE-NNET-AI-PLAYER-FROM-ORGANISM.
 	 (input-size (+ 1 num-normal-cards (* num-players (+ 1 num-cards)))) ;bias + cards on the stack + player cards + player coins
 	 (num-organisms (* 10 num-players))
 	 (num-keep (ceiling (* num-organisms 0.7))))

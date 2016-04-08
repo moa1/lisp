@@ -195,7 +195,7 @@
 					   ((eq player-org :human)
 					    :human)
 					   (t
-					    (make-ai-player-from-organism edition num-players player-org))))
+					    (make-nnet-ai-player-from-organism edition num-players player-org))))
 				 player-organism-list))))
     (setf turn 0)
     (setf next-player-number 0))
