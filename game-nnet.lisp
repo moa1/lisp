@@ -18,7 +18,8 @@
   (weights-list nil :type list)) ;lists of (SIMPLE-ARRAY SINGLE-FLOAT 2)
 
 (defun eval-nnet (nnet input)
-  "Inputting INPUT into the NNET, propagate forward until the last layer is reached. Return the last layer."
+  "Inputting INPUT into the NNET, propagate forward until the last layer is reached. Return the last layer.
+Note that INPUT should have one array element that is 1.0, so that it can be used as bias unit."
   (declare (optimize (speed 3) (safety 0) (debug 0) (compilation-speed 0) (space 0))
 	   (type (simple-array single-float 1) input)
 	   (inline sigmoid))

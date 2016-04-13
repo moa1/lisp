@@ -152,7 +152,7 @@
 	   (let ((player (aref (game-players game) player-number)))
 	     (draw-stack player-number (player-cards player))
 	     (multiple-value-bind (xpos ypos) (card-pos-3 player-number 16)
-	       (draw-image xpos ypos coins-width coins-height (aref *number-images* (min (player-coins player) (length *number-images*)))))))
+	       (draw-image xpos ypos coins-width coins-height (aref *number-images* (min (player-coins player) (1- (length *number-images*))))))))
       (let* ((game-stack (game-stack game))
 	     (augmented-game-stack (make-array (+ (length (edition-normal-cards (game-edition game))) (length (edition-large-cards (game-edition game)))))))
 	(loop for i below (length game-stack) do
@@ -185,30 +185,30 @@
   (defun load-pixbufs ()
     (setf frame (gdk-pixbuf-new :rgb nil 8 *background-width* *background-height*)))
 
-  (defun setup-new-game (edition player-organism-list)
-    (let ((num-players (length player-organism-list)))
+  (defun setup-new-game (edition player-list)
+    (let ((num-players (length player-list)))
       (assert (<= 1 num-players 4))
       (setf game (make-new-game edition num-players 3))
       (setf ais (make-array num-players :initial-contents
-			    (map 'list (lambda (player-org)
+			    (map 'list (lambda (player)
 					 (cond
-					   ((eq player-org :human)
+					   ((eq player :human)
 					    :human)
 					   (t
-					    (make-nnet-ai-player-from-organism edition num-players player-org))))
-				 player-organism-list))))
+					    (make-nnet-ai-player edition num-players player))))
+				 player-list))))
     (setf turn 0)
     (setf next-player-number 0))
 
   (defun start-new-game ()
     (format t "===> STARTING NEW GAME~%")
-    (let ((orgs (alexandria:copy-array *last-organisms*)))
-      (setf orgs (sort orgs #'organism-better))
-      (loop for org across orgs for i from 0 do
-	   (format t "~3D. ~S~%" i (print-organism org nil)))
-      (let ((player-organism-list (mapcar (lambda (x) (elt orgs x)) '(7 7 7 7))))
-	(setf (elt player-organism-list 0) :human)
-	(setup-new-game +base-edition+ player-organism-list)))
+    (let ((scores (alexandria:copy-array *last-scores*)))
+      (setf scores (sort scores #'score-better))
+      (loop for score across scores for i from 0 do
+	   (format t "~3D. ~S~%" i (print-score score nil)))
+      (let ((player-score-list (mapcar (lambda (x) (score-ai (elt scores x))) '(7 7 7 7))))
+	(setf (elt player-score-list 0) :human)
+	(setup-new-game +base-edition+ player-score-list)))
     (let ((res (run-turns)))
       (prog1 res
 	(assert (eq res :human)))))

@@ -24,30 +24,16 @@
   (when (not (null sequences))
     (let ((length (length (car sequences))))
       (assert (every (lambda (x) (= (length x) length)) (cdr sequences)) () "All sequences must have the same length")
-      (loop for i below (1- length) do
-	   (let* ((j (+ i 1 (random (- length i 1)))))
+      (loop for i from (1- length) downto 1 do
+	   (let* ((j (random (1+ i))))
 	     (loop for seq in sequences do
-		  (let ((i-elt (elt seq i))
-			(j-elt (elt seq j)))
-		    (setf (elt seq i) j-elt (elt seq j) i-elt)))))))
+		  (rotatef (elt seq i) (elt seq j)))))))
   (apply #'values sequences))
 
 (let ((a (loop for i below 100 collect i))
       (b (loop for i below 100 collect i)))
   (shuffle! a b)
   (assert (every #'= a b)))
-
-(defun copy-subseq (to-sequence to-start from-sequence from-start &optional (from-end (length from-sequence)))
-  "Overwrite a subsequence of TO-SEQUENCE with a subsequence from FROM-SEQUENCE.
-FROM-START specifies the index where copying starts, FROM-END the index where copying ends, TO-START the index that is first copied to."
-  (declare (type sequence to-sequence from-sequence)
-	   (type (and unsigned-byte fixnum) to-start from-start from-end)
-	   (optimize (speed 3)))
-  (loop
-     for i from from-start below from-end
-     for j from to-start do
-       (setf (elt to-sequence j) (elt from-sequence i)))
-  to-sequence)
 
 ;;;; CARD
 
@@ -365,8 +351,11 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 	       (player-pay player1-number player-number 2))))
       )))
 
-(defun make-ai-player-turn (selector-dice12 selector-reroll selector-card)
-  "Return a function that, when called, makes a turn for an ai-player."
+(defun game-make-player-turn (selector-dice12 selector-reroll selector-card)
+  "This function implements the state changes in the game that arise from a player taking its turn.
+The functions SELECTOR-DICE12, SELECTOR-REROLL, and SELECTOR-CARD receive the current game state and must return the step that the player takes.
+Return a function that is given a GAME instance and a PLAYER-NUMBER, and lets the player with PLAYER-NUMBER take its turn.
+Note that #'MAKE-NNET-AI-PLAYER and this function are separated because this function does not contain any ai-player specific code, but can also be used for a human player."
   (labels ((player-turn-once (game player-number)
 	     (let* ((player (aref (game-players game) player-number))
 		    (player-cards (player-cards player))
@@ -401,9 +390,9 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 		   (let* ((edition (game-edition game))
 			  (cards (append (edition-normal-cards edition) (edition-large-cards edition)))
 			  (preferences-list (map 'list (lambda (card price pref) (list card price pref))
-						(mapcar #'card-name cards)
-						(mapcar #'card-cost cards)
-						card-preferences)))
+						 (mapcar #'card-name cards)
+						 (mapcar #'card-cost cards)
+						 card-preferences)))
 		     (setf preferences-list (sort preferences-list #'> :key #'third))
 		     (loop for (name price pref) in preferences-list do (format t " ~A(~S coins):~5,3F" name price pref))
 		     (format t "~%")))
@@ -473,71 +462,44 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 ;;;; NNET
 (load "game-nnet.lisp")
 
-;;;; ORGANISM
-
-(defstruct organism
-  ;; TODO: add slot EDITION, and check that game-loop was passed the same edition.
-  (id -1 :type integer)
+(defstruct ai
   (genes-dice12 nil :type nnet)
   (genes-reroll nil :type nnet)
-  (genes-card nil :type nnet)
-  (played 0 :type (and unsigned-byte integer))
-  (won 0 :type (and unsigned-byte integer))
-  (lastrank 0 :type integer)
-  (ranksum 0.0 :type single-float)
-  (printpos -1 :type integer))
+  (genes-card nil :type nnet))
 
-(defun string-organism (object)
-  (declare (optimize (debug 3)))
-  (let ((played (organism-played object)))
-    (format nil "id:~5D (~3D,~A) ~4,2F%(~4D)"
-	    (organism-id object)
-	    (organism-lastrank object)
-	    (if (> played 0) (format nil "~4,1F" (/ (organism-ranksum object) played)) "  NA")
-	    (if (> played 0) (/ (organism-won object) played) 0)
-	    (organism-played object))))
+(defun make-new-ai (edition num-players)
+  "NUM-PLAYERS is the number of players in a game."
+  (let* ((num-normal-cards (length (edition-normal-cards edition)))
+	 (num-cards (+ num-normal-cards (length (edition-large-cards edition))))
+	 ;; TODO: remove the duplication of INPUT-SIZE here and in #'MAKE-NNET-AI-PLAYER.
+	 (input-size (+ 1 num-normal-cards (* num-players (+ 1 num-cards)))) ;bias + cards on the stack + player cards + player coins
+	 (genes-dice12 (make-new-nnet (list input-size 10 1)))
+	 (genes-reroll (make-new-nnet (list (+ input-size 2) 10 1)))
+	 (genes-card (make-new-nnet (list input-size 10 num-cards))))
+    (make-ai :genes-dice12 genes-dice12 :genes-reroll genes-reroll :genes-card genes-card)))
 
-(defun print-organism (object stream)
-  (format stream "#<~A ~A>" (type-of object) (string-organism object)))
+(defun make-ai-offspring (parent1 parent2)
+  (make-ai :genes-dice12 (make-nnet-offspring (ai-genes-dice12 parent1) (ai-genes-dice12 parent2))
+	   :genes-reroll (make-nnet-offspring (ai-genes-reroll parent1) (ai-genes-reroll parent2))
+	   :genes-card (make-nnet-offspring (ai-genes-card parent1) (ai-genes-card parent2))))
 
-(defun print-organisms (orgs)
-  (let* ((num-organisms (length orgs))
-	 (orgs-no (map 'list (lambda (x) x) (remove-if (lambda (x) (>= (organism-printpos x) 0)) orgs)))
-	 (orgs-yes (sort (remove-if (lambda (x) (< (organism-printpos x) 0)) orgs) #'< :key #'organism-printpos))
-	 (printpos-to-org (make-array num-organisms))
-	 (printed 0))
-    (let ((last-org-yes-index (length orgs-yes))
-	  (next-org-yes-index 0))
-      (loop for printpos below num-organisms do
-	   (setf (aref printpos-to-org printpos)
-		 (if (and (< next-org-yes-index last-org-yes-index)
-			  (= (organism-printpos (aref orgs-yes next-org-yes-index)) printpos))
-		     (prog1 (aref orgs-yes next-org-yes-index) (incf next-org-yes-index))
-		     (prog1 (car orgs-no) (setf (organism-printpos (car orgs-no)) printpos) (pop orgs-no))))))
-    (loop for printpos below num-organisms do
-	 (let ((org (aref printpos-to-org printpos)))
-	   (print-organism org t) (princ "  " t)
-	   ;;(format t "~S  " org)
-	   (incf printed)
-	   (when (>= printed 3) (setf printed 0) (format t "~%"))))
-    (format t "~&")))
-
-(defun organism-better (org1 org2)
-  (let* ((p1 (organism-played org1)) (p2 (organism-played org2))
-	 (w1 (organism-won org1)) (w2 (organism-won org2))
-	 (r1 (if (> p1 0) (/ w1 p1) 0)) (r2 (if (> p2 0) (/ w2 p2) 0)))
-    (if (= r1 r2)
-	(> w1 w2)
-	(> r1 r2))))
-
-;;;; GAME
-
-(defun make-nnet-ai-player-from-organism (edition num-players org)
-  "This function makes an nnet AI player, and depends on the nnet functions and the game defined by EDITION."
+(defun make-nnet-ai-player (edition num-players ai)
+  "This function makes an nnet AI player, and must be implemented for every different ai type and game."
   (let* ((num-normal-cards (length (edition-normal-cards edition)))
 	 (num-cards (+ num-normal-cards (length (edition-large-cards edition))))
 	 (input-size (+ 1 num-normal-cards (* num-players (+ 1 num-cards))))) ;bias + cards on the stack + player cards + player coins
-  (labels ((copy-to-input (input start game player-number)
+    (labels ((copy-subseq (to-sequence to-start from-sequence from-start &optional (from-end (length from-sequence)))
+	       "Overwrite a subsequence of TO-SEQUENCE with a subsequence from FROM-SEQUENCE.
+FROM-START specifies the index where copying starts, FROM-END the index where copying ends, TO-START the index that is first copied to."
+	       (declare (type sequence to-sequence from-sequence)
+			(type (and unsigned-byte fixnum) to-start from-start from-end)
+			(optimize (speed 3)))
+	       (loop
+		  for i from from-start below from-end
+		  for j from to-start do
+		    (setf (elt to-sequence j) (elt from-sequence i)))
+	       to-sequence)
+	     (copy-to-input (input start game player-number)
 	       (let* ((players (game-players game))
 		      (stack (game-stack game)))
 		 (setf (aref input start) 1.0)
@@ -552,116 +514,34 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
 			(setf (aref input start) (float (player-coins player)))
 			(incf start)))
 		 start))
-	   (selector-dice12 (game player-number)
-	     (let* ((input (make-array input-size :element-type 'single-float)))
-	       (copy-to-input input 0 game player-number)
-	       (let ((output (eval-nnet (organism-genes-dice12 org) input)))
-		 (if (< (elt output 0) 0.5) 1 2))))
-	   (selector-reroll (game player-number roll1 roll2)
-	     (let* ((input (make-array (+ input-size 2) :element-type 'single-float)))
-	       (setf (aref input 0) (float roll1))
-	       (setf (aref input 1) (float roll2))
-	       (copy-to-input input 2 game player-number)
-	       (let ((output (eval-nnet (organism-genes-reroll org) input)))
-		 (if (< (elt output 0) 0.5) nil t))))
-	   (selector-card (game player-number)
-	     (let* ((input (make-array input-size :element-type 'single-float)))
-	       (copy-to-input input 0 game player-number)
-	       (eval-nnet (organism-genes-card org) input))))
-    (make-ai-player-turn #'selector-dice12 #'selector-reroll #'selector-card))))
+	     (selector-dice12 (game player-number)
+	       (let* ((input (make-array input-size :element-type 'single-float)))
+		 (copy-to-input input 0 game player-number)
+		 (let ((output (eval-nnet (ai-genes-dice12 ai) input)))
+		   (if (< (elt output 0) 0.5) 1 2))))
+	     (selector-reroll (game player-number roll1 roll2)
+	       (let* ((input (make-array (+ input-size 2) :element-type 'single-float)))
+		 (setf (aref input 0) (float roll1))
+		 (setf (aref input 1) (float roll2))
+		 (copy-to-input input 2 game player-number)
+		 (let ((output (eval-nnet (ai-genes-reroll ai) input)))
+		   (if (< (elt output 0) 0.5) nil t))))
+	     (selector-card (game player-number)
+	       (let* ((input (make-array input-size :element-type 'single-float)))
+		 (copy-to-input input 0 game player-number)
+		 (eval-nnet (ai-genes-card ai) input))))
+      (game-make-player-turn #'selector-dice12 #'selector-reroll #'selector-card))))
 
-(defun run-game (edition player-organism-list)
-  (declare (optimize (debug 3)))
-  (let* ((num-players (length player-organism-list))
-	 (game (make-new-game edition num-players 3))
-	 (ais (make-array num-players :initial-contents
-			  (map 'list (lambda (player-org) (make-nnet-ai-player-from-organism edition num-players player-org))
-			       player-organism-list))))
-    (block game
-      (loop for turn from 0 do
-	   (loop for player-number below num-players do
-		(when *print-game-events*
-		  (format t "TURN ~S:~%" turn)
-		  (print-game game))
-		(funcall (aref ais player-number) game player-number)
-		(when (player-won-p game player-number)
-		  (when *print-game-events*
-		    (print-game game)
-		    (format t "===> PLAYER ~S WON~%" player-number))
-		  (return-from game (values player-number turn))))))))
-
-(defvar *next-organism-id* 0)
-(defvar *last-organisms* nil "The organisms from the last call to #'TRAIN")
-
-(defun train (edition num-players iterations &key (initial-organisms *last-organisms*))
-  (declare (optimize (debug 3)))
-  (let* ((num-normal-cards (length (edition-normal-cards edition)))
-	 (num-cards (+ num-normal-cards (length (edition-large-cards edition))))
-	 ;; TODO: remove the duplication of INPUT-SIZE here and in #'MAKE-NNET-AI-PLAYER-FROM-ORGANISM.
-	 (input-size (+ 1 num-normal-cards (* num-players (+ 1 num-cards)))) ;bias + cards on the stack + player cards + player coins
-	 (num-organisms (* 10 num-players))
-	 (num-keep (ceiling (* num-organisms 0.7))))
-    (labels ((make-new-organism ()
-	       (let* ((genes-dice12 (make-new-nnet (list input-size 10 1)))
-		      (genes-reroll (make-new-nnet (list (+ input-size 2) 10 1)))
-		      (genes-card (make-new-nnet (list input-size 10 num-cards))))
-		 (make-organism :id (incf *next-organism-id*) :genes-dice12 genes-dice12 :genes-reroll genes-reroll :genes-card genes-card)))
-	     (make-offspring (parent1 parent2)
-	       (make-organism :id (incf *next-organism-id*)
-			      :genes-dice12 (make-nnet-offspring (organism-genes-dice12 parent1) (organism-genes-dice12 parent2))
-			      :genes-reroll (make-nnet-offspring (organism-genes-reroll parent1) (organism-genes-reroll parent2))
-			      :genes-card (make-nnet-offspring (organism-genes-card parent1) (organism-genes-card parent2)))))
-      (let* ((orgs (let* ((orgs (make-array num-organisms :initial-contents (loop for i below num-organisms collect (make-new-organism)))))
-		     (copy-subseq orgs 0 initial-organisms 0 (min num-organisms (length initial-organisms)))
-		     orgs)))
-	(assert (and (/= num-keep num-organisms) (/= 0 num-keep)))
-	(do ((iteration iterations (1- iteration)))
-	    ((= iteration 0))
-	  (format t "iterations left: ~S~%" iteration)
-	  (shuffle! orgs)
-	  (let ((turns-sum 0)
-		(num-games 0))
-	    (loop for player1-index from 0 below num-organisms by num-players do
-	       ;;(format t "iteration:~S players:~S~%" iteration (loop for player-number from player1-index below (+ player1-index num-players) collect (aref orgs player-number)))
-		 (loop for player-number from player1-index below (+ player1-index num-players) do
-		      (incf (organism-played (aref orgs player-number))))
-		 (let* ((player-orgs (loop for i below num-players collect (aref orgs (+ player1-index i)))))
-		   (multiple-value-bind (winner-index turns) (run-game edition player-orgs)
-		     (incf turns-sum turns) (incf num-games)
-		     (let ((winner-org (elt player-orgs winner-index)))
-		       ;;(format t "player ~S won~%" (organism-id winner-org))
-		       (incf (organism-won winner-org))))))
-	    (format t "Average number of turns: ~F~%" (/ turns-sum num-games)))
-	  (setf orgs (sort orgs #'organism-better))
-	  (loop for i below num-organisms do
-	       (let ((org (aref orgs i)))
-		 (setf (organism-lastrank org) i)
-		 (incf (organism-ranksum org) i)))
-	  (setf *last-organisms* orgs)
-	  (print-organisms orgs)
-	  (loop for i from num-keep below num-organisms do
-	       (let* ((parent1 (aref orgs (random num-keep)))
-		      (parent2 (aref orgs (random num-keep)))
-		      (offspring (make-offspring parent1 parent2)))
-		 (setf (aref orgs i) offspring))))))))
+;;;; TRAINING
+(load "game-training.lisp")
 
 #|
-(progn
-  (ql:quickload :sb-sprof)
-  (sb-sprof:reset)
-  (sb-sprof:start-profiling :mode :cpu)
-  (train +base-edition+ 4 10)
-  (sb-sprof:stop-profiling)
-  (sb-sprof:report))
-|#
-
-#|
-(let ((orgs (alexandria:copy-array *last-organisms*)))
-  (setf orgs (sort orgs #'organism-better))
-  (loop for org across orgs for i from 0 do
-       (format t "~3D. ~S~%" i (print-organism org nil)))
+(let ((scores (alexandria:copy-array *last-scores*)))
+  (setf scores (sort scores #'score-better))
+  (loop for score across scores for i from 0 do
+       (format t "~3D. ~S~%" i (print-score score nil)))
   (let ((winners (loop for i below 100 collect
-		      (run-game +base-edition+ (mapcar (lambda (x) (elt orgs x)) '(24 7 24 24))))))
+		      (run-game +base-edition+ (mapcar (lambda (x) (elt scores x)) '(24 7 24 24))))))
     (mapcar (lambda (player-num) (cons player-num (count player-num winners)))
 	    '(0 1 2 3))))
 |#
