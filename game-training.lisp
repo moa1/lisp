@@ -56,28 +56,31 @@
 
 ;;;; TRAINING
 
-(defun run-game (edition scores &key (make-new-game #'make-new-game) (make-nnet-ai-player #'make-nnet-ai-player) (player-won-p #'player-won-p) (print-game #'print-game))
+(defun run-game (edition scores &key (make-new-game #'make-new-game) (game-over-p #'game-over-p) (make-nnet-ai-player #'make-nnet-ai-player) (print-game #'print-game))
   (declare (optimize (debug 3)))
   (let* ((num-players (length scores))
 	 (game (funcall make-new-game edition num-players 3))
-	 (ais (make-array num-players :initial-contents (map 'list (lambda (player-score) (funcall make-nnet-ai-player edition num-players (score-ai player-score))) scores))))
+	 (ais (make-array num-players :initial-contents (map 'list (lambda (player-score) (funcall make-nnet-ai-player edition num-players (score-ai player-score))) scores)))
+	 (turn 0))
     (block game
-      (loop for turn from 0 do
+      (loop do
 	   (loop for player-number below num-players do
 		(when *print-game-events*
 		  (format t "TURN ~S:~%" turn)
 		  (funcall print-game game))
 		(funcall (aref ais player-number) game player-number)
-		(when (funcall player-won-p game player-number)
-		  (when *print-game-events*
-		    (funcall print-game game)
-		    (format t "===> PLAYER ~S WON~%" player-number))
-		  (return-from game (values player-number turn))))))))
+		(let ((winner (funcall game-over-p game)))
+		  (when winner
+		    (when *print-game-events*
+		      (funcall print-game game)
+		      (format t "===> PLAYER ~S WON~%" winner))
+		    (return-from game (values winner turn))))
+		(incf turn))))))
 
 (defvar *next-score-id* 0)
 (defvar *last-scores* nil "The scores from the last call to #'TRAIN")
 
-(defun train (edition num-players iterations &key (initial-scores *last-scores*) (make-ai-offspring #'make-ai-offspring) (make-new-ai #'make-new-ai) (make-new-game #'make-new-game) (make-nnet-ai-player #'make-nnet-ai-player) (player-won-p #'player-won-p) (print-game #'print-game))
+(defun train (edition num-players iterations &key (initial-scores *last-scores*) (make-new-game #'make-new-game) (game-over-p #'game-over-p) (make-nnet-ai-player #'make-nnet-ai-player) (make-new-ai #'make-new-ai) (make-ai-offspring #'make-ai-offspring) (print-game #'print-game))
   (declare (optimize (debug 3)))
   (let* ((num-scores (* 10 num-players))
 	 (num-keep (ceiling (* num-scores 0.7))))
@@ -104,7 +107,7 @@
 		 (loop for player-number from player1-index below (+ player1-index num-players) do
 		      (incf (score-played (aref scores player-number))))
 		 (let* ((player-scores (loop for i below num-players collect (aref scores (+ player1-index i)))))
-		   (multiple-value-bind (winner-index turns) (run-game edition player-scores :make-new-game make-new-game :make-nnet-ai-player make-nnet-ai-player :player-won-p player-won-p :print-game print-game)
+		   (multiple-value-bind (winner-index turns) (run-game edition player-scores :make-new-game make-new-game :game-over-p game-over-p :make-nnet-ai-player make-nnet-ai-player :print-game print-game)
 		     (incf turns-sum turns) (incf num-games)
 		     (let ((winner-score (elt player-scores winner-index)))
 		       ;;(format t "player ~S won~%" (score-id winner-score))

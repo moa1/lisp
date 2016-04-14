@@ -268,6 +268,14 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
        (player-has-card game player-number (find-card "Freizeitpark"))
        (player-has-card game player-number (find-card "Funkturm"))))
 
+(defun game-over-p (game)
+  "Return the player-number of the winner if the game is over, NIL otherwise."
+  (let ((num-players (length (game-players game))))
+    (loop for player-number below num-players do
+	 (when (player-won-p game player-number)
+	   (return player-number)))
+    nil))
+
 (defun game-eval-dice-roll! (game player-number roll)
   "Carry out the effects when the die/dice rolled (the sum) ROLL, and it is PLAYER-NUMBER's turn."
   (assert (< 0 roll 13))
