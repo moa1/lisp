@@ -27,7 +27,7 @@ EMIT-JIT-FORMS are the forms that emit the "
 	  (lifun-sym (gensym "LIFUN"))
 	  (assoc-sym (gensym "ASSOC")))
       `(multiple-value-bind (,state-sym ,jit-sym)
-	   (lightningfn:with-new-state ()
+	   (lightningfn:with-new-state (:clear-state-manually nil) ;must be NIL for the indirect example to work
 	     (lightningfn:prolog)
 	     ,@emit-jit-forms
 	     (lightningfn:epilog)
@@ -145,6 +145,13 @@ The register index will be chosen in increasing order for each TYPE"
 ;;       (getarg r in)
 ;;       (lightningfn:addi r r 1)
 ;;       (retr r))))
+
+(deflifun identity-i (:int x) :int "returns the input."
+  (with-regs ((r r))
+    (with-args ((in i))
+      (getarg r in)
+      (retr r))))
+(assert (= (funcall-lifun 'identity-i 5) 5))
 
 (deflifun 1+-i (:int x) :int "increment a 32-bit integer."
   (with-regs ((r r))
@@ -299,3 +306,61 @@ The register index will be chosen in increasing order for each TYPE"
       (getarg y in-y)
       (lightningfn:ltr x x y)
       (retr x))))
+
+(let ((uint32-addr (cffi:foreign-alloc :pointer))
+      node1 node2 jit)
+  (deflifun indirect-jmp () :uint32 "demonstrate indirect jump"
+    (with-regs ((r r) (s r))
+      (lightningfn:ldi s uint32-addr)
+      ;;(lightningfn:retr s)
+      (lightningfn:movr r s)
+      (lightningfn:jmpr r)
+      (setf node1 (lightningfn:note "abc" 123))
+      (lightningfn:reti 0)
+      (setf node2 (lightningfn:note "abc" 234))
+      (lightningfn:reti 1))
+    (setf jit lightningfn:*jit*))
+  (defun indirect-jmp-set-target (target)
+    (let* ((lightningfn:*jit* jit)
+	   (label1 (lightningfn:address node1))
+	   (label2 (lightningfn:address node2)))
+      ;;(format t "label1:~A label2:~A~%" label1 label2)
+      (setf (cffi:mem-ref uint32-addr :pointer) (if target label1 label2))))
+  (indirect-jmp-set-target t)
+  (assert (= (funcall-lifun 'indirect-jmp) 0))
+  (indirect-jmp-set-target nil)
+  (assert (= (funcall-lifun 'indirect-jmp) 1)))
+
+#|
+;;;; Comparison of function call latencies
+
+(defparameter *identity-lisp* #'identity)
+(defparameter *identity-lightning* 'identity-i)
+(utils:timesec (lambda () (funcall *identity-lisp* 5)))
+;; 2.574920654296875d-8
+(utils:timesec (lambda () (funcall-lifun *identity-lightning* 5)))
+;; 1.983642578125d-7
+
+;;;; Comparison of MOD function call times
+
+(defparameter *mod-lisp* #'mod)
+(defparameter *mod-lightning* 'mod-i)
+(utils:timesec (lambda () (funcall *mod-lisp* 5 7)))
+;; 8.106231689453126d-8
+(utils:timesec (lambda () (funcall-lifun *mod-lightning* 5 7)))
+;; 4.0435791015625d-7
+
+;; lisp mod time - lisp identity time
+;; (- 8.106231689453126d-8 2.574920654296875d-8) == 5.531311035156251d-8
+;; lightning mod time - lightning identity time
+;; (- 4.0435791015625d-7 1.983642578125d-7) == 2.0599365234375d-7
+
+;;;; Comparison of REM function call times
+
+(defparameter *rem-lisp* #'rem)
+(defparameter *rem-lightning* 'rem-i)
+(utils:timesec (lambda () (funcall *rem-lisp* 5 7)))
+;; 6.103515625d-8
+(utils:timesec (lambda () (funcall-lifun *rem-lightning* 5 7)))
+;; 4.1961669921875d-7
+|#
