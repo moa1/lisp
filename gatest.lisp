@@ -123,10 +123,11 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 ;;; organism implementation in lisp
 
 (defstruct (org
-	     (:constructor make-org* (id genes code ip wait x y energy age off-genes off-length as bs an bn genesx)))
+	     (:constructor make-org* (id genes code markers ip wait x y energy age off-genes off-length as bs an bn genesx)))
   id
   genes ;genes of the organism
   code ;compiled code
+  markers ;ALIST of IPs by marker number
   ip
   wait
   x
@@ -143,12 +144,14 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
   )
 
 (defun make-org (genes x y energy)
-  (labels ((compile-genes (genes &optional (default-code (make-array 0)))
+  (labels ((compile-genes (genes)
+	     ;; TODO: FIXME: this function is a steaming pile of shit; nobody can figure out the control flow.
 	     (declare (optimize (debug 3)))
 	     (labels ((return-defaults ()
-			(return-from compile-genes (values default-code))))
-	       (multiple-value-bind (code markers)
+			(return-from compile-genes (make-array 0))))
+	       (multiple-value-bind (code markers jnes)
 		   (let ((markers nil)
+			 (jnes nil)
 			 (code nil)
 			 (code-ip 0))
 		     (loop do
@@ -156,7 +159,7 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 				     (if (null genes)
 					 (let* ((rev (nreverse code))
 						(new (make-array (length rev) :initial-contents rev)))
-					   (return (values new markers)))
+					   (return (values new markers jnes)))
 					 (let ((a (car genes)))
 					   (setf genes (cdr genes))
 					   a))))
@@ -168,52 +171,47 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 				 (let* ((rest (subseq gs 3))
 					(pos (assoc rest markers)))
 				   (when (null pos)
-				     (let ((label (read-from-string rest)))
+				     (let ((label (if (equal "" rest) nil (read-from-string rest))))
 				       (when (not (typep label 'fixnum))
 					 (return-defaults))
-				       (push (cons label code-ip) markers)))))
+				       (setf markers (acons label code-ip markers))))))
+				((equal (subseq gs 0 3) "JNE")
+				 (let* ((rest (subseq gs 3))
+					(pos (assoc rest markers)))
+				   (when (null pos)
+				     (let ((label (if (equal "" rest) nil (read-from-string rest))))
+				       (when (not (typep label 'fixnum))
+					 (return-defaults))
+				       (push g code)
+				       (push label jnes)))))
 				(t
 				 (push g code)
 				 (incf code-ip)))))))
 		 ;;(prind code)
 		 ;;(prind markers)
-		 (let ((max-ip (1- (array-dimension code 0))))
-		   (do* ((ip 0 (1+ ip)))
-			((> ip max-ip) nil)
-		     (let ((ins (aref code ip)))
-		       ;;(prind ip ins (array-dimension code 0))
-		       (case ins
-			 ((jne)
-			  (incf ip)
-			  (let ((whole-label (string (arefd code "x" ip))))
-			    (when (or (> ip max-ip) (equal whole-label "x"))
-			      (return-defaults))
-			    (let ((label-string (subseq whole-label 3)))
-			      (when (equal label-string "")
-				(return-defaults))
-			      (let* ((label (read-from-string label-string))
-				     (marker (assoc label markers)))
-				(when (or (not (equal (subseq whole-label 0 3) "LBL")) (not (typep label 'fixnum)) (null marker))
-				  ;;(prind ip ins whole-label label marker markers)
-				  (return-defaults))
-				(setf (aref code ip) (cdr marker))))))))))
-		 (values code)))))
+		 ;;(prind jnes)
+		 (loop for jne-label in jnes do
+		      ;;(prind (assoc jne-label markers))
+		      (when (null (assoc jne-label markers))
+			(return-defaults)))
+		 (values code markers)))))
     (incf *id*)
-    (multiple-value-bind (code) (compile-genes genes)
-      (make-org* *id* genes code 0 0 x y energy 0 nil 0 nil nil 0 0 genes))))
+    (multiple-value-bind (code markers) (compile-genes genes)
+      (make-org* *id* genes code markers 0 0 x y energy 0 nil 0 nil nil 0 0 genes))))
 
 (defun copy-orgs (orgs)
   (mapcar #'copy-org orgs))
 
 (defun eval-org (iters org)
-  (with-slots (genes code ip wait x y energy age off-genes off-length as bs an bn genesx) org
+  (declare (optimize (debug 3)))
+  (with-slots (genes code markers ip wait x y energy age off-genes off-length as bs an bn genesx) org
     (let* ((offspring nil)
 	   (max-ip (1- (array-dimension code 0)))
 	   (world-w (array-dimension *world* 0))
 	   (world-h (array-dimension *world* 1))
 	   (num-new 0))
-      (labels ((die ()
-		 ;;(prind "dies" org)
+      (labels ((die (reason)
+		 ;;(prind "dies" org reason)
 		 (return-from eval-org (values :kill offspring num-new 1)))
 	       (survive ()
 		 (return-from eval-org (values :survive offspring num-new 0)))
@@ -243,8 +241,10 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 		 (survive)))
 	     (tagbody
 	      next-ins
-		(when (or (> ip max-ip) (<= energy 0))
-		  (die))
+		(when (or (> ip max-ip))
+		  (die "ip too large"))
+		(when (<= energy 0)
+		  (die "out of energy"))
 		;;(when (<= (random 100000) 1)
 		;;  (setf ip (random (length code))))
 		(let* ((ins (aref code ip)))
@@ -255,13 +255,9 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 				      (n-labels 4)
 				      (markers-list (loop for i below n-labels collect
 							 (intern (format nil "MRK~A" i))))
-				      (labels-list (loop for i below n-labels collect
-							(intern (format nil "LBL~A" i))))
-				      (i-list (append instructions-list markers-list labels-list))
+				      (i-list (append instructions-list markers-list))
 				      (instructions (make-array (length i-list) :initial-contents i-list))
 				      (instructions-hash-table (make-hash-table :test 'eq))
-				      (labels-cases (loop for label in labels-list collect
-							 `((,label))))
 				      (keyform-sym (gensym)))
 				 (loop for ins in i-list do
 				      (setf (gethash ins instructions-hash-table) t))
@@ -276,15 +272,14 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 					   (let ((,keyform-sym ,keyform))
 					     (case ,keyform-sym
 					       ,@cases
-					       ,@labels-cases
 					       ((end))
 					       (t
 						;;(assert (and (integerp ,keyform-sym) (>= ,keyform-sym 0)))
 						)
 					       ))
 					   )))
-				   (prind code)
-				   (prind instructions)
+				   ;;(prind code)
+				   ;;(prind instructions)
 				   code))))
 		    (make-instructions
 		     ins
@@ -305,7 +300,7 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 		     ((write-as)
 		      (when (is-valid-ins as)
 			(when (> off-length 100000)
-			  (die))
+			  (die "offspring too big"))
 			(let ((r (random 8000)))
 			  (cond ((= r 0) (push (random-ins) off-genes) (push as off-genes) (incf off-length 2))
 				((= r 1) (push as off-genes) (push (random-ins) off-genes) (incf off-length 2))
@@ -314,7 +309,7 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 		     ((write-bs)
 		      (when (is-valid-ins bs)
 			(when (> off-length 100000)
-			  (die))
+			  (die "offspring too big"))
 			(let ((r (random 8000)))
 			  (cond ((= r 0) (push (random-ins) off-genes) (push bs off-genes) (incf off-length 2))
 				((= r 1) (push bs off-genes) (push (random-ins) off-genes) (incf off-length 2))
@@ -327,14 +322,13 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 		     ;;   (incf off-length)))
 		     ((cmp-as-bs)
 		      (setf as (eq as bs)))
-		     ((jne)
-		      (incf ip)
+		     ((jne0)
 		      (when (not as)
-			(let* ((jump-ip (arefd code nil ip)))
+			(let* ((jump-ip (cdr (assoc 0 markers)))) ;0 because of JNE_0_
 			  (setf ip jump-ip)
 			  (if (<= 0 ip max-ip)
 			      (go next-ins)
-			      (die)))))
+			      (die "invalid jump target")))))
 		     ((set-an-1)
 		      (setf an 1))
 		     ((set-bn-1)
@@ -452,10 +446,8 @@ DROP-AMOUNT is the energy per drop."
 (defvar *world-clouds* (make-clouds .03 3 .25 100 (array-dimension *world* 0) (array-dimension *world* 1) .1))
 
 (defun make-default-orgs (num energy &optional
-#|(genes '(IN-ENERGY-LEFT-AN SUB-FROM-BN-AN WALK-X-BN EAT MRK0 READ-AS READ-NEXT WRITE-AS CMP-AS-BS JNE LBL0 SET-AN-1 SETF-BN-MAX-AN-BN WALK-Y-AN ADD-TO-AN-BN MUL-TO-AN-BN EAT MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-BN-AN MUL-TO-AN-BN WALK-Y-AN SPLIT-CELL-AN ADD-TO-BN-AN SETF-AS-AN-GT0 EAT GOTO0 SIGN-AN))|#
-#|(genes '(EAT IN-ENERGY-RIGHT-BN MRK0 READ-AS READ-NEXT WRITE-AS WALK-X-BN CMP-AS-BS JNE LBL0 MUL-TO-BN-AN SET-BN-1 ADD-TO-BN-AN MUL-TO-AN-BN ADD-TO-AN-BN SETF-AS-AN-GT0 ADD-TO-AN-BN MUL-TO-AN-BN EAT MUL-TO-AN-BN WALK-X-BN MUL-TO-AN-BN MUL-TO-AN-BN SPLIT-CELL-AN WALK-Y-AN GOTO0))|#
-#|(genes '(EAT IN-ENERGY-RIGHT-BN WALK-Y-AN WALK-Y-AN SUB-FROM-BN-AN MRK0 READ-AS READ-NEXT WRITE-AS READ-BS WALK-X-BN CMP-AS-BS JNE LBL0 WAIT-BN SET-BN-1 IN-ENERGY-RIGHT-BN SET-AN-1 WALK-Y-AN ADD-TO-BN-AN MUL-TO-AN-BN ADD-TO-AN-BN EAT WALK-X-BN SPLIT-CELL-AN WALK-Y-AN GOTO0 EAT))|#
-(genes '(eat in-energy-left-an in-energy-right-bn sub-from-an-bn mrk0 read-as read-next write-as cmp-as-bs jne lbl0 setf-an-1 setf-bn-1 set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-x-an walk-y-an goto0)))
+(genes '(eat in-energy-left-an in-energy-right-bn sub-from-an-bn mrk0 read-as read-next write-as cmp-as-bs jne0 setf-an-1 setf-bn-1 set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-x-an walk-y-an goto0))
+)
   (loop for i below num collect
        (let ((org (make-org genes (random (array-dimension *world* 0)) (random (array-dimension *world* 1)) energy)))
 	 (when (= 0 (array-dimension (org-code org) 0))
@@ -563,7 +555,7 @@ DROP-AMOUNT is the energy per drop."
 	     (setf min-dist dist min-org org))))
     min-org))
 
-(defun software-render-texture (&key (frames -1) (win-x 388) (win-y 0) (win-w 800) (win-h 400))
+(defun software-render-texture (&key (frames -1) (win-x 212) (win-y 0) (win-w 800) (win-h 400))
   "Software renderer example, drawing a texture on the screen.
 See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_frames_to_the_screen."
   (declare (optimize (debug 3)))
@@ -675,4 +667,4 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	   (format t "~A (org num:~5A)~%" frame (length *orgs*)))
 	 (idleloop nil :no-output frame))))
 
-;; this one is pretty good, it can sustain 1300 organisms. It was evolved in about 3-4 hours, the clouds were changed about 3 times: (genes '(IN-ENERGY-LEFT-AN SUB-FROM-BN-AN WALK-X-BN EAT MRK0 READ-AS READ-NEXT WRITE-AS CMP-AS-BS JNE LBL0 SET-AN-1 SETF-BN-MAX-AN-BN WALK-Y-AN ADD-TO-AN-BN MUL-TO-AN-BN EAT MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-BN-AN MUL-TO-AN-BN WALK-Y-AN SPLIT-CELL-AN ADD-TO-BN-AN SETF-AS-AN-GT0 EAT GOTO0 SIGN-AN)), or is there a bug because the organism with the highest energy has about 14.8 million energy, and the average energy is 600000. when initializing the world with organisms having the original (hand-written) genes and simulating it until it has reached a stable population of about 300-700 organisms, and then adding 50 evolved organisms, they out-compete the stable population in a short time. Also see the organisms commented out in #'MAKE-DEFAULT-ORGS.
+;; this one is pretty good, it can sustain 1300 organisms. It was evolved in about 3-4 hours, the clouds were changed about 3 times: (genes '(IN-ENERGY-LEFT-AN SUB-FROM-BN-AN WALK-X-BN EAT MRK0 READ-AS READ-NEXT WRITE-AS CMP-AS-BS JNE0 SET-AN-1 SETF-BN-MAX-AN-BN WALK-Y-AN ADD-TO-AN-BN MUL-TO-AN-BN EAT MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-BN-AN MUL-TO-AN-BN WALK-Y-AN SPLIT-CELL-AN ADD-TO-BN-AN SETF-AS-AN-GT0 EAT GOTO0 SIGN-AN)), or is there a bug because the organism with the highest energy has about 14.8 million energy, and the average energy is 600000. when initializing the world with organisms having the original (hand-written) genes and simulating it until it has reached a stable population of about 300-700 organisms, and then adding 50 evolved organisms, they out-compete the stable population in a short time. Also see the organisms commented out in #'MAKE-DEFAULT-ORGS.
