@@ -287,6 +287,10 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 		      (incf energy (aref *world* x y))
 		      (setf (aref *world* x y) 0)
 		      (setf wait 10000))
+		     ((set-as-nil)
+		      (setf as nil))
+		     ((set-bs-nil)
+		      (setf bs nil))
 		     ((set-as-random)
 		      (setf as (random-ins)))
 		     ((set-bs-random)
@@ -446,7 +450,7 @@ DROP-AMOUNT is the energy per drop."
 (defvar *world-clouds* (make-clouds .03 3 .25 100 (array-dimension *world* 0) (array-dimension *world* 1) .1))
 
 (defun make-default-orgs (num energy &optional
-(genes '(eat in-energy-left-an in-energy-right-bn sub-from-an-bn mrk0 read-as read-next write-as cmp-as-bs jne0 setf-an-1 setf-bn-1 set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-x-an walk-y-an goto0))
+(genes '(set-bs-nil eat in-energy-left-an in-energy-right-bn sub-from-an-bn mrk0 read-as read-next write-as cmp-as-bs jne0 set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-x-an walk-y-an goto0))
 )
   (loop for i below num collect
        (let ((org (make-org genes (random (array-dimension *world* 0)) (random (array-dimension *world* 1)) energy)))
