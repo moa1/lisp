@@ -145,7 +145,7 @@ DROP-AMOUNT is the energy per drop."
 	   (prind r cloud)
 	   cloud))))
 (defvar *world* (make-world 200 100 50))
-(defvar *world-clouds* (make-clouds .03 3 .25 100 (array-dimension *world* 0) (array-dimension *world* 1) .1))
+(defvar *world-clouds* (make-clouds .025 3 .25 30 (array-dimension *world* 0) (array-dimension *world* 1) .1))
 
 ;; load organism implementation
 ;;(load "~/lisp/gatest-orgap-lisp.lisp")
@@ -181,9 +181,11 @@ DROP-AMOUNT is the energy per drop."
   nil)
 
 (defparameter *display-world* t)
+(defparameter *world-iterations* 0)
 
-(defun idleloop (surface cursor num-frame)
+(defun idleloop (surface cursor)
   (declare (optimize (debug 3)))
+  (incf *world-iterations*)
   (let ((next-loop-orgs nil)
 	(max-org-energy 0)
 	(avg-org-energy 0)
@@ -229,9 +231,9 @@ DROP-AMOUNT is the energy per drop."
 	     (setf y (mod (+ y yvel) (array-dimension *world* 1)))))
       (setf avg-world-energy (float (/ avg-world-energy total-rain)))
       ;;(prind length-orgs max-world-energy min-world-energy avg-world-energy max-org-energy avg-org-energy)
-      (when (null cursor)
+      (when (or (null cursor) (eq cursor :no-output))
 	(format t "~A (world energy min:~4A avg:~4A max:~4A) (org num:~5A -:~3A +:~3A =:~3A energy avg:~5A max:~5A)~%"
-		num-frame min-world-energy (round avg-world-energy) max-world-energy length-orgs num-died num-new (- num-new num-died) (round avg-org-energy) max-org-energy))
+		*world-iterations* min-world-energy (round avg-world-energy) max-world-energy length-orgs num-died num-new (- num-new num-died) (round avg-org-energy) max-org-energy))
       ))
   (when *display-world*
     (with-safe-pixel-access surface set-pixel
@@ -339,7 +341,7 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 		   (null *orgs*))    
 	       (sdl2:push-quit-event)
 	       (progn
-		 (idleloop sur cursor num-frames)
+		 (idleloop sur cursor)
 		 (when *display-world*
 		   (sdl2:update-texture tex (plus-c:c-ref sur SDL2-FFI:SDL-SURFACE :pixels) :width (* 4 tex-w))
 		   ;;TODO: call SDL_RenderClear(sdlRenderer);
@@ -372,8 +374,6 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 (defun without-graphics (&optional (skip-lines 1))
   (let ((*display-world* nil))
     (loop for frame from 0 do
-	 (when (= (mod frame skip-lines) 0)
-	   (format t "~A (org num:~5A)~%" frame (length *orgs*)))
-	 (idleloop nil :no-output frame))))
+	 (idleloop nil (if (= (mod frame skip-lines) 0) :no-output :no-output-really)))))
 
 ;; this one is pretty good, it can sustain 1300 organisms. It was evolved in about 3-4 hours, the clouds were changed about 3 times: (genes '(IN-ENERGY-LEFT-AN SUB-FROM-BN-AN WALK-X-BN EAT MRK0 READ-AS READ-NEXT WRITE-AS CMP-AS-BS JNE0 SET-AN-1 SETF-BN-MAX-AN-BN WALK-Y-AN ADD-TO-AN-BN MUL-TO-AN-BN EAT MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-BN-AN MUL-TO-AN-BN WALK-Y-AN SPLIT-CELL-AN ADD-TO-BN-AN SETF-AS-AN-GT0 EAT GOTO0 SIGN-AN)), or is there a bug because the organism with the highest energy has about 14.8 million energy, and the average energy is 600000. when initializing the world with organisms having the original (hand-written) genes and simulating it until it has reached a stable population of about 300-700 organisms, and then adding 50 evolved organisms, they out-compete the stable population in a short time. Also see the organisms commented out in #'MAKE-DEFAULT-ORGS.
