@@ -148,20 +148,31 @@ DROP-AMOUNT is the energy per drop."
 (defvar *world-clouds* (make-clouds .025 3 .25 30 (array-dimension *world* 0) (array-dimension *world* 1) .1))
 
 ;; load organism implementation
-;;(load "~/lisp/gatest-orgap-lisp.lisp")
-(load "~/lisp/gatest-orgap-lightning.lisp")
+(load "~/lisp/gatest-orgap-lisp.lisp")
+;;(load "~/lisp/gatest-orgap-lightning.lisp")
       
+(defstruct orgcont ;organism container
+  orgap
+  id
+  age
+  totage
+  noffspring)
+
 (defun copy-orgs (orgs)
-  (mapcar #'copy-orgap orgs))
+  (mapcar (lambda (orgcont)
+	    (with-slots (orgap id age totage noffspring) orgcont
+	      (make-orgcont :orgap (copy-orgap orgap) :id id :age age :totage totage :noffspring noffspring)))
+	  orgs))
 
 (defun make-default-orgs (num energy &optional
-(genes '(set-bs-nil eat in-energy-left-an in-energy-right-bn sub-from-an-bn mrk0 read-as read-next write-as cmp-as-bs jne0 set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-x-an walk-y-an goto0))
-)
+				       (genes '(set-bs-nil eat in-energy-left-an in-energy-right-bn sub-from-an-bn mrk0 read-as read-next write-as cmp-as-bs jne0 set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-x-an walk-y-an goto0))
+				       )
   (loop for i below num collect
-       (let ((org (make-orgap genes (random (array-dimension *world* 0)) (random (array-dimension *world* 1)) energy)))
-	 (when (= 0 (orgap-code-length org))
-	   (error "Organism ~A has code length 0" org))
-	 org)))
+       (let* ((orgap (make-orgap genes (random (array-dimension *world* 0)) (random (array-dimension *world* 1)) energy))
+	      (orgcont (make-orgcont :orgap orgap :id (incf *id*) :age 0 :totage 0 :noffspring 0)))
+	 (when (= 0 (orgap-code-length orgap))
+	   (error "Organism ~A has code length 0" orgap))
+	 orgcont)))
 (defparameter *default-orgs* (make-default-orgs 50 500))
 (defvar *orgs* (copy-orgs *default-orgs*))
 
@@ -183,33 +194,55 @@ DROP-AMOUNT is the energy per drop."
 (defparameter *display-world* t)
 (defparameter *world-iterations* 0)
 
+(defun orgcont-noff/tage (orgcont)
+  (let ((totage (orgcont-totage orgcont))
+	(noffspring (orgcont-noffspring orgcont)))
+    (when (> totage 0) (float (/ noffspring totage)))))
+
+(defun print-orgcont (orgcont)
+  (with-slots (orgap id age totage noffspring) orgcont
+    (format t "genes:~A~%" (orgap-genes orgap))
+    (format t "org id:~5A wait:~4A energy:~4A age:~3A/~A x:~3A y:~3A ip:~3A/~3A off(~2A)/tage:~4A~%"
+	    id (orgap-wait orgap) (orgap-energy orgap) age totage (orgap-x orgap) (orgap-y orgap) (orgap-ip orgap) (orgap-code-length orgap)
+	    noffspring (orgcont-noff/tage orgcont))))
+
+(defun print-org-stats (orgs)
+  (let ((max-org-energy 0)
+	(avg-org-energy 0)
+	(max-org-noff/tage 0)
+	(length-orgs (length orgs)))
+    (loop for org in orgs do
+	 (let* ((orgap (orgcont-orgap org))
+		(e (orgap-energy orgap)))
+	   (setf max-org-energy (max max-org-energy e))
+	   (incf avg-org-energy e)
+	   (setf max-org-noff/tage (max max-org-noff/tage (let ((noff/tage (orgcont-noff/tage org))) (if noff/tage noff/tage 0))))))
+    (setf avg-org-energy (float (/ avg-org-energy length-orgs)))
+    (format t "~A (org num:~5A energy avg:~5A max:~5A noff/tage max:~4F)~%"
+	    *world-iterations* length-orgs (round avg-org-energy) max-org-energy max-org-noff/tage)))
+
 (defun idleloop (surface cursor)
   (declare (optimize (debug 3)))
   (incf *world-iterations*)
-  (let ((next-loop-orgs nil)
-	(max-org-energy 0)
-	(avg-org-energy 0)
-	(length-orgs (length *orgs*))
-	(num-died 0)
-	(num-new 0))
+  (let ((next-loop-orgs nil))
+    ;; TODO: FIXME: Make clouds and organisms conceptually to be event sources so that they have a wait time (i.e. iterations until their next event must be computed). then rewrite the following loop so that always the event source with the least wait time is computed next. Maybe use a heap tree to keep track of the minimum.
     (loop for org in *orgs* do
-	 (when (and (eq org cursor) (>= (orgap-energy org) 0))
-	   (format t "genes:~A~%" (orgap-genes org))
-	   (format t "org id:~5A wait:~4A energy:~4A age:~2A x:~3A y:~3A ip:~3A/~3A~%" (orgap-id org) (orgap-wait org) (orgap-energy org) (orgap-age org) (orgap-x org) (orgap-y org) (orgap-ip org) (orgap-code-length org)))
-	 (let ((e (orgap-energy org)))
-	   (setf max-org-energy (max max-org-energy e))
-	   (incf avg-org-energy e))
-	 (incf-orgap-age org)
-       ;;(prind org)
-	 (multiple-value-bind (status offspring num-new-2 num-died-2) (eval-orgap 200 org)
-	   (incf num-new num-new-2)
-	   (incf num-died num-died-2)
-	   (setf next-loop-orgs (nconc (if (and (eq status :survive) (< (orgap-age org) 1000))
-					   (list org)
-					   nil)
-				       offspring
-				       next-loop-orgs))))
-    (setf avg-org-energy (float (/ avg-org-energy length-orgs)))
+	 (when (eq org cursor)
+	   (print-orgcont org))
+	 (let ((orgap (orgcont-orgap org)))
+	   (incf (orgcont-age org))
+	   (incf (orgcont-totage org))
+	   ;;(prind org)
+	   (multiple-value-bind (status offspring) (eval-orgap 200 orgap)
+	     (when offspring
+	       (incf (orgcont-noffspring org) (length offspring))
+	       (setf (orgcont-age org) 0))
+	     (setf next-loop-orgs
+		   (nconc (if (and (eq status :survive) (< (orgcont-age org) 200000))
+			      (list org)
+			      nil)
+			  (loop for orgap in offspring collect (make-orgcont :orgap orgap :id (incf *id*) :age 0 :totage 0 :noffspring 0))
+			  next-loop-orgs)))))
     (setf *orgs* next-loop-orgs)
     (let ((max-world-energy 0)
 	  (min-world-energy most-positive-fixnum)
@@ -231,10 +264,9 @@ DROP-AMOUNT is the energy per drop."
 	     (setf y (mod (+ y yvel) (array-dimension *world* 1)))))
       (setf avg-world-energy (float (/ avg-world-energy total-rain)))
       ;;(prind length-orgs max-world-energy min-world-energy avg-world-energy max-org-energy avg-org-energy)
-      (when (or (null cursor) (eq cursor :no-output))
-	(format t "~A (world energy min:~4A avg:~4A max:~4A) (org num:~5A -:~3A +:~3A =:~3A energy avg:~5A max:~5A)~%"
-		*world-iterations* min-world-energy (round avg-world-energy) max-world-energy length-orgs num-died num-new (- num-new num-died) (round avg-org-energy) max-org-energy))
-      ))
+      )
+    (when (and (> (length *orgs*) 0) (or (null cursor) (eq cursor :no-output)))
+      (print-org-stats *orgs*)))
   (when *display-world*
     (with-safe-pixel-access surface set-pixel
       (let* ((w (sdl-surface-get-w surface))
@@ -245,10 +277,11 @@ DROP-AMOUNT is the energy per drop."
 			 (color (color-to-argb8888 255 c c c)))
 		    (set-pixel x y color))))
 	(loop for org in *orgs* do
-	     (let* ((x (orgap-x org))
-		    (y (orgap-y org))
-		    (e (min 255 (orgap-energy org))))
-	       (if (= (orgap-age org) 0)
+	     (let* ((orgap (orgcont-orgap org))
+		    (x (orgap-x orgap))
+		    (y (orgap-y orgap))
+		    (e (min 255 (orgap-energy orgap))))
+	       (if (= (orgcont-age org) 0)
 		   (set-pixel x y (color-to-argb8888 255 255 0 0))
 		   (set-pixel x y (color-to-argb8888 255 0 e (max 128 e))))))))))
 
@@ -257,8 +290,9 @@ DROP-AMOUNT is the energy per drop."
   (let ((min-dist nil)
 	(min-org))
     (loop for org in orgs do
-	 (let* ((org-x (orgap-x org))
-		(org-y (orgap-y org))
+	 (let* ((orgap (orgcont-orgap org))
+		(org-x (orgap-x orgap))
+		(org-y (orgap-y orgap))
 		(diff-x (- x org-x))
 		(diff-y (- y org-y))
 		(dist (+ (* diff-x diff-x) (* diff-y diff-y))))
@@ -307,6 +341,10 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	  (format t "No organisms left! Starting with default organisms.~%")
 	  (setf *orgs* (copy-orgs *default-orgs*)))
 	(finish-output)
+
+	;;(sb-sprof:reset)
+	;;(sb-sprof:start-profiling :mode :cpu) ;will profile all threads.
+
 	(sdl2:with-event-loop (:method :poll)
 	  (:keydown
 	   (:keysym keysym)
@@ -327,13 +365,16 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	   (when (sdl2:scancode= (sdl2:scancode-value keysym) :scancode-escape)
 	     (sdl2:push-event :quit)))
 
-	  (:mousemotion
-	   (:x x :y y :xrel xrel :yrel yrel :state state)
-	   ;;(format t "Mouse motion abs(rel): ~a (~a), ~a (~a)~%Mouse state: ~a~%" x xrel y yrel state)
-	   (setf mouse-x (/ (* x tex-w) win-w) mouse-y (/ (* y tex-h) win-h))
-	   (let* ((x (floor mouse-x)) (y (floor mouse-y))
-		  (org (nearest-orgap x y *orgs*)))
-	     (setf cursor org)))
+	  (:mousebuttondown
+	   ()
+	   (multiple-value-bind (x y buttons) (sdl2:mouse-state)
+	     (cond
+	       ((= buttons 1)
+		(format t "Mouse motion abs(rel): ~a, ~a~%Mouse buttons: ~a~%" x y buttons)
+		(setf mouse-x (/ (* x tex-w) win-w) mouse-y (/ (* y tex-h) win-h))
+		(let* ((x (floor mouse-x)) (y (floor mouse-y))
+		       (org (nearest-orgap x y *orgs*)))
+		  (setf cursor org))))))
 
 	  (:idle
 	   ()
@@ -347,10 +388,11 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 		   ;;TODO: call SDL_RenderClear(sdlRenderer);
 		   (sdl2:render-copy wrend tex)
 		   (let ((*random-state* display-random-state))
-		     (sdl2-ffi.functions::sdl-set-render-draw-color wrend (random 256) (random 256) (random 256) 255))
+		     (sdl2-ffi.functions::sdl-set-render-draw-color wrend 255 (random 256) (random 256) 255))
 		   (cond
-		     ((and (orgap-p cursor) (> (orgap-energy cursor) 0))
-		      (let* ((x (orgap-x cursor)) (y (orgap-y cursor))
+		     ((and (orgcont-p cursor) (> (orgap-energy (orgcont-orgap cursor)) 0))
+		      (let* ((orgap (orgcont-orgap cursor))
+			     (x (orgap-x orgap)) (y (orgap-y orgap))
 			     (x1 (min (1- win-w) (max 0 (* x (/ win-w tex-w)))))
 			     (y1 (min (1- win-h) (max 0 (* y (/ win-h tex-h)))))
 			     (x2 (min (1- win-w) (max 0 (* (1+ x) (/ win-w tex-w)))))
@@ -358,13 +400,20 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 			(sdl2-ffi.functions::sdl-render-draw-line wrend x1 y1 x2 y1)
 			(sdl2-ffi.functions::sdl-render-draw-line wrend x2 y1 x2 y2)
 			(sdl2-ffi.functions::sdl-render-draw-line wrend x2 y2 x1 y2)
-			(sdl2-ffi.functions::sdl-render-draw-line wrend x1 y2 x1 y1)))
+			(sdl2-ffi.functions::sdl-render-draw-line wrend x1 y2 x1 y1)
+			(sdl2-ffi.functions::sdl-render-draw-line wrend (1- x1) (1- y1) (1+ x2) (1- y1))
+			(sdl2-ffi.functions::sdl-render-draw-line wrend (1+ x2) (1- y1) (1+ x2) (1+ y2))
+			(sdl2-ffi.functions::sdl-render-draw-line wrend (1+ x2) (1+ y2) (1- x1) (1+ y2))
+			(sdl2-ffi.functions::sdl-render-draw-line wrend (1- x1) (1+ y2) (1- x1) (1- y1))))
 		     (t (setf cursor nil)))
 		   (sdl2:render-present wrend))
 		 (incf num-frames)))
 	   )
 
 	  (:quit () t))
+
+	;;(sb-sprof:stop-profiling)
+	;;(sb-sprof:report)
 
 	(format t "End of main loop.~%")
 	(format t "Average frames per second: ~A.~%" (float (/ num-frames (/ (- (get-internal-real-time) first-frame-time) internal-time-units-per-second))))

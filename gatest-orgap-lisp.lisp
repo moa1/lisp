@@ -1,8 +1,7 @@
 ;;; organism implementation in lisp
 
 (defstruct (orgap
-	     (:constructor make-orgap* (id genes code markers ip wait x y energy age off-genes off-length as bs an bn genesx)))
-  id
+	     (:constructor make-orgap*))
   genes ;genes of the organism
   code ;compiled code
   markers ;ALIST of IPs by marker number
@@ -11,7 +10,6 @@
   x
   y
   energy
-  age
   off-genes
   off-length
   as
@@ -73,31 +71,28 @@
 		      (when (null (assoc jne-label markers))
 			(return-defaults)))
 		 (values code markers)))))
-    (incf *id*)
     (multiple-value-bind (code markers) (compile-genes genes)
-      (make-orgap* *id* genes code markers 0 0 x y energy 0 nil 0 nil nil 0 0 genes))))
+      (make-orgap* :genes genes :code code :markers markers :ip 0 :wait 0 :x x :y y :energy energy :off-genes nil :off-length 0 :as nil :bs nil :an 0 :bn 0 :genesx genes))))
 
 (defun eval-orgap (iters org)
   (declare (optimize (debug 3)))
-  (with-slots (genes code markers ip wait x y energy age off-genes off-length as bs an bn genesx) org
+  (with-slots (genes code markers ip wait x y energy off-genes off-length as bs an bn genesx) org
     (let* ((offspring nil)
 	   (max-ip (1- (array-dimension code 0)))
 	   (world-w (array-dimension *world* 0))
-	   (world-h (array-dimension *world* 1))
-	   (num-new 0))
+	   (world-h (array-dimension *world* 1)))
       (labels ((die (reason)
 		 (declare (ignorable reason))
 		 ;;(prind "dies" org reason)
-		 (return-from eval-orgap (values :kill offspring num-new 1)))
+		 (return-from eval-orgap (values :kill offspring)))
 	       (survive ()
-		 (return-from eval-orgap (values :survive offspring num-new 0)))
+		 (return-from eval-orgap (values :survive offspring)))
 	       (cell-division (off-x off-y off-energy)
 		 (setf off-genes (nreverse off-genes))
 		 (setf off-energy (min energy (max (floor off-energy) 0)))
 		 (setf off-x (mod off-x world-w))
 		 (setf off-y (mod off-y world-h))
 		 ;;(format t "cell-division x:~A y:~A energy:~A off:~A~%" off-x off-y off-energy off)
-		 (incf num-new 1)
 		 (push (make-orgap off-genes off-x off-y off-energy) offspring)
 		 (decf energy off-energy)
 		 ;;(push (make-orgap off-genes x y (- energy off-energy)) offspring)
@@ -105,7 +100,6 @@
 		 (setf off-genes nil)
 		 (setf off-length 0)
 		 (setf genesx genes)
-		 (setf age 0)
 		 ;;(die)
 		 ))
 	(loop for i below iters do
@@ -288,9 +282,6 @@
 		(incf ip)))
 	(survive)
 	))))
-
-(defun incf-orgap-age (org)
-  (incf (orgap-age org)))
 
 (defun orgap-code-length (org)
   (array-dimension (orgap-code org) 0))
