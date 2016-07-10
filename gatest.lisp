@@ -121,7 +121,7 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
   (make-array (list w h) :initial-element energy))
 (defparameter *default-world* (make-world 200 100 50))
 (defstruct world-cloud
-  x y xvel yvel edge drop-num drop-amount)
+  x y xvel yvel edge drop-num drop-amount timeleft)
 (defun make-clouds (rain-per-coordinate num-clouds fraction-covered drop-amount world-w world-h velocity)
   "RAIN-PER-COORDINATE is the average rain per world coordinate per iteration.
 FRACTION-COVERED is the fraction of the whole world covered with clouds.
@@ -141,11 +141,31 @@ DROP-AMOUNT is the energy per drop."
 			:yvel (- (random velocity) (/ velocity 2))
 			:drop-num (max drop-num 1)
 			:drop-amount drop-amount
-			:edge cloud-edge)))
+			:edge cloud-edge
+			:timeleft 0)))
 	   (prind r cloud)
 	   cloud))))
 (defvar *world* (make-world 200 100 50))
 (defvar *world-clouds* (make-clouds .025 3 .25 30 (array-dimension *world* 0) (array-dimension *world* 1) .1))
+
+(defun world-rain (iters)
+  (let ((world-w (array-dimension *world* 0))
+	(world-h (array-dimension *world* 1)))
+    (loop for cloud in *world-clouds* do
+	 (with-slots (x y xvel yvel edge drop-num drop-amount timeleft) cloud
+	   (let* ((time (+ iters timeleft))
+		  (cloud-time 200)
+		  (steps (floor (/ time cloud-time))))
+	     (loop for step below steps do
+		  (loop for i below drop-num do
+		       (let* ((rx (mod (+ (floor x) (random edge)) world-w))
+			      (ry (mod (+ (floor y) (random edge)) world-h))
+			      (e (aref *world* rx ry)))
+			 (let ((new-e (min *world-max-energy* (+ e drop-amount))))
+			   (setf (aref *world* rx ry) new-e))))
+		  (setf x (mod (+ x xvel) (array-dimension *world* 0)))
+		  (setf y (mod (+ y yvel) (array-dimension *world* 1))))
+	     (setf timeleft (- time (* steps cloud-time))))))))
 
 ;; load organism implementation
 (load "~/lisp/gatest-orgap-lisp.lisp")
@@ -206,7 +226,7 @@ DROP-AMOUNT is the energy per drop."
 	    id (orgap-wait orgap) (orgap-energy orgap) age totage (orgap-x orgap) (orgap-y orgap) (orgap-ip orgap) (orgap-code-length orgap)
 	    noffspring (orgcont-noff/tage orgcont))))
 
-(defun print-org-stats (orgs)
+(defun print-org-stats (iters orgs)
   (let ((max-org-energy 0)
 	(avg-org-energy 0)
 	(max-org-noff/tage 0)
@@ -218,22 +238,27 @@ DROP-AMOUNT is the energy per drop."
 	   (incf avg-org-energy e)
 	   (setf max-org-noff/tage (max max-org-noff/tage (let ((noff/tage (orgcont-noff/tage org))) (if noff/tage noff/tage 0))))))
     (setf avg-org-energy (float (/ avg-org-energy length-orgs)))
-    (format t "~A (org num:~5A energy avg:~5A max:~5A noff/tage max:~4F)~%"
-	    *world-iterations* length-orgs (round avg-org-energy) max-org-energy max-org-noff/tage)))
+    (format t "~A+~4A (org num:~5A energy avg:~5A max:~5A noff/tage max:~4F)~%"
+	    *world-iterations* iters length-orgs (round avg-org-energy) max-org-energy max-org-noff/tage)))
 
-(defun idleloop (surface cursor)
+(defun idleloop (surface cursor max-iters)
   (declare (optimize (debug 3)))
   (incf *world-iterations*)
-  (let ((next-loop-orgs nil))
+  (let ((iters (orgap-wait (orgcont-orgap (car *orgs*))))
+	(next-loop-orgs nil))
+    (loop for org in (cdr *orgs*) do
+	 (setf iters (min iters (orgap-wait (orgcont-orgap (car *orgs*))))))
+    (when max-iters (setf iters (min iters max-iters)))
+    (incf iters 200) ;at least 200 iterations (for each organism)
     ;; TODO: FIXME: Make clouds and organisms conceptually to be event sources so that they have a wait time (i.e. iterations until their next event must be computed). then rewrite the following loop so that always the event source with the least wait time is computed next. Maybe use a heap tree to keep track of the minimum.
     (loop for org in *orgs* do
 	 (when (eq org cursor)
 	   (print-orgcont org))
 	 (let ((orgap (orgcont-orgap org)))
-	   (incf (orgcont-age org))
-	   (incf (orgcont-totage org))
+	   (incf (orgcont-age org) iters)
+	   (incf (orgcont-totage org) iters)
 	   ;;(prind org)
-	   (multiple-value-bind (status offspring) (eval-orgap 200 orgap)
+	   (multiple-value-bind (status offspring) (eval-orgap iters orgap)
 	     (when offspring
 	       (incf (orgcont-noffspring org) (length offspring))
 	       (setf (orgcont-age org) 0))
@@ -244,29 +269,9 @@ DROP-AMOUNT is the energy per drop."
 			  (loop for orgap in offspring collect (make-orgcont :orgap orgap :id (incf *id*) :age 0 :totage 0 :noffspring 0))
 			  next-loop-orgs)))))
     (setf *orgs* next-loop-orgs)
-    (let ((max-world-energy 0)
-	  (min-world-energy most-positive-fixnum)
-	  (avg-world-energy 0)
-	  (total-rain 0))
-      (loop for cloud in *world-clouds* do
-	   (with-slots (x y xvel yvel edge drop-num drop-amount) cloud
-	     (incf total-rain drop-num)
-	     (loop for i below drop-num do
-		  (let* ((rx (mod (+ (floor x) (random edge)) (array-dimension *world* 0)))
-			 (ry (mod (+ (floor y) (random edge)) (array-dimension *world* 1)))
-			 (e (aref *world* rx ry)))
-		    (setf max-world-energy (max max-world-energy e))
-		    (setf min-world-energy (min min-world-energy e))
-		    (incf avg-world-energy e)
-		    (let ((new-e (min *world-max-energy* (+ e drop-amount))))
-		      (setf (aref *world* rx ry) new-e))))
-	     (setf x (mod (+ x xvel) (array-dimension *world* 0)))
-	     (setf y (mod (+ y yvel) (array-dimension *world* 1)))))
-      (setf avg-world-energy (float (/ avg-world-energy total-rain)))
-      ;;(prind length-orgs max-world-energy min-world-energy avg-world-energy max-org-energy avg-org-energy)
-      )
+    (world-rain iters)
     (when (and (> (length *orgs*) 0) (or (null cursor) (eq cursor :no-output)))
-      (print-org-stats *orgs*)))
+      (print-org-stats iters *orgs*)))
   (when *display-world*
     (with-safe-pixel-access surface set-pixel
       (let* ((w (sdl-surface-get-w surface))
@@ -327,7 +332,8 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	     (mouse-x (/ tex-w 2))
 	     (mouse-y (/ tex-h 2))
 	     (cursor nil)
-	     (display-random-state (make-random-state t)))
+	     (display-random-state (make-random-state t))
+	     (max-iters nil))
 	(declare (type fixnum num-frames))
 
 	(format t "Window renderer: ~A~%" wrend)
@@ -355,8 +361,11 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	       ((sdl2:scancode= scancode :scancode-o) ;overview
 		(setf cursor nil))
 	       ((sdl2:scancode= scancode :scancode-d) ;display world
-		(setf *display-world* (not *display-world*))))
-	     
+		(setf *display-world* (not *display-world*)))
+	       ((sdl2:scancode= scancode :scancode-0)
+		(setf max-iters nil))
+	       ((sdl2:scancode= scancode :scancode-1)
+		(setf max-iters 0)))
 	     ;;(format t "Key sym: ~a, code: ~a, mod: ~a~%" sym scancode mod-value)
 	     ))
 
@@ -382,7 +391,7 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 		   (null *orgs*))    
 	       (sdl2:push-quit-event)
 	       (progn
-		 (idleloop sur cursor)
+		 (idleloop sur cursor max-iters)
 		 (when *display-world*
 		   (sdl2:update-texture tex (plus-c:c-ref sur SDL2-FFI:SDL-SURFACE :pixels) :width (* 4 tex-w))
 		   ;;TODO: call SDL_RenderClear(sdlRenderer);
@@ -423,6 +432,6 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 (defun without-graphics (&optional (skip-lines 1))
   (let ((*display-world* nil))
     (loop for frame from 0 do
-	 (idleloop nil (if (= (mod frame skip-lines) 0) :no-output :no-output-really)))))
+	 (idleloop nil (if (= (mod frame skip-lines) 0) :no-output :no-output-really) nil))))
 
 ;; this one is pretty good, it can sustain 1300 organisms. It was evolved in about 3-4 hours, the clouds were changed about 3 times: (genes '(IN-ENERGY-LEFT-AN SUB-FROM-BN-AN WALK-X-BN EAT MRK0 READ-AS READ-NEXT WRITE-AS CMP-AS-BS JNE0 SET-AN-1 SETF-BN-MAX-AN-BN WALK-Y-AN ADD-TO-AN-BN MUL-TO-AN-BN EAT MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-BN-AN MUL-TO-AN-BN WALK-Y-AN SPLIT-CELL-AN ADD-TO-BN-AN SETF-AS-AN-GT0 EAT GOTO0 SIGN-AN)), or is there a bug because the organism with the highest energy has about 14.8 million energy, and the average energy is 600000. when initializing the world with organisms having the original (hand-written) genes and simulating it until it has reached a stable population of about 300-700 organisms, and then adding 50 evolved organisms, they out-compete the stable population in a short time. Also see the organisms commented out in #'MAKE-DEFAULT-ORGS.
