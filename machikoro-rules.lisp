@@ -273,7 +273,7 @@ CARD-OR-CARD-NUMBER must either be of type NORMAL-CARD or LARGE-CARD or a card n
   (let ((num-players (length (game-players game))))
     (loop for player-number below num-players do
 	 (when (player-won-p game player-number)
-	   (return player-number)))
+	   (return-from game-over-p player-number)))
     nil))
 
 (defun game-eval-dice-roll! (game player-number roll)
@@ -430,10 +430,13 @@ Note that #'MAKE-NNET-AI-PLAYER and this function are separated because this fun
 		 (when (/= -1 max-card-number)
 		   (buy-card! game player-number max-card-number))
 		 roll-equal-p)))
-	   (player-turn (game player-number)
+	   (player-turn (game turn player-number ai-updaters)
+	     (declare (ignore turn ai-updaters))
 	     (when (and (player-turn-once game player-number)
 			(player-has-card game player-number (find-card "Freizeitpark")))
-	       (player-turn-once game player-number))))
+	       (player-turn-once game player-number))
+	     t ;;this is used by #'RUN-GAME to determine if this turn was skipped or not
+	     ))
     #'player-turn))
 
 ;; Example:
@@ -543,6 +546,7 @@ FROM-START specifies the index where copying starts, FROM-END the index where co
 ;;;; TRAINING
 (load "game-training.lisp")
 
+;;(train +base-edition+ 4 30000)
 #|
 (let ((scores (alexandria:copy-array *last-scores*)))
   (setf scores (sort scores #'score-better))

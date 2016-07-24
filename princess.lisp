@@ -1,4 +1,4 @@
-;; TODO: when an ai plays :KING, there is no entry in the history that shows the cards that each swapping player had. Maybe instead, I should have a nnet that is updated when the player plays :PRIEST or :KING (and in the case of :KING, also the target's nnet is updated), and the nnet receives the other player's player number (i.e. TARGET for PLAYER, and PLAYER for TARGET) and the knowledge about that player's card; the output of the nnet is kept in an array for each player (that means the array stores the ai's knowledge about the other players), and is fed into the SELECT-CARD, SELECT-TARGET, SELECT-GUESS nnets instead of the current HISTORY array. This might help the ais to represent knowledge about other players' hand, which they currently suck at. Hmm... Maybe update each player's belief of the other players' hands after each player, and feed it the played card, the belief-array of the targeted player, and the belief-array of the playing player, and interpret the output as the updated belief-arrays of the two players (targeted and playing player). That way the ais might learn that if a player plays :KING on somebody, probably that somebody has :PRINCESS.
+;; DONE: when an ai plays :KING, there is no entry in the history that shows the cards that each swapping player had. Maybe instead, I should have a nnet that is updated when the player plays :PRIEST or :KING (and in the case of :KING, also the target's nnet is updated), and the nnet receives the other player's player number (i.e. TARGET for PLAYER, and PLAYER for TARGET) and the knowledge about that player's card; the output of the nnet is kept in an array for each player (that means the array stores the ai's knowledge about the other players), and is fed into the SELECT-CARD, SELECT-TARGET, SELECT-GUESS nnets instead of the current HISTORY array. This might help the ais to represent knowledge about other players' hand, which they currently suck at. Hmm... Maybe update each player's belief of the other players' hands after each player, and feed it the played card, the belief-array of the targeted player, and the belief-array of the playing player, and interpret the output as the updated belief-arrays of the two players (targeted and playing player). That way the ais might learn that if a player plays :KING on somebody, probably that somebody has :PRINCESS.
 ;; maybe TODO (only maybe because I'm assigning the players in the next round randomly so the first-player advantage should even out): make the last winner be the dealer for the next round.
 
 (load "game-nnet.lisp")
@@ -60,13 +60,18 @@ one card is put aside. each of the 4 players gets one card. then, for each playe
    (stack :initarg :stack :accessor game-stack :type list)
    (lastcard :initarg :lastcard :accessor game-lastcard :type symbol)
    ;; the following slots provide the ai with information of the game state, and are in the GAME class because I don't want to start another class.
-   (history :initarg :history :initform nil :accessor game-history :type simple-array :documentation "The history of game actions, one entry per turn (so the list can have at most 16 entries).")
    (played :initarg :played :accessor game-played :initform (make-array 8 :element-type 'single-float :initial-element 0.0) :type (simple-array single-float 8) :documentation "For each card type, the fraction of cards that has been played.")
+   (beliefs :initarg :belief :initform (make-array 4 :element-type 'simple-vector :initial-contents (loop for i below 4 collect (make-array 4 :element-type 'simple-vector :initial-contents (loop for i below 4 collect (make-array 8 :element-type 'single-float :initial-element 0.0 :adjustable nil))))) :accessor game-beliefs :type (simple-vector 4) :documentation "for each player, the belief-vector of the 8 cards for all other players")
    ))
 
 (defmethod print-object ((game game) stream)
   (print-unreadable-object (game stream)
-    (format stream "PLAYERS: ~S PROTECTED: ~S~%  STACK: ~S~%  LASTCARD: ~S PLAYED: ~S" (game-players game) (game-protected game) (game-stack game) (game-lastcard game) (game-played game))))
+    (format stream "PLAYERS: ~S PROTECTED: ~S~%  STACK: ~S~%  LASTCARD: ~S PLAYED: ~S~%" (game-players game) (game-protected game) (game-stack game) (game-lastcard game) (game-played game)
+	    ;;(map 'vector (lambda (x) (map 'vector (lambda (x) (map 'vector (lambda (x) (let ((step 0.02)) (* (round x step) step))) x)) x)) (game-beliefs game))
+	    )))
+
+(defun print-game (game)
+  (format t "~S~%" game))
 
 (defun make-game ()
   (let ((s (shuffle-new-stack)))
@@ -100,7 +105,9 @@ one card is put aside. each of the 4 players gets one card. then, for each playe
   (setf (aref (game-players game) player) nil))
 
 (defun play (game current card &optional target guess)
-  "Player CURRENT plays CARD against player TARGET. When calling this function, (AREF (GAME-PLAYERS GAME) CURRENT) must be the other card CURRENT has."
+  "Player CURRENT plays CARD against player TARGET.
+When calling this function, (AREF (GAME-PLAYERS GAME) CURRENT) must be the other card CURRENT has.
+Return the card player TARGET has, or NIL if unknown."
   (declare (optimize (debug 3))
 	   (type game game)
 	   (type (integer 0 4) current)
@@ -172,45 +179,62 @@ one card is put aside. each of the 4 players gets one card. then, for each playe
 	   (return-from game-over-p player-number)))
     nil))
 
-(defun game-make-player-turn (selector-card selector-target selector-guess)
+(defun game-make-player-turn (updater-beliefs selector-cardtarget selector-guess)
   "This function implements the state changes in the game that arise from a player taking its turn.
-The functions SELECTOR-DICE12, SELECTOR-REROLL, and SELECTOR-CARD receive the current game state and must return the step that the player takes.
+The functions UPDATER-BELIEFS, SELECTOR-CARDTARGET, SELECTOR-GUESS receive the current game state and must return the step that the player takes.
 Return a function that is given a GAME instance and a PLAYER-NUMBER, and lets the player with PLAYER-NUMBER take its turn.
 Note that #'MAKE-NNET-AI-PLAYER and this function are separated because this function does not contain any ai-player specific code, but can also be used for a human player."
   (declare (optimize (debug 3)))
-  (labels ((player-turn (game player-number)
+  (labels ((player-turn (game turn player-number ai-updaters)
+	     "AI-UPDATERS is the list of updaters of all players, as returned by this function (#'GAME-MAKE-PLAYER-TURN)."
 	     (let* ((players (game-players game))
 		    (card1 (aref players player-number)))
-	       (when (null card1) (return-from player-turn)) ;skip players that lost
+	       (when (null card1) (return-from player-turn nil)) ;skip players that lost
+	       (when *print-game-events*
+		 (format t "TURN ~S, PLAYER ~S:~%" turn player-number)
+	       (print-game game))
 	       ;; unprotect current player
 	       (when (aref (game-protected game) player-number)
 		 (setf (aref (game-protected game) player-number) nil))
-	       (let* ((card2 (pop (game-stack game)))
-		      (forced (forced-card card1 card2))
-		      (card-to-play (if forced
-					forced
-					(funcall selector-card game player-number card1 card2)))
-		      (play-card (ecase card-to-play ((:card1) card1) ((:card2) card2)))
-		      (remaining-card (ecase card-to-play ((:card1) card2) ((:card2) card1)))
-		      (target (when (position play-card #(:watchwoman :priest :baron :prince :king)) (funcall selector-target game player-number play-card remaining-card)))
-		      (guess (when (eq play-card :watchwoman) (funcall selector-guess game player-number play-card remaining-card))))
+	       (let* ((card2 (pop (game-stack game))))
+		 (multiple-value-bind (wanted-card wanted-target) (funcall selector-cardtarget game turn player-number card1 card2)
+		   (let* ((forced (forced-card card1 card2))
+			  (card-to-play (if forced forced wanted-card))
+			  (play-card (ecase card-to-play ((:card1) card1) ((:card2) card2)))
+			  (remaining-card (ecase card-to-play ((:card1) card2) ((:card2) card1)))
+			  (target (when (position play-card #(:watchwoman :priest :baron :prince :king)) wanted-target))
+			  (guess (when (eq play-card :watchwoman) (funcall selector-guess game turn player-number target))))
 		 (setf (aref players player-number) remaining-card) ;this must be done before calling #'PLAY
 		 (when *print-game-events*
+		   (format t "Belief of player ~S:~S~%" player-number (aref (game-beliefs game) player-number))
 		   (format t "Player ~S plays ~S (keeps ~S)" player-number play-card remaining-card)
 		   (when target
 		     (format t " against player ~S" target)
 		     (when guess
 		       (format t " and guesses card ~S" guess)))
 		   (format t ".~%"))
-		 (let ((shown-card (play game player-number play-card target guess)))
-		   ;; record history
-		   (push (list player-number play-card target guess shown-card) (game-history game)))))))
-    #'player-turn))
+		 (let* ((target-player-card (when target (aref players target)))
+			(shown-card (play game player-number play-card target guess))
+			(current-player-losing-card (when (null (aref players player-number)) remaining-card))
+			(target-player-losing-card (when (and target (null (aref players target))) target-player-card)))
+		   (when (and *print-game-events* shown-card)
+		     (format t "and knows that she has ~S~%" shown-card))
+		   ;; update beliefs
+		   (if shown-card
+		       (let ((target-belief (aref (aref (game-beliefs game) player-number) target)))
+			 (loop for i below 8 do (setf (aref target-belief i) 0.0))
+			 (setf (aref target-belief (1- (card-power shown-card))) 1.0))
+		       (funcall updater-beliefs game turn player-number play-card player-number target current-player-losing-card target-player-losing-card))
+		   ;; update beliefs of other ais
+		   (loop for ai-updater across ai-updaters for ai-number from 0 do
+			(when (/= ai-number player-number)
+			  (funcall ai-updater game turn ai-number play-card player-number target current-player-losing-card target-player-losing-card))))))))
+	     t))
+    (values #'player-turn updater-beliefs)))
 
 (defstruct ai
-  (genes-card nil :type nnet)
-  (genes-target nil :type nnet)
-  (genes-guess nil :type nnet))
+  (genes-belief nil :type nnet)
+  (genes-cardtarget nil :type nnet))
 
 (defun maximal-index (sequence)
   "Return two values: the index with the highest value in SEQUENCE and the highest value, or NIL if SEQUENCE is empty."
@@ -226,128 +250,119 @@ Note that #'MAKE-NNET-AI-PLAYER and this function are separated because this fun
 	     (setf max-value e max-index i))))
     (values max-index max-value)))
 
+(defun copy-array-to-array (input output &optional (input-start-index 0) (output-start-index 0) (size (length input)))
+  (loop for i below size do
+       (setf (aref output (+ i output-start-index)) (aref input (+ i input-start-index)))))
+
 (defun make-nnet-ai-player (edition num-players ai)
   "This function makes an nnet AI player, and must be implemented for every different ai type and game."
   (declare (ignore edition)
 	   (optimize (debug 3)))
-  (let* ((input-size-history-entry (+ num-players ;player-number
-				      8 ;card-to-play
-				      num-players ;target
-				      8 ;guess
-				      8 ;shown card
-				      ))
-	 (input-size-history (+ (* 16 ;(GAME-HISTORY GAME): at most 16 turns
-				   input-size-history-entry)
-				8 ;(GAME-PLAYED GAME)
-				)))
-    (labels ((copy-history-to-input (input start-index game current)
-	       ;;from #'GAME-MAKE-PLAYER-TURN: (PUSH (LIST PLAYER-NUMBER CARD-TO-PLAY TARGET GUESS SHOWN-CARD) (GAME-HISTORY GAME))
-	       (flet ((set-turn (i history-entry)
-			(destructuring-bind (player-number card-to-play target guess shown-card) history-entry
-			  (setf (aref input (+ i (mod (- player-number current) num-players))) 1.0)
-			  (setf (aref input (+ i num-players (1- (card-power card-to-play)))) 1.0)
-			  (when target
-			    (setf (aref input (+ i num-players 8 (mod (- target current) num-players))) 1.0))
-			  (when guess
-			    (setf (aref input (+ i num-players 8 num-players (1- (card-power guess)))) 1.0))
-			  (when (and (= current player-number) shown-card) ;only PLAYER-NUMBER knows SHOWN-CARD
-			    (setf (aref input (+ i num-players 8 num-players 8 (1- (card-power shown-card)))) 1.0)))))
-		 (loop
-		    for history-entry in (game-history game)
-		    for i from start-index by input-size-history-entry do
-		      (set-turn i history-entry))
-		 (setf (subseq input (* 16 input-size-history-entry)) (game-played game))))
-	     (selector-card (game player-number card1 card2)
+  (let* ((input-size-beliefs (* num-players 8))) ;the belief array about the current player ;the belief array about the target player ;the two belief arrays about the 2 other players
+    (labels ((copy-belief-to-input (input start-index beliefs player-number)
+	       (let ((belief (aref beliefs player-number)))
+		 (loop for i below 8 do
+		      (setf (aref input (+ start-index i)) (aref belief i)))))
+	     (copy-beliefs-to-input (input start-index beliefs player-1 player-2 player-3 player-4)
+	       (copy-belief-to-input input (+ start-index) beliefs player-1)
+	       (copy-belief-to-input input (+ 8 start-index) beliefs player-2)
+	       (copy-belief-to-input input (+ 8 8 start-index) beliefs player-3)
+	       (copy-belief-to-input input (+ 8 8 8 start-index) beliefs player-4))
+	     (updater-beliefs (game turn player-number card current-player target-player current-player-losing-card target-player-losing-card)
+	       "Update the belief of player PLAYER-NUMBER when CURRENT-PLAYER plays CARD on TARGET-PLAYER."
+	       (when (null target-player)
+		 (setf target-player (car (remove current-player '(0 1 2 3)))))
 	       (let ((input (make-array (+ 1
-					   input-size-history
+					   1 ;turn
+					   8 ;the played card
+					   8 ;the fraction of cards left
+					   8 ;the remaining card of CURRENT-PLAYER if she lost this turn
+					   8 ;the remaining card of TARGET-PLAYER if she lost this turn
+					   input-size-beliefs ;in the order CURRENT-PLAYER, TARGET-PLAYER, other players
+					   )
+					:element-type 'single-float
+					:initial-element 0.0)))
+		 (setf (aref input 0) 1.0) ;bias
+		 (assert (<= turn 16))
+		 (setf (aref input 1) (float (/ turn 16)))
+		 (setf (aref input (+ 1 1 (1- (card-power card)))) 1.0)
+		 (copy-array-to-array (game-played game) input 0 (+ 1 1 8))
+		 (when current-player-losing-card
+		   (setf (aref input (+ 1 1 8 8 (1- (card-power current-player-losing-card)))) 1.0))
+		 (when target-player-losing-card
+		   (setf (aref input (+ 1 1 8 8 8 (1- (card-power target-player-losing-card)))) 1.0))
+		 (let* ((beliefs (aref (game-beliefs game) player-number))
+			(other-players (remove target-player (remove current-player '(0 1 2 3))))
+			(other-player-1 (car other-players))
+			(other-player-2 (cadr other-players)))
+		   (copy-beliefs-to-input input (+ 1 1 8 8 8 8) beliefs current-player target-player other-player-1 other-player-2)
+		   (let ((output (eval-nnet (ai-genes-belief ai) input)))
+		     (copy-array-to-array output (aref beliefs current-player) 0 0 8)
+		     (copy-array-to-array output (aref beliefs target-player) 8 0 8)
+		     (copy-array-to-array output (aref beliefs other-player-1) 16 0 8)
+		     (copy-array-to-array output (aref beliefs other-player-2) 24 0 8)
+		     nil))))
+	     (selector-cardtarget (game turn player-number card1 card2)
+	       (let ((input (make-array (+ 1
+					   1 ;turn
 					   8 ;cards possible to play
+					   8 8 8 ;beliefs about all other players
 					   )
 					:element-type 'single-float
 					:initial-element 0.0))
 		     (card1-index (1- (card-power card1)))
-		     (card2-index (1- (card-power card2))))
+		     (card2-index (1- (card-power card2)))
+		     (beliefs (aref (game-beliefs game) player-number)))
 		 (setf (aref input 0) 1.0) ;bias
-		 (copy-history-to-input input 1 game player-number)
-		 (setf (aref input (+ 1 input-size-history card1-index)) 1.0)
-		 (setf (aref input (+ 1 input-size-history card2-index)) 1.0)
-		 (let ((output (eval-nnet (ai-genes-card ai) input)))
-		   (if (> (aref output card1-index) (aref output card2-index)) :card1 :card2))))
-	     (selector-target (game player-number card-to-play remaining-card)
-	       (let ((input (make-array (+ 1
-					   input-size-history
-					   8 ;card-to-play
-					   8 ;remaining-card
-					   )
-					:element-type 'single-float
-					:initial-element 0.0))
-		     (card-to-play-index (1- (card-power card-to-play)))
-		     (remaining-card-index (1- (card-power remaining-card))))
-		 (setf (aref input 0) 1.0) ;bias
-		 (copy-history-to-input input 1 game player-number)
-		 (setf (aref input (+ 1 input-size-history card-to-play-index)) 1.0)
-		 (setf (aref input (+ 1 input-size-history 8 remaining-card-index)) 1.0)
-		 (let ((output (eval-nnet (ai-genes-target ai) input)))
-		   ;; of the players still available, take the player with the highest output value. players are relative to PLAYER-NUMBER.
-		   ;;(format t "player-number:~S output:~S~%" player-number output)
-		   (let* ((outval (loop
-				     for i from 0
-				     for player across (game-players game)
-				     for protected across (game-protected game) collect
-				       (progn
-					 ;;(format t "i:~S player:~S protected:~S~%" i player protected)
-					 (if (or (null player) protected) -1.0 (aref output (mod (- i player-number) num-players))))))
-			  (target-player-number (maximal-index outval)))
-		     ;;(format t "outval:~S target-player-number:~S~%" outval target-player-number)
-		     (assert (>= (elt outval target-player-number) 0))
-		     target-player-number))))
-	     (selector-guess (game player-number card-to-play remaining-card)
-	       (let ((input (make-array (+ 1
-					   input-size-history
-					   8 ;card-to-play
-					   8 ;remaining-card
-					   )
-					:element-type 'single-float
-					:initial-element 0.0))
-		     (card-to-play-index (1- (card-power card-to-play)))
-		     (remaining-card-index (1- (card-power remaining-card))))
-		 (setf (aref input 0) 1.0) ;bias
-		 (copy-history-to-input input 1 game player-number)
-		 (setf (aref input (+ 1 input-size-history card-to-play-index)) 1.0)
-		 (setf (aref input (+ 1 input-size-history 8 remaining-card-index)) 1.0)
-		 (let ((output (eval-nnet (ai-genes-target ai) input)))
-		   (setf (aref output 0) 0.0) ;may not guess abigail
-		   (card-from-power (1+ (maximal-index output)))))))
-      (game-make-player-turn #'selector-card #'selector-target #'selector-guess))))
+		 (assert (<= turn 16))
+		 (setf (aref input 1) (float (/ turn 16)))
+		 (let ((player-belief (make-array 8 :element-type 'single-float :initial-element 0.0)))
+		   (setf (aref player-belief card1-index) 1.0)
+		   (setf (aref player-belief card2-index) 1.0)
+		   (setf (aref beliefs player-number) player-belief))
+		 (copy-beliefs-to-input input (+ 1 1) beliefs
+					player-number (mod (+ 1 player-number) 4) (mod (+ 2 player-number) 4) (mod (+ 3 player-number) 4))
+		 (let ((output (eval-nnet (ai-genes-cardtarget ai) input)))
+		   (values
+		    (if (> (aref output card1-index) (aref output card2-index)) :card1 :card2) ;card to play
+		    (flet ((get-target (target-offset-number)
+			     (let ((player-number (mod (+ player-number 1 target-offset-number) 4)))
+			       ;;(prind target-offset-number player-number (aref (game-protected game) player-number) (null (aref (game-players game) player-number)))
+			       (if (or (aref (game-protected game) player-number) (null (aref (game-players game) player-number)))
+				   -1.0
+				   (aref output (+ 8 target-offset-number))))))
+		      (let* ((other-players (make-array 3 :element-type 'single-float :initial-contents (list (get-target 0) (get-target 1) (get-target 2))))
+			     (max-player (multiple-value-bind (i v) (maximal-index other-players)
+					   (if (= v -1.0) 3 i)))
+			     (target (mod (+ player-number 1 max-player) 4))) ;target player
+			;;(prind player-number other-players target)
+			target
+			))))))
+	     (selector-guess (game turn player-number target-player)
+	       (declare (ignore turn))
+	       (let* ((beliefs (aref (game-beliefs game) player-number))
+		      (belief (aref beliefs target-player))
+		      (belief-copy (make-array 8 :element-type 'single-float :initial-element 0.0)))
+		 (copy-array-to-array belief belief-copy)
+		 (setf (aref belief-copy 0) -1.0) ;may not guess watchwoman
+		 (card-from-power (1+ (maximal-index belief-copy))))))
+      (game-make-player-turn #'updater-beliefs #'selector-cardtarget #'selector-guess))))
 
 (defun make-new-ai (edition num-players)
   "NUM-PLAYERS is the number of players in a game."
   (declare (ignore edition))
-  (let* ((input-size-history-entry (+ num-players ;player-number
-				      8 ;card-to-play
-				      num-players ;target
-				      8 ;guess
-				      8 ;shown card
-				      ))
-	 (input-size-history (+ (* 16 ;(GAME-HISTORY GAME): at most 16 turns
-				   input-size-history-entry)
-				8 ;(GAME-PLAYED GAME)
-				))
-	 (genes-card (make-new-nnet (list (+ 1 input-size-history 8) 50 16 8)))
-	 (genes-target (make-new-nnet (list (+ 1 input-size-history 8 8) 50 (* 2 num-players) num-players)))
-	 (genes-guess (make-new-nnet (list (+ 1 input-size-history 8 8) 50 16 8))))
-    (make-ai :genes-card genes-card :genes-target genes-target :genes-guess genes-guess)))
+  (let* ((input-size-beliefs (* num-players 8)) ;the size of the (flattened) belief-array of a player
+	 (genes-belief (make-new-nnet (list (+ 1 1 8 8 8 8 input-size-beliefs) (+ 1 64 input-size-beliefs) (+ 1 8 input-size-beliefs) input-size-beliefs)))
+	 (genes-cardtarget (make-new-nnet (list (+ 1 1 input-size-beliefs) 50 16 (+ 8 3)))))
+    (make-ai :genes-belief genes-belief :genes-cardtarget genes-cardtarget)))
 
 (defun make-ai-offspring (parent1 parent2)
-  (make-ai :genes-card (make-nnet-offspring (ai-genes-card parent1) (ai-genes-card parent2))
-	   :genes-target (make-nnet-offspring (ai-genes-target parent1) (ai-genes-target parent2))
-	   :genes-guess (make-nnet-offspring (ai-genes-guess parent1) (ai-genes-guess parent2))))
-
-(defun print-game (game)
-  (format t "~S~%" game))
+  (make-ai :genes-belief (make-nnet-offspring (ai-genes-belief parent1) (ai-genes-belief parent2))
+	   :genes-cardtarget (make-nnet-offspring (ai-genes-cardtarget parent1) (ai-genes-cardtarget parent2))))
 
 (load "game-training.lisp")
 
-;;(train nil 4 10)
+;;(train nil 4 30000 :fraction-keep 0.9 :games-per-iteration 15)
 #|
 (load "/home/toni/quicklisp/setup.lisp")
 (ql:quickload :alexandria)
