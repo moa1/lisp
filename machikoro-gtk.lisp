@@ -195,6 +195,7 @@
 					   ((eq player :human)
 					    :human)
 					   (t
+					    ;; secondary value (= #'UPDATE-BELIEFS) is not needed in Machi Koro.
 					    (make-nnet-ai-player edition num-players player))))
 				 player-list))))
     (setf turn 0)
@@ -223,7 +224,7 @@
 	      (return-from run-turns :human))
 	     (t
 	      (let ((*print-game-events* t))
-		(funcall ai game next-player-number))))
+		(funcall ai game turn next-player-number nil)))) ;UPDATE-BELIEFS for AIs is not needed in Machi Koro.
 	   (when (player-won-p game next-player-number) ;checking whether the human player won must be done elsewhere
 	     (format t "===> PLAYER ~S WON~%" next-player-number)
 	     (return-from run-turns (start-new-game)))

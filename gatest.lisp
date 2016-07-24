@@ -207,14 +207,14 @@ DROP-AMOUNT is the energy per drop."
 	   (error "Organism ~A has code length 0" orgap))
 	 orgcont)))
 
-(defun set-default-world (&key (w 200) (h 100) (world-energy 50) (orgs 50) (org-energy 500) (reset-random-state t) (world-max-energy 4000))
+(defun set-default-world (&key (w 200) (h 100) (world-energy 50) (orgs 50) (org-energy 500) (reset-random-state t) (world-max-energy 4000) (rain-per-coordinate .03) (fraction-covered .25))
   (when reset-random-state
     (reset-random-state))
   (setf *id* 0)
   (setf *world-tick* 0)
   (setf *world-max-energy* world-max-energy)
   (setf *world* (make-world w h world-energy))
-  (setf *world-clouds* (make-clouds .03 3 .25 30 (array-dimension *world* 0) (array-dimension *world* 1) .1))
+  (setf *world-clouds* (make-clouds rain-per-coordinate 3 fraction-covered 30 (array-dimension *world* 0) (array-dimension *world* 1) .1))
   (let ((orgs (make-default-orgs orgs org-energy)))
     (setf *orgs* (make-hash-table))
     (orgs-add-orgs orgs)
@@ -255,7 +255,7 @@ DROP-AMOUNT is the energy per drop."
 	     (setf max-org-energy (max max-org-energy e))
 	     (incf avg-org-energy e)
 	   (setf min-org-tage/noff (extremum min-org-tage/noff (orgcont-tage/noff org) :sort-function #'min))))
-      (setf avg-org-energy (float (/ avg-org-energy length-orgs)))
+      (setf avg-org-energy (when (> length-orgs 0) (float (/ avg-org-energy length-orgs))))
       (format t "~A+~A (org num:~5A energy avg:~5A max:~5A tage/noff min:~4F)~%"
 	      *world-tick* iters length-orgs (round avg-org-energy) max-org-energy min-org-tage/noff))))
 
@@ -290,7 +290,7 @@ DROP-AMOUNT is the energy per drop."
 	 ;;(prind "kill" (orgcont-id org) status (orgcont-age org) (orgap-energy orgap))
 	 (orgs-del-org org))))))
 
-(defun idleloop (surface ticks)
+(defun idleloop (ticks)
   (declare (optimize (debug 3)))
   ;; TODO: FIXME: Make clouds and organisms conceptually to be event sources so that they have a wait time (i.e. iterations until their next event must be computed). then rewrite the following loop so that always the event source with the least wait time is computed next. Maybe use a heap tree to keep track of the minimum.
   (loop until (let* ((org (cl-heap:peep-at-heap *event-heap*))) (or (null org) (> (orgcont-nexttick org) (+ *world-tick* ticks)))) do
@@ -299,24 +299,7 @@ DROP-AMOUNT is the energy per drop."
 	 (idleloop-event org)))
   (world-rain ticks)
   (print-org-stats ticks *orgs*)
-  (incf *world-tick* ticks)
-  (when *display-world*
-    (with-safe-pixel-access surface set-pixel
-      (let* ((w (sdl-surface-get-w surface))
-	     (h (sdl-surface-get-h surface)))
-	(loop for y below h do
-	     (loop for x below w do
-		  (let* ((c (min 255 (ash (aref *world* x y) -2)))
-			 (color (color-to-argb8888 255 c c c)))
-		    (set-pixel x y color))))
-	(loop for org being the hash-values of *orgs* do
-	     (let* ((orgap (orgcont-orgap org))
-		    (x (orgap-x orgap))
-		    (y (orgap-y orgap))
-		    (e (min 255 (orgap-energy orgap))))
-	       (if (= (orgcont-age org) 0)
-		   (set-pixel x y (color-to-argb8888 255 255 0 0))
-		   (set-pixel x y (color-to-argb8888 255 0 e (max 128 e))))))))))
+  (incf *world-tick* ticks))
 
 (defun nearest-orgap (x y orgs)
   "Return the organism in ORGS which is nearest to coordinate (X, Y)."
@@ -357,8 +340,6 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	     ;; see .../cl-autowrap-20141217-git/cl-plus-c.md: "We may access the various fields as follows:"
 	     (first-frame-time (get-internal-real-time))
 	     (num-frames 0)
-	     (mouse-x (/ tex-w 2))
-	     (mouse-y (/ tex-h 2))
 	     (cursor nil)
 	     (display-random-state (make-random-state t))
 	     (ticks 3200))
@@ -434,8 +415,24 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	   (if (or (and (>= frames 0) (>= num-frames frames)) (= 0 (hash-table-count *orgs*)))
 	       (sdl2:push-quit-event)
 	       (progn
-		 (idleloop sur ticks)
+		 (idleloop ticks)
 		 (when *display-world*
+		   (with-safe-pixel-access sur set-pixel
+		     (let* ((w (sdl-surface-get-w sur))
+			    (h (sdl-surface-get-h sur)))
+		       (loop for y below h do
+			    (loop for x below w do
+				 (let* ((c (min 255 (ash (aref *world* x y) -2)))
+					(color (color-to-argb8888 255 c c c)))
+				   (set-pixel x y color))))
+		       (loop for org being the hash-values of *orgs* do
+			    (let* ((orgap (orgcont-orgap org))
+				   (x (orgap-x orgap))
+				   (y (orgap-y orgap))
+				   (e (min 255 (orgap-energy orgap))))
+			      (if (= (orgcont-age org) 0)
+				  (set-pixel x y (color-to-argb8888 255 255 0 0))
+				  (set-pixel x y (color-to-argb8888 255 0 e (max 128 e))))))))
 		   (sdl2:update-texture tex (plus-c:c-ref sur SDL2-FFI:SDL-SURFACE :pixels) :width (* 4 tex-w))
 		   ;;TODO: call SDL_RenderClear(sdlRenderer);
 		   (sdl2:render-copy wrend tex)
