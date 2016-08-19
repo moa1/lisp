@@ -22,11 +22,11 @@ MATCH-SCORE-FN is a function with two parameters that returns the match or misma
 		     (max-score (max fromup fromleft fromdiag))
 		     (dir nil))
 		(setf (aref m x y) max-score)
-		(if (eq max-score fromup)
+		(if (= max-score fromup)
 		    (setf dir (cons 'up dir)))
-		(if (eq max-score fromleft)
+		(if (= max-score fromleft)
 		    (setf dir (cons 'left dir)))
-		(if (eq max-score fromdiag)
+		(if (= max-score fromdiag)
 		    (setf dir (cons 'diag dir)))
 		(setf (aref w x y) dir))))
     (values m w)))
@@ -35,9 +35,11 @@ MATCH-SCORE-FN is a function with two parameters that returns the match or misma
   (lambda (a b)
     (if (funcall test a b) match-score mismatch-score)))
 
+#|
 (let ((score-fn (make-edit-distance-match-score-fn 3 -2)))
   (defparameter *edm* (nth-value 0 (edit-distance-matrix "abdbc" "abc" score-fn -1)))
   (defparameter *edw* (nth-value 1 (edit-distance-matrix "abdbc" "abc" score-fn -1))))
+|#
 
 (defun print-edit-distance-matrix (m)
   (let ((s1l (array-dimension m 0))
