@@ -235,7 +235,9 @@ Return the augmented NAMESPACE."
   (:documentation "The emitc methods return three values: the generated code to compute the variable, the variable name of the value of the AST, and the namespace augmented with the variable."))
 
 (defun sym-declspec-type (sym)
-  (let* ((type-declspecs (remove-if (lambda (declspec) (not (subtypep (type-of declspec) 'walker:declspec-type)))
+  (declare (optimize (debug 3)))
+  (let* ((type-declspecs (remove-if (lambda (declspec) (not (or (subtypep (type-of declspec) 'walker:declspec-type)
+								(subtypep (type-of declspec) 'walker:declspec-ftype))))
 				    (walker:nso-declspecs sym)))
 	 (first-declspec-type (walker:declspec-type (car type-declspecs))))
     ;;(prind type-declspecs first-declspec-type)
@@ -292,9 +294,8 @@ Return the augmented NAMESPACE."
 						     (declare (ftype (function (,@argument-types) (values ,@values-types)) ,symbol))
 						     (,symbol))))
 	 (fun (walker:form-fun (car (walker:form-body ast))))
-	 (declspecs (walker:nso-declspecs fun))
-	 (declspec (car declspecs))
-	 (c-type (convert-type-from-lisp-to-cffi (walker:declspec-type declspec)))
+	 (debug1 (prind fun (walker:nso-declspecs fun)))
+	 (c-type (convert-type-from-lisp-to-cffi (sym-declspec-type fun)))
 	 (c-fun (make-fun c-name c-type)))
     (augment-nso namespace c-fun fun)))
 
@@ -322,3 +323,19 @@ Return the augmented NAMESPACE."
 		     (format nil "~A(~A, ~A);" (nso-name c-fun)
 			     (join-strings (mapcar #'nso-name arguments-syms) ", ")
 			     (join-strings (mapcar (lambda (v) (format nil "&~A" (nso-name v))) values) ", "))))))
+
+(defmethod emitc ((ast walker:if-form) (namespace namespace) values)
+  (declare (optimize (debug 3)))
+  (let* ((test-var (make-var "if_test" :int))
+	 (namespace (augment-nso namespace test-var))
+	 (test-code (emitc (walker:form-test ast) namespace (list test-var)))
+	 (then-code (emitc (walker:form-then ast) namespace values))
+	 (else-code (when (walker:form-else ast)
+		      (emitc (walker:form-else ast) namespace values))))
+    (c-code (c-scope (c-declaration test-var)
+		     test-code
+		     (format nil "if (~A)" (nso-name test-var))
+		     (c-scope then-code)
+		     (when else-code
+		       (c-code (format nil "else")
+			       (c-scope else-code)))))))
