@@ -53,14 +53,64 @@
 
 ;;;; The backend stuff implementing the special operators of Lisp and some macros.
 
-(defclass backend ()
-  ;;((nso ))
-  ()
-  (:documentation "The global backend variables."))
+(defclass multiple-value-bind-form (walker:form walker:body-form)
+  ((vars :initarg :vars :accessor walker:form-vars :type list :documentation "list of VARs")
+   (values :initarg :values :accessor walker:form-values :type generalform)
+   (declspecs :initarg :declspecs :accessor walker:form-declspecs :type list)))
+(defclass values-form (walker:form walker:body-form)
+  ())
+
+(defmethod print-object ((object multiple-value-bind-form) stream)
+  (print-unreadable-object (object stream :type t :identity t)
+    (format stream "~S ~S ~A" (walker:form-vars object) (walker:form-values object) (walker:format-body object t nil))))
+(defmethod print-object ((object values-form) stream)
+  (print-unreadable-object (object stream :type t :identity t)
+    (format stream "~A" (walker:format-body object nil nil))))
+
+(defun parse-some-macros-p (form lexical-namespace free-namespace parent &key customparsep-function customparse-function customparsedeclspecp-function customparsedeclspec-function)
+  (declare (ignore customparsep-function customparse-function customparsedeclspecp-function customparsedeclspec-function lexical-namespace free-namespace parent))
+  (and (listp form)
+       (let ((head (car form)))
+	 (find head '(multiple-value-bind values)))))
+
+(defun parse-some-macros (form lexical-namespace free-namespace parent &key customparsep-function customparse-function customparsedeclspecp-function customparsedeclspec-function)
+  (declare (optimize (debug 3)))
+  (labels ((reparse (form parent &key (lexical-namespace lexical-namespace))
+	     (walker:parse form lexical-namespace free-namespace parent
+			   :customparsep-function customparsep-function
+			   :customparse-function customparse-function
+			   :customparsedeclspecp-function customparsedeclspecp-function
+			   :customparsedeclspec-function customparsedeclspec-function))
+	   (parse-body (body current &key (lexical-namespace lexical-namespace))
+	     (assert (walker:proper-list-p body) () "Body is not a proper list: ~S" body)
+	     (loop for form in body collect (reparse form current :lexical-namespace lexical-namespace))))
+    (let ((head (car form))
+	  (rest (cdr form)))
+      (cond
+	((eq head 'multiple-value-bind)
+	 (assert (and (consp rest) (listp (car rest)) (listp (cadr rest))) () "Cannot parse MULTIPLE-VALUE-BIND-form ~S" form)
+	 (let* ((vars-form (let ((vars-form (car rest))) (loop for var in vars-form do (assert (symbolp var) () "VARs in MULTIPLE-VALUE-BIND-form must be symbols, not ~S" var)) vars-form))
+		(values-form (cadr rest))
+		(body (cddr rest))
+		(current (make-instance 'multiple-value-bind-form :parent parent))
+		(parsed-vars (loop for var-form in vars-form collect (reparse var-form current)))
+		(parsed-values (reparse values-form current)))
+	   (multiple-value-bind (body parsed-declspecs)
+	       (walker:parse-declaration-in-body body lexical-namespace free-namespace current :customparsedeclspecp-function customparsedeclspecp-function :customparsedeclspec-function customparsedeclspec-function)
+	     (setf (walker:form-vars current) parsed-vars)
+	     (setf (walker:form-values current) parsed-values)
+	     (setf (walker:form-declspecs current) parsed-declspecs)
+	     (setf (walker:form-body current) (parse-body body current)))
+	   current))
+	((eq head 'values)
+	 (let* ((objects-form rest)
+		(current (make-instance 'values-form :parent parent))
+		(parsed-objects (loop for object-form in objects-form collect (reparse object-form current))))
+	   (setf (walker:form-body current) parsed-objects)
+	   current))
+	))))
 
 ;;;; The C backend.
-
-;;(deftype ctype () `(or :int :char :int8 :int16 :int32 :int64 :float :double :pointer :void))
 
 (defclass nso ()
   ((name :initarg :name :accessor nso-name :type string)
@@ -150,10 +200,6 @@ Return the augmented NAMESPACE."
 	(augment-namespace-with-lispsym nso namespace lispsym)
 	(augment-namespace nso namespace))))
   
-(defclass c-backend (backend)
-  ((stream :initarg :stream :accessor backend-stream :type stream :documentation "The output stream that the C file is written to."))
-  (:documentation "The global C backend variables."))
-
 (defun convert-type-from-cffi-to-c (type)
   ;; TODO: FIXME: this function sucks and in addition does no error checking... look at the type conversion code in CFFI maybe.
   (labels ((rec (type)
@@ -241,7 +287,7 @@ Return the augmented NAMESPACE."
 
 (defun emit-c (form &key (values-types '((:pointer :int))))
   (declare (optimize (debug 3)))
-  (let ((ast (walker:parse-with-empty-namespaces form))
+  (let ((ast (walker:parse-with-empty-namespaces form :customparsep-function #'parse-some-macros-p :customparse-function #'parse-some-macros))
 	(values (loop for i from 0 for type in values-types collect (make-var (format nil "value~A" i) type)))
 	(namespace (make-empty-namespace))
 	(builtin-functions '((+ "plus_integer_integer" (integer integer) (integer)))))
@@ -256,8 +302,8 @@ Return the augmented NAMESPACE."
 
 (defmethod emitc-body (body (namespace namespace) values)
   (declare (optimize (debug 3)))
-  (c-code (loop for body in (butlast body) collect (c-scope (emitc body namespace nil)))
-	  (c-scope (emitc (car (last body)) namespace values))))
+  (c-code (loop for body in (butlast body) collect (emitc body namespace nil))
+	  (emitc (car (last body)) namespace values)))
 
 (defmethod emitc ((obj walker:selfevalobject) (namespace namespace) values)
   (declare (optimize (debug 3)))
@@ -368,17 +414,22 @@ Return the augmented NAMESPACE."
 	 (arguments (walker:form-arguments ast))
 	 (arguments-namespace namespace)
 	 (arguments-syms (loop for i from 0 for arg in arguments for arg-type in fun-arguments-type collect
-			      (let ((arg-sym (make-var (format nil "arg~A" i) arg-type)))
+			      (let ((arg-sym (make-var (format nil "arg~A" i) arg-type))
+				    (parg-sym (make-var (format nil "parg~A" i) (list :pointer arg-type))))
 				(setf arguments-namespace (augment-nso arguments-namespace arg-sym))
-				arg-sym)))
-	 (arguments-code (loop for arg-sym in arguments-syms for arg in arguments collect
+				(setf arguments-namespace (augment-nso arguments-namespace parg-sym))
+				(list arg-sym parg-sym))))
+	 (arguments-code (loop for (arg-sym parg-sym) in arguments-syms for arg in arguments collect
 				(c-code (c-scope
-					 (emitc arg arguments-namespace (list arg-sym)))))))
+					 (emitc arg arguments-namespace (list parg-sym)))))))
     (loop for value in values for value-type in fun-values-type do (assert (eq (cadr (nso-type value)) value-type)))
-    (c-code (c-scope (loop for arg-sym in arguments-syms collect (c-declaration arg-sym))
+    (c-code (c-scope (loop for (arg-sym parg-sym) in arguments-syms collect
+			  (c-code
+			   (c-declaration arg-sym)
+			   (c-declaration parg-sym (format nil "&~A" (nso-name arg-sym)))))
 		     arguments-code
 		     (format nil "~A(~A, ~A);" (nso-name c-fun)
-			     (join-strings (mapcar #'nso-name arguments-syms) ", ")
+			     (join-strings (mapcar #'nso-name (mapcar #'car arguments-syms)) ", ")
 			     (join-strings (mapcar (lambda (v type) (declare (ignore type)) (format nil "~A" (nso-name v))) values fun-values-type) ", "))))))
 
 (defmethod emitc ((ast walker:if-form) (namespace namespace) values)
@@ -396,3 +447,30 @@ Return the augmented NAMESPACE."
 		     (when else-code
 		       (c-code (format nil "else")
 			       (c-scope else-code)))))))
+
+(defmethod emitc ((ast values-form) (namespace namespace) values)  
+  (declare (optimize (debug 3)))
+  (let* ((body (walker:form-body ast)))
+    (assert (<= (length body) (length values)))
+    (c-code (c-scope
+	     (loop for object in body for value in values collect
+		  (emitc object namespace (list value)))))))
+
+(defmethod emitc ((ast multiple-value-bind-form) (namespace namespace) values)  
+  (declare (optimize (debug 3)))
+  (let* ((vars-namespace namespace) ;the namespace augmented with all binding variables
+	 (vars-syms (loop for walker-sym in (walker:form-vars ast) collect
+			 (let* ((declspec-type0 (sym-declspec-type walker-sym))
+				(declspec-type (convert-type-from-lisp-to-cffi declspec-type0))
+				(container-sym (make-var (convert-name walker-sym) declspec-type))
+				(var-sym (make-var (format nil "value_~A" (convert-name walker-sym)) (list :pointer declspec-type))))
+			   (assert (not (null declspec-type0)) () "unknown binding type")
+			   (setf vars-namespace (augment-nso vars-namespace container-sym walker-sym))
+			   (setf vars-namespace (augment-nso vars-namespace var-sym))
+			   (list container-sym var-sym))))
+	 (body-code (emitc-body (walker:form-body ast) vars-namespace values)))
+    (c-code (c-scope (loop for (container-sym var-sym) in vars-syms collect
+			  (list (c-declaration container-sym)
+				(c-declaration var-sym (format nil "&~A" (nso-name container-sym)))))
+		     (emitc (walker:form-values ast) namespace (mapcar #'cadr vars-syms))
+		     body-code))))
