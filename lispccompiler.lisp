@@ -239,10 +239,10 @@ Return the augmented NAMESPACE."
 	 (assign-code (format nil "~A~A = ~A;" deref (nso-name l-name) r-value)))
     assign-code))
 
-(defun emit-c (form)
+(defun emit-c (form &key (values-types '((:pointer :int))))
   (declare (optimize (debug 3)))
   (let ((ast (walker:parse-with-empty-namespaces form))
-	(values (loop for i below 5 collect (make-var (format nil "value~A" i) nil)))
+	(values (loop for i from 0 for type in values-types collect (make-var (format nil "value~A" i) type)))
 	(namespace (make-empty-namespace))
 	(builtin-functions '((+ "plus_integer_integer" (integer integer) (integer)))))
     (loop for bf in builtin-functions do
@@ -372,15 +372,14 @@ Return the augmented NAMESPACE."
 				(setf arguments-namespace (augment-nso arguments-namespace arg-sym))
 				arg-sym)))
 	 (arguments-code (loop for arg-sym in arguments-syms for arg in arguments collect
-				(c-code
-				 (emitc arg arguments-namespace (list arg-sym))))))
-    ;; TODO: FIXME: uncomment the following when I can declare value types in #'EMIT-C.
-    ;;(loop for value in values for value-type in fun-values-type do (assert (eq (nso-type value) value-type)))
+				(c-code (c-scope
+					 (emitc arg arguments-namespace (list arg-sym)))))))
+    (loop for value in values for value-type in fun-values-type do (assert (eq (cadr (nso-type value)) value-type)))
     (c-code (c-scope (loop for arg-sym in arguments-syms collect (c-declaration arg-sym))
 		     arguments-code
 		     (format nil "~A(~A, ~A);" (nso-name c-fun)
 			     (join-strings (mapcar #'nso-name arguments-syms) ", ")
-			     (join-strings (mapcar (lambda (v) (format nil "&~A" (nso-name v))) values) ", "))))))
+			     (join-strings (mapcar (lambda (v type) (declare (ignore type)) (format nil "~A" (nso-name v))) values fun-values-type) ", "))))))
 
 (defmethod emitc ((ast walker:if-form) (namespace namespace) values)
   (declare (optimize (debug 3)))
