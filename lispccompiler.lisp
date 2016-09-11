@@ -192,12 +192,16 @@
 (defun make-tag (name)
   (make-instance 'tag :name name))
 
-(defun augment-nso (namespace nso &optional (lispsym nil))
+(defun augment-nso (namespace nso &key (lispsym nil) (insist-on-name nil))
   "Augment NAMESPACE with NSO, which has its name set to a unique string, prefixed by (NSO-NAME NSO).
 If LISPSYM is non-NIL, NAMESPACE records a mapping from LISPSYM to NSO.
 Return the augmented NAMESPACE."
   (declare (optimize (debug 3)))
-  (let* ((name (find-new-name namespace (type-of nso) (nso-name nso))))
+  (let* ((name (if insist-on-name (nso-name nso) (find-new-name namespace (type-of nso) (nso-name nso)))))
+    (let* ((nso-type (type-of nso))
+	   (alist (slot-value namespace nso-type))
+	   (cell (assoc name alist :test 'equal)))
+      (assert (null cell) () "Insisted on name ~S in namespace, but it exists already." (nso-name nso)))
     (setf (nso-name nso) name)
     (if lispsym
 	(augment-namespace-with-lispsym nso namespace lispsym)
@@ -214,6 +218,7 @@ Return the augmented NAMESPACE."
   (let* ((lisp-argument-types (loop for arg in lisp-arguments collect
 				   (etypecase arg
 				     (walker:var (convert-type-from-lisp-to-cffi (sym-declspec-type arg)))
+				     (walker:selfevalobject (convert-type-from-lisp-to-cffi (type-of (walker:selfevalobject-object arg))))
 				     (walker:the-form (convert-type-from-lisp-to-cffi (walker:form-type arg))))))
 	 (lispnsos (namespace-lispnsos namespace)))
     (let* ((possible-by-name (remove-if-not (lambda (x) (and (eq (walker:nso-name lisp-fun) (walker:nso-name (car x))))) lispnsos))
@@ -261,7 +266,7 @@ Return the augmented NAMESPACE."
 	     (if (listp results)
 		 (cons 'values (loop for res in (cdr results) collect (convert-type-from-lisp-to-cffi res)))
 		 (list 'values (convert-type-from-lisp-to-cffi results))))))
-    (t (error "unknown type ~S" type))))
+    (t (error "unknown LISP type ~S" type))))
     
 (defun sym-declspec-type (sym)
   (declare (optimize (debug 3)))
@@ -282,7 +287,7 @@ Return the augmented NAMESPACE."
 	 (fun (walker:form-fun (car (walker:form-body ast))))
 	 (c-type (convert-type-from-lisp-to-cffi (sym-declspec-type fun)))
 	 (c-fun (make-fun c-name c-type)))
-    (augment-nso namespace c-fun fun)))
+    (augment-nso namespace c-fun :lispsym fun :insist-on-name t)))
 
 (defun convert-name (name)
   "Return NAME converted to a C variable or function name. This means - is converted to _."
@@ -317,10 +322,19 @@ Return the augmented NAMESPACE."
   (let ((ast (walker:parse-with-empty-namespaces form :customparsep-function #'parse-some-macros-p :customparse-function #'parse-some-macros))
 	(values (loop for i from 0 for type in values-types collect (make-var (format nil "value~A" i) type)))
 	(namespace (make-empty-namespace))
-	(builtin-functions '((+ "plus_integer_integer" (integer integer) (integer))
-			     (+ "plus_single_float_single_float" (single-float single-float) (single-float))
-			     ))
-	)
+	(builtin-functions '((+ "plus_int_int" (integer integer) (integer))
+			     (+ "plus_float_float" (single-float single-float) (single-float))
+			     (* "multiply_int_int" (integer integer) (integer))
+			     (* "multiply_float_float" (single-float single-float) (single-float))
+			     (- "minus_int_int" (integer integer) (integer))
+			     (- "minus_float_float" (single-float single-float) (single-float))
+			     (print "print_int" (integer) ())
+			     (< "less_int_int" (integer integer) (integer))
+			     (<= "lessequal_int_int" (integer integer) (integer))
+			     (> "greater_int_int" (integer integer) (integer))
+			     (>= "greaterequal_int_int" (integer integer) (integer))
+			     (= "equal_int_int" (integer integer) (integer))
+			     )))
     (loop for bf in builtin-functions do
 	 (setf namespace (augment-namespace-with-builtin-function (car bf) (cadr bf) (caddr bf) (cadddr bf) namespace)))
     (let ((c-lines (emitc ast namespace values)))
@@ -392,7 +406,7 @@ Return the augmented NAMESPACE."
 				    (make-sym-function (cond ((subtypep (type-of ast) 'walker:let-form) #'make-var) ((subtypep (type-of ast) 'walker:flet-form) #'make-fun)))
 				    (binding-sym (funcall make-sym-function (convert-name walker-sym) declspec-type)))
 			       (assert (not (null declspec-type0)) () "unknown binding type")
-			       (setf bindings-namespace (augment-nso bindings-namespace binding-sym walker-sym))
+			       (setf bindings-namespace (augment-nso bindings-namespace binding-sym :lispsym walker-sym))
 			       binding-sym)))
 	 (bindings-code (loop for binding in (walker:form-bindings ast) for binding-sym in bindings-syms collect
 			     (cond
@@ -409,7 +423,7 @@ Return the augmented NAMESPACE."
 								 (declspec-type (convert-type-from-lisp-to-cffi declspec-type0))
 								 (sym (make-var (convert-name c-par) declspec-type)))
 							    (assert (not (null declspec-type0)) () "unknown parameter type")
-							    (setf parameters-namespace (augment-nso parameters-namespace sym c-par))
+							    (setf parameters-namespace (augment-nso parameters-namespace sym :lispsym c-par))
 							    sym)))
 				       (c-values (loop for type in (cdaddr (nso-type binding-sym)) for i from 0 collect
 						      (let* ((sym (make-var (format nil "value~A" i) (list :pointer type))))
@@ -449,25 +463,31 @@ Return the augmented NAMESPACE."
 	 (arguments-code (loop for (arg-sym parg-sym) in arguments-syms for arg in arguments collect
 				(c-code (c-scope
 					 (emitc arg arguments-namespace (list parg-sym)))))))
+    (prind ast values fun-values-type)
     (loop for value in values for value-type in fun-values-type do (assert (eq (cadr (nso-type value)) value-type)))
     (c-code (c-scope (loop for (arg-sym parg-sym) in arguments-syms collect
 			  (c-code
 			   (c-declaration arg-sym)
 			   (c-declaration parg-sym (format nil "&~A" (nso-name arg-sym)))))
 		     arguments-code
-		     (format nil "~A(~A, ~A);" (nso-name c-fun)
-			     (join-strings (mapcar #'nso-name (mapcar #'car arguments-syms)) ", ")
-			     (join-strings (mapcar (lambda (v type) (declare (ignore type)) (format nil "~A" (nso-name v))) values fun-values-type) ", "))))))
+		     (format nil "~A(~A);" (nso-name c-fun)
+			     (join-strings
+			      (concatenate 'list
+					   (mapcar #'nso-name (mapcar #'car arguments-syms))
+					   (mapcar (lambda (v type) (declare (ignore type)) (format nil "~A" (nso-name v))) values fun-values-type))
+			      ", "))))))
 
 (defmethod emitc ((ast walker:if-form) (namespace namespace) values)
   (declare (optimize (debug 3)))
   (let* ((test-var (make-var "if_test" :int))
+	 (ptest-var (make-var "pif_test" '(:pointer :int)))
 	 (namespace (augment-nso namespace test-var))
-	 (test-code (emitc (walker:form-test ast) namespace (list test-var)))
+	 (namespace (augment-nso namespace ptest-var))
+	 (test-code (emitc (walker:form-test ast) namespace (list ptest-var)))
 	 (then-code (emitc (walker:form-then ast) namespace values))
-	 (else-code (when (walker:form-else ast)
-		      (emitc (walker:form-else ast) namespace values))))
+	 (else-code (when (walker:form-else ast) (emitc (walker:form-else ast) namespace values))))
     (c-code (c-scope (c-declaration test-var)
+		     (c-declaration ptest-var (format nil "&~A" (nso-name test-var)))
 		     test-code
 		     (format nil "if (~A)" (nso-name test-var))
 		     (c-scope then-code)
@@ -492,7 +512,7 @@ Return the augmented NAMESPACE."
 				(container-sym (make-var (convert-name walker-sym) declspec-type))
 				(var-sym (make-var (format nil "value_~A" (convert-name walker-sym)) (list :pointer declspec-type))))
 			   (assert (not (null declspec-type0)) () "unknown binding type")
-			   (setf vars-namespace (augment-nso vars-namespace container-sym walker-sym))
+			   (setf vars-namespace (augment-nso vars-namespace container-sym :lispsym walker-sym))
 			   (setf vars-namespace (augment-nso vars-namespace var-sym))
 			   (list container-sym var-sym))))
 	 (body-code (emitc-body (walker:form-body ast) vars-namespace values)))
