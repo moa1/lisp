@@ -5,6 +5,9 @@
 
 ;;;; Package
 
+;; Example: (lispccompiler::emit-c '(let ((a 1.0) (b 1.0) (c 1.0)) (declare (type single-float a b c)) a b (+ (the single-float (+ a b)) c)) :values-types '((:pointer :float)))
+
+
 (defpackage :lispccompiler
   (:use :cl))
 (in-package :lispccompiler)
@@ -207,11 +210,21 @@ Return the augmented NAMESPACE."
     c-nso))
 
 (defun find-fun-for-lisp-fun (namespace lisp-fun lisp-arguments)
-  (prind (namespace-lispnsos namespace))
-  (let* ((c-fun-assoc (let ((res (assoc (walker:nso-name lisp-fun) (namespace-lispnsos namespace) :key #'walker:nso-name)))
-			(assert res () "Lisp function ~A was not augmented to C-namespace ~A" lisp-fun namespace) res))
-	 (c-fun (cdr c-fun-assoc)))
-    c-fun))
+  (declare (optimize (debug 3)))
+  (let* ((lisp-argument-types (loop for arg in lisp-arguments collect
+				   (etypecase arg
+				     (walker:var (convert-type-from-lisp-to-cffi (sym-declspec-type arg)))
+				     (walker:the-form (convert-type-from-lisp-to-cffi (walker:form-type arg))))))
+	 (lispnsos (namespace-lispnsos namespace)))
+    (let* ((possible-by-name (remove-if-not (lambda (x) (and (eq (walker:nso-name lisp-fun) (walker:nso-name (car x))))) lispnsos))
+	   (possible-by-name-and-types (remove-if-not (lambda (x) (equal lisp-argument-types (cadr (nso-type (cdr x))))) possible-by-name)))
+      ;;(prind lisp-argument-types) (prind possible-by-name) (prind possible-by-name-and-types)
+      (assert (not (null possible-by-name)) () "Lisp function ~A was not augmented to C-namespace ~A" lisp-fun namespace)
+      (assert (not (null possible-by-name-and-types)) () "Lisp function ~A was augmented to C-namespace, but argument types do not match requested types ~A" lisp-fun lisp-argument-types)
+      (let* ((c-fun-assoc (car possible-by-name-and-types))
+	     (c-fun (cdr c-fun-assoc)))
+	(assert c-fun-assoc () "Lisp function ~A was not augmented to C-namespace ~A" lisp-fun namespace)
+	c-fun))))
 
 (defun convert-type-from-cffi-to-c (type)
   ;; TODO: FIXME: this function sucks and in addition does no error checking... look at the type conversion code in CFFI maybe.
@@ -254,12 +267,13 @@ Return the augmented NAMESPACE."
   (declare (optimize (debug 3)))
   (let* ((type-declspecs (remove-if (lambda (declspec) (not (or (subtypep (type-of declspec) 'walker:declspec-type)
 								(subtypep (type-of declspec) 'walker:declspec-ftype))))
-				    (walker:nso-declspecs sym)))
-	 (first-declspec-type (walker:declspec-type (car type-declspecs))))
-    ;;(prind type-declspecs first-declspec-type)
-    (assert (loop for d in (cdr type-declspecs) always (eq (walker:declspec-type d) first-declspec-type)) () "Conflicting type declarations in ~S" type-declspecs)
-    ;; TODO: for compatible type-declarations, find the most specific type and return it. (e.g. for NUMBER and FLOAT return FLOAT.)
-    first-declspec-type))
+				    (walker:nso-declspecs sym))))
+    (assert (not (null type-declspecs)) () "Lisp symbol ~A has unknown type" sym)
+    (let ((first-declspec-type (walker:declspec-type (car type-declspecs))))
+      ;;(prind type-declspecs first-declspec-type)
+      (assert (loop for d in (cdr type-declspecs) always (eq (walker:declspec-type d) first-declspec-type)) () "Conflicting type declarations in ~S" type-declspecs)
+      ;; TODO: for compatible type-declarations, find the most specific type and return it. (e.g. for NUMBER and FLOAT return FLOAT.)
+      first-declspec-type)))
 
 (defun augment-namespace-with-builtin-function (symbol c-name argument-types values-types namespace)
   (let* ((ast (walker:parse-with-empty-namespaces `(flet ((,symbol ()))
@@ -304,7 +318,7 @@ Return the augmented NAMESPACE."
 	(values (loop for i from 0 for type in values-types collect (make-var (format nil "value~A" i) type)))
 	(namespace (make-empty-namespace))
 	(builtin-functions '((+ "plus_integer_integer" (integer integer) (integer))
-			     ;;(+ "plus_single_float_single_float" (single-float single-float) (single-float))
+			     (+ "plus_single_float_single_float" (single-float single-float) (single-float))
 			     ))
 	)
     (loop for bf in builtin-functions do
@@ -318,14 +332,14 @@ Return the augmented NAMESPACE."
 
 (defmethod emitc-body (body (namespace namespace) values)
   (declare (optimize (debug 3)))
-  (c-code (loop for body in (butlast body) collect (emitc body namespace nil))
+  (c-code (loop for body in (butlast body) collect (c-code (emitc body namespace nil) ";"))
 	  (emitc (car (last body)) namespace values)))
 
 (defmethod emitc ((obj walker:selfevalobject) (namespace namespace) values)
   (declare (optimize (debug 3)))
   (let ((obj (walker:selfevalobject-object obj)))
     (cond
-      ((subtypep (type-of obj) 'integer)
+      ((or (subtypep (type-of obj) 'integer) (subtypep (type-of obj) 'float))
        (unless (null values)
 	 (c-assign (car values) obj)))
       (t
@@ -487,3 +501,7 @@ Return the augmented NAMESPACE."
 				(c-declaration var-sym (format nil "&~A" (nso-name container-sym)))))
 		     (emitc (walker:form-values ast) namespace (mapcar #'cadr vars-syms))
 		     body-code))))
+
+(defmethod emitc ((ast walker:the-form) (namespace namespace) values)  
+  (declare (optimize (debug 3)))
+  (c-code (emitc (walker:form-value ast) namespace values)))
