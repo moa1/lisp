@@ -349,7 +349,7 @@ Return the augmented NAMESPACE."
 			     (1+ "plusone_float" (single-float) (single-float))
 			     (1- "minusone_int" (integer) (integer))
 			     (1- "minusone_float" (single-float) (single-float))
-			     (print "print_int" (integer) ())
+			     (print "print_int" (integer) (integer))
 			     (< "less_int_int" (integer integer) (integer))
 			     (<= "lessequal_int_int" (integer integer) (integer))
 			     (> "greater_int_int" (integer integer) (integer))
@@ -545,3 +545,12 @@ Return the augmented NAMESPACE."
 (defmethod emitc ((ast walker:the-form) (namespace namespace) values)  
   (declare (optimize (debug 3)))
   (c-code (emitc (walker:form-value ast) namespace values)))
+
+(defmethod emitc ((ast walker:setq-form) (namespace namespace) values)  
+  (declare (optimize (debug 3)))
+  (c-code (loop for var in (walker:form-vars ast) for form-value in (walker:form-values ast) collect
+	       (let* ((c-var (find-var-for-lisp-var namespace var))
+		      (pvar-sym (make-var (format nil "p~A" (nso-name c-var)) (list :pointer (nso-type c-var))))
+		      (namespace (augment-nso namespace pvar-sym)))
+		 (c-scope (c-declaration pvar-sym (format nil "&~A" (nso-name c-var)))
+			  (emitc form-value namespace (list pvar-sym)))))))

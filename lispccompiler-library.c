@@ -30,8 +30,9 @@ void inline minusone_int (int a, int* r) {
 void inline minusone_float (float a, float* r) {
 	*r = a-1;
 }
-void inline print_int(int a) {
+void inline print_int(int a, int* r) {
 	printf("%i",a);
+	*r = a;
 }
 void inline less_int_int(int a, int b, int* r) {
 	*r = a<b;
