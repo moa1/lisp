@@ -18,6 +18,18 @@ void inline minus_int_int(int a, int b, int* r) {
 void inline minus_float_float(float a, float b, float* r) {
 	*r = a-b;
 }
+void inline plusone_int (int a, int* r) {
+	*r = a+1;
+}
+void inline plusone_float (float a, float* r) {
+	*r = a+1;
+}
+void inline minusone_int (int a, int* r) {
+	*r = a-1;
+}
+void inline minusone_float (float a, float* r) {
+	*r = a-1;
+}
 void inline print_int(int a) {
 	printf("%i",a);
 }

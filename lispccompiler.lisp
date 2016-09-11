@@ -62,6 +62,9 @@
    (declspecs :initarg :declspecs :accessor walker:form-declspecs :type list)))
 (defclass values-form (walker:form walker:body-form)
   ())
+(defclass nth-value-form (walker:form)
+  ((value :initarg :value :accessor walker:form-value :type generalform)
+   (values :initarg :values :accessor walker:form-values :type generalform)))
 
 (defmethod print-object ((object multiple-value-bind-form) stream)
   (print-unreadable-object (object stream :type t :identity t)
@@ -69,12 +72,15 @@
 (defmethod print-object ((object values-form) stream)
   (print-unreadable-object (object stream :type t :identity t)
     (format stream "~A" (walker:format-body object nil nil))))
+(defmethod print-object ((object nth-value-form) stream)
+  (print-unreadable-object (object stream :type t :identity t)
+    (format stream "~A ~A" (walker:form-value object) (walker:form-values object))))
 
 (defun parse-some-macros-p (form lexical-namespace free-namespace parent &key customparsep-function customparse-function customparsedeclspecp-function customparsedeclspec-function)
   (declare (ignore customparsep-function customparse-function customparsedeclspecp-function customparsedeclspec-function lexical-namespace free-namespace parent))
   (and (listp form)
        (let ((head (car form)))
-	 (find head '(multiple-value-bind values)))))
+	 (find head '(multiple-value-bind values nth-value)))))
 
 (defun parse-some-macros (form lexical-namespace free-namespace parent &key customparsep-function customparse-function customparsedeclspecp-function customparsedeclspec-function)
   (declare (optimize (debug 3)))
@@ -110,6 +116,16 @@
 		(current (make-instance 'values-form :parent parent))
 		(parsed-objects (loop for object-form in objects-form collect (reparse object-form current))))
 	   (setf (walker:form-body current) parsed-objects)
+	   current))
+	((eq head 'nth-value)
+	 (assert (and (consp rest) (consp (cdr rest)) (null (cddr rest))) () "Cannot parse NTH-VALUE-form ~S" form)
+	 (let* ((value-form (car rest))
+		(values-form (cadr rest))
+		(current (make-instance 'nth-value-form :parent parent))
+		(parsed-value (reparse value-form current))
+		(parsed-values (reparse values-form current)))
+	   (setf (walker:form-value current) parsed-value)
+	   (setf (walker:form-values current) parsed-values)
 	   current))
 	))))
 
@@ -254,6 +270,7 @@ Return the augmented NAMESPACE."
 (defun convert-type-from-lisp-to-cffi (type)
   (cond
     ((subtypep type 'integer) :int)
+    ((subtypep type 'symbol) :int)
     ((subtypep type 'single-float) :float)
     ((subtypep type 'double-float) :double)
     ((subtypep type nil) :void)
@@ -328,6 +345,10 @@ Return the augmented NAMESPACE."
 			     (* "multiply_float_float" (single-float single-float) (single-float))
 			     (- "minus_int_int" (integer integer) (integer))
 			     (- "minus_float_float" (single-float single-float) (single-float))
+			     (1+ "plusone_int" (integer) (integer))
+			     (1+ "plusone_float" (single-float) (single-float))
+			     (1- "minusone_int" (integer) (integer))
+			     (1- "minusone_float" (single-float) (single-float))
 			     (print "print_int" (integer) ())
 			     (< "less_int_int" (integer integer) (integer))
 			     (<= "lessequal_int_int" (integer integer) (integer))
@@ -387,11 +408,10 @@ Return the augmented NAMESPACE."
     (loop for v1 in values-type for v2 in values do (assert (eq v1 (cadr (nso-type v2)))))
     (format nil "int ~A (~A)"
 	    (nso-name fun)
-	    (join-strings
-	     (list
-	      (join-strings (mapcar (lambda (x) (format nil "~A ~A" (convert-type-from-cffi-to-c (nso-type x)) (nso-name x))) parameters) ", ")
-	      (join-strings (mapcar (lambda (x) (format nil "~A ~A" (convert-type-from-cffi-to-c (nso-type x)) (nso-name x))) values) ", "))
-	     ", "))))
+	    (join-strings (append
+			   (mapcar (lambda (x) (format nil "~A ~A" (convert-type-from-cffi-to-c (nso-type x)) (nso-name x))) parameters)
+			   (mapcar (lambda (x) (format nil "~A ~A" (convert-type-from-cffi-to-c (nso-type x)) (nso-name x))) values))
+			  ", "))))
 
 (defun emitc-let-flet (ast namespace values)
   (declare (optimize (debug 3)))
