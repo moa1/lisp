@@ -269,6 +269,18 @@ Return the augmented NAMESPACE."
       (t
        (error "unknown type of selfevalobject ~S" obj)))))
 
+(defmethod emitc ((ast walker:quote-form) (namespace namespace) values)
+  (declare (optimize (debug 3)))
+  (let* ((obj (walker:form-object ast))
+	 (c-obj (format nil "~A /*~A*/"
+			(etypecase obj
+			  (integer obj)
+			  (float obj)
+			  (symbol (sxhash obj)))
+			obj)))
+    (unless (null values)
+      (c-assign (car values) c-obj))))
+
 (defmethod emitc ((nso walker:sym) (namespace namespace) values)
   (declare (optimize (debug 3)))
   (let* ((c-nso-assoc (assoc nso (namespace-lispnsos namespace)))
