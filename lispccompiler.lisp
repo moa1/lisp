@@ -216,7 +216,9 @@ Return the augmented NAMESPACE."
 
 (defun c-assign (l-name r-value)
   (declare (optimize (debug 3)))
-  (let ((assign-code (format nil "~A = ~A;" (nso-name l-name) r-value)))
+  (let* ((deref-p (let ((type (nso-type l-name))) (and (listp type) (eq (car type) :pointer))))
+	 (deref (if deref-p "*" ""))
+	 (assign-code (format nil "~A~A = ~A;" deref (nso-name l-name) r-value)))
     assign-code))
 
 (defun emit-c (form)
@@ -269,32 +271,78 @@ Return the augmented NAMESPACE."
 	(nso-name c-nso)
 	(c-assign (car values) (nso-name c-nso)))))
 
-(defmethod emitc ((ast walker:let-form) (namespace namespace) values)
+(defun c-defun-head (fun parameters values)
   (declare (optimize (debug 3)))
+  (let* ((c-fun-type (let ((type (nso-type fun))) (assert (eq (car type) :function)) type))
+	 (parameters-type (cadr c-fun-type))
+	 (values-type (cdaddr c-fun-type)))
+    (loop for p1 in parameters-type for p2 in parameters do (assert (eq p1 (nso-type p2))))
+    (loop for v1 in values-type for v2 in values do (assert (eq v1 (cadr (nso-type v2)))))
+    (format nil "int ~A (~A)"
+	    (nso-name fun)
+	    (join-strings
+	     (list
+	      (join-strings (mapcar (lambda (x) (format nil "~A ~A" (convert-type-from-cffi-to-c (nso-type x)) (nso-name x))) parameters) ", ")
+	      (join-strings (mapcar (lambda (x) (format nil "~A ~A" (convert-type-from-cffi-to-c (nso-type x)) (nso-name x))) values) ", "))
+	     ", "))))
+
+(defun emitc-let-flet (ast namespace values)
+  (declare (optimize (debug 3)))
+  (assert (or (subtypep (type-of ast) 'walker:let-form) (subtypep (type-of ast) 'walker:flet-form)))
   (assert (not (null (walker:form-body ast))))
   ;;(prind ast)
   (let* ((bindings-namespace namespace) ;the namespace augmented with all binding variables
 	 (bindings-syms (loop for binding in (walker:form-bindings ast) collect
 			     (let* ((walker-sym (walker:binding-sym binding))
-				    (declspec-type (convert-type-from-lisp-to-cffi (sym-declspec-type walker-sym)))
-				    (binding-sym (make-var (convert-name walker-sym) declspec-type)))
-			       (assert (not (null declspec-type)))
+				    (declspec-type0 (sym-declspec-type walker-sym))
+				    (declspec-type (convert-type-from-lisp-to-cffi declspec-type0))
+				    (make-sym-function (cond ((subtypep (type-of ast) 'walker:let-form) #'make-var) ((subtypep (type-of ast) 'walker:flet-form) #'make-fun)))
+				    (binding-sym (funcall make-sym-function (convert-name walker-sym) declspec-type)))
+			       (assert (not (null declspec-type0)) () "unknown binding type")
 			       (setf bindings-namespace (augment-nso bindings-namespace binding-sym walker-sym))
 			       binding-sym)))
 	 (bindings-code (loop for binding in (walker:form-bindings ast) for binding-sym in bindings-syms collect
-			     (let ((value-code (emitc (walker:binding-value binding) bindings-namespace (list binding-sym))))
-			       (c-code (c-declaration binding-sym)
-				       (c-scope value-code)))))
+			     (cond
+			       ((subtypep (type-of ast) 'walker:let-form)
+				(let ((value-code (emitc (walker:binding-value binding) bindings-namespace (list binding-sym))))
+				  (c-code (c-declaration binding-sym)
+					  (c-scope value-code))))
+			       ((subtypep (type-of ast) 'walker:flet-form)
+				(let* ((parameters (walker:llist-required (walker:form-llist binding)))
+				       (parameters-namespace bindings-namespace)
+				       (c-parameters (loop for par in parameters collect
+							  (let* ((c-par (walker:argument-var par))
+								 (declspec-type0 (sym-declspec-type c-par))
+								 (declspec-type (convert-type-from-lisp-to-cffi declspec-type0))
+								 (sym (make-var (convert-name c-par) declspec-type)))
+							    (assert (not (null declspec-type0)) () "unknown parameter type")
+							    (setf parameters-namespace (augment-nso parameters-namespace sym c-par))
+							    sym)))
+				       (c-values (loop for type in (cdaddr (nso-type binding-sym)) for i from 0 collect
+						      (let* ((sym (make-var (format nil "value~A" i) (list :pointer type))))
+							(assert (not (null type)) () "unknown value type")
+							(setf parameters-namespace (augment-nso parameters-namespace sym))
+							sym)))
+				       (body-code (emitc-body (walker:form-body binding) parameters-namespace c-values)))
+				  (c-code (list (format nil "~A" (c-defun-head binding-sym c-parameters c-values)))
+					  (c-scope body-code)))))))
 	 (body-code (emitc-body (walker:form-body ast) bindings-namespace values)))
     (c-code (c-scope bindings-code
 		     body-code))))
+
+(defmethod emitc ((ast walker:let-form) (namespace namespace) values)
+  (declare (optimize (debug 3)))
+  (emitc-let-flet ast namespace values))
+
+(defmethod emitc ((ast walker:flet-form) (namespace namespace) values)
+  (declare (optimize (debug 3)))
+  (emitc-let-flet ast namespace values))
 
 (defun augment-namespace-with-builtin-function (symbol c-name argument-types values-types namespace)
   (let* ((ast (walker:parse-with-empty-namespaces `(flet ((,symbol ()))
 						     (declare (ftype (function (,@argument-types) (values ,@values-types)) ,symbol))
 						     (,symbol))))
 	 (fun (walker:form-fun (car (walker:form-body ast))))
-	 (debug1 (prind fun (walker:nso-declspecs fun)))
 	 (c-type (convert-type-from-lisp-to-cffi (sym-declspec-type fun)))
 	 (c-fun (make-fun c-name c-type)))
     (augment-nso namespace c-fun fun)))
