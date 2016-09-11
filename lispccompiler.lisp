@@ -199,7 +199,20 @@ Return the augmented NAMESPACE."
     (if lispsym
 	(augment-namespace-with-lispsym nso namespace lispsym)
 	(augment-namespace nso namespace))))
-  
+
+(defun find-var-for-lisp-var (namespace lisp-sym)
+  (let* ((c-nso-assoc (assoc lisp-sym (namespace-lispnsos namespace)))
+	 (c-nso (cdr c-nso-assoc)))
+    (assert c-nso-assoc () "Lisp variable ~A was not augmented to C-namespace ~A" lisp-sym namespace)
+    c-nso))
+
+(defun find-fun-for-lisp-fun (namespace lisp-fun lisp-arguments)
+  (prind (namespace-lispnsos namespace))
+  (let* ((c-fun-assoc (let ((res (assoc (walker:nso-name lisp-fun) (namespace-lispnsos namespace) :key #'walker:nso-name)))
+			(assert res () "Lisp function ~A was not augmented to C-namespace ~A" lisp-fun namespace) res))
+	 (c-fun (cdr c-fun-assoc)))
+    c-fun))
+
 (defun convert-type-from-cffi-to-c (type)
   ;; TODO: FIXME: this function sucks and in addition does no error checking... look at the type conversion code in CFFI maybe.
   (labels ((rec (type)
@@ -290,7 +303,10 @@ Return the augmented NAMESPACE."
   (let ((ast (walker:parse-with-empty-namespaces form :customparsep-function #'parse-some-macros-p :customparse-function #'parse-some-macros))
 	(values (loop for i from 0 for type in values-types collect (make-var (format nil "value~A" i) type)))
 	(namespace (make-empty-namespace))
-	(builtin-functions '((+ "plus_integer_integer" (integer integer) (integer)))))
+	(builtin-functions '((+ "plus_integer_integer" (integer integer) (integer))
+			     ;;(+ "plus_single_float_single_float" (single-float single-float) (single-float))
+			     ))
+	)
     (loop for bf in builtin-functions do
 	 (setf namespace (augment-namespace-with-builtin-function (car bf) (cadr bf) (caddr bf) (cadddr bf) namespace)))
     (let ((c-lines (emitc ast namespace values)))
@@ -329,9 +345,7 @@ Return the augmented NAMESPACE."
 
 (defmethod emitc ((nso walker:sym) (namespace namespace) values)
   (declare (optimize (debug 3)))
-  (let* ((c-nso-assoc (assoc nso (namespace-lispnsos namespace)))
-	 (c-nso (cdr c-nso-assoc)))
-    (assert c-nso-assoc () "Lisp nso ~A was not augmented to c-namespace ~A" nso namespace)
+  (let* ((c-nso (find-var-for-lisp-var namespace nso)))
     (if (null values)
 	(nso-name c-nso)
 	(c-assign (car values) (nso-name c-nso)))))
@@ -406,12 +420,11 @@ Return the augmented NAMESPACE."
 (defmethod emitc ((ast walker:application-form) (namespace namespace) values)
   (declare (optimize (debug 3)))
   (let* ((fun (walker:form-fun ast))
-	 (c-fun-assoc (let ((res (assoc (walker:nso-name fun) (namespace-lispnsos namespace) :key #'walker:nso-name))) (assert res () "Lisp fun ~A was not augmented to c-namespace ~A" fun namespace) res))
-	 (c-fun (cdr c-fun-assoc))
+	 (arguments (walker:form-arguments ast))
+	 (c-fun (find-fun-for-lisp-fun namespace fun arguments))
 	 (fun-type (nso-type c-fun))
 	 (fun-arguments-type (cadr fun-type))
 	 (fun-values-type (cdaddr fun-type))
-	 (arguments (walker:form-arguments ast))
 	 (arguments-namespace namespace)
 	 (arguments-syms (loop for i from 0 for arg in arguments for arg-type in fun-arguments-type collect
 			      (let ((arg-sym (make-var (format nil "arg~A" i) arg-type))
