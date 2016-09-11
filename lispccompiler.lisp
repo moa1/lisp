@@ -191,12 +191,30 @@ Return the augmented NAMESPACE."
 		 (list 'values (convert-type-from-lisp-to-cffi results))))))
     (t (error "unknown type ~S" type))))
     
+(defun sym-declspec-type (sym)
+  (declare (optimize (debug 3)))
+  (let* ((type-declspecs (remove-if (lambda (declspec) (not (or (subtypep (type-of declspec) 'walker:declspec-type)
+								(subtypep (type-of declspec) 'walker:declspec-ftype))))
+				    (walker:nso-declspecs sym)))
+	 (first-declspec-type (walker:declspec-type (car type-declspecs))))
+    ;;(prind type-declspecs first-declspec-type)
+    (assert (loop for d in (cdr type-declspecs) always (eq (walker:declspec-type d) first-declspec-type)) () "Conflicting type declarations in ~S" type-declspecs)
+    ;; TODO: for compatible type-declarations, find the most specific type and return it. (e.g. for NUMBER and FLOAT return FLOAT.)
+    first-declspec-type))
+
+(defun augment-namespace-with-builtin-function (symbol c-name argument-types values-types namespace)
+  (let* ((ast (walker:parse-with-empty-namespaces `(flet ((,symbol ()))
+						     (declare (ftype (function (,@argument-types) (values ,@values-types)) ,symbol))
+						     (,symbol))))
+	 (fun (walker:form-fun (car (walker:form-body ast))))
+	 (c-type (convert-type-from-lisp-to-cffi (sym-declspec-type fun)))
+	 (c-fun (make-fun c-name c-type)))
+    (augment-nso namespace c-fun fun)))
+
 (defun convert-name (name)
   "Return NAME converted to a C variable or function name. This means - is converted to _."
   (let ((name-string (string (walker:nso-name name))))
     (substitute #\_ #\- name-string)))
-
-(defparameter *c-scope* nil "The current C scope.")
 
 (defun c-code (&rest l)
   (flatten l))
@@ -235,17 +253,6 @@ Return the augmented NAMESPACE."
 (defgeneric emitc (generalform namespace values-vars)
   (declare (optimize (debug 3)))
   (:documentation "The emitc methods return three values: the generated code to compute the variable, the variable name of the value of the AST, and the namespace augmented with the variable."))
-
-(defun sym-declspec-type (sym)
-  (declare (optimize (debug 3)))
-  (let* ((type-declspecs (remove-if (lambda (declspec) (not (or (subtypep (type-of declspec) 'walker:declspec-type)
-								(subtypep (type-of declspec) 'walker:declspec-ftype))))
-				    (walker:nso-declspecs sym)))
-	 (first-declspec-type (walker:declspec-type (car type-declspecs))))
-    ;;(prind type-declspecs first-declspec-type)
-    (assert (loop for d in (cdr type-declspecs) always (eq (walker:declspec-type d) first-declspec-type)) () "Conflicting type declarations in ~S" type-declspecs)
-    ;; TODO: for compatible type-declarations, find the most specific type and return it. (e.g. for NUMBER and FLOAT return FLOAT.)
-    first-declspec-type))
 
 (defmethod emitc-body (body (namespace namespace) values)
   (declare (optimize (debug 3)))
@@ -337,15 +344,6 @@ Return the augmented NAMESPACE."
 (defmethod emitc ((ast walker:flet-form) (namespace namespace) values)
   (declare (optimize (debug 3)))
   (emitc-let-flet ast namespace values))
-
-(defun augment-namespace-with-builtin-function (symbol c-name argument-types values-types namespace)
-  (let* ((ast (walker:parse-with-empty-namespaces `(flet ((,symbol ()))
-						     (declare (ftype (function (,@argument-types) (values ,@values-types)) ,symbol))
-						     (,symbol))))
-	 (fun (walker:form-fun (car (walker:form-body ast))))
-	 (c-type (convert-type-from-lisp-to-cffi (sym-declspec-type fun)))
-	 (c-fun (make-fun c-name c-type)))
-    (augment-nso namespace c-fun fun)))
 
 (defmethod emitc ((ast walker:application-form) (namespace namespace) values)
   (declare (optimize (debug 3)))
