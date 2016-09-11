@@ -226,7 +226,7 @@ Return the augmented NAMESPACE."
 (defun find-var-for-lisp-var (namespace lisp-sym)
   (let* ((c-nso-assoc (assoc lisp-sym (namespace-lispnsos namespace)))
 	 (c-nso (cdr c-nso-assoc)))
-    (assert c-nso-assoc () "Lisp variable ~A was not augmented to C-namespace ~A" lisp-sym namespace)
+    (assert c-nso-assoc () "Lisp variable ~A was not augmented to C-namespace~%~A" lisp-sym namespace)
     c-nso))
 
 (defun find-fun-for-lisp-fun (namespace lisp-fun lisp-arguments)
@@ -240,11 +240,11 @@ Return the augmented NAMESPACE."
     (let* ((possible-by-name (remove-if-not (lambda (x) (and (eq (walker:nso-name lisp-fun) (walker:nso-name (car x))))) lispnsos))
 	   (possible-by-name-and-types (remove-if-not (lambda (x) (equal lisp-argument-types (cadr (nso-type (cdr x))))) possible-by-name)))
       ;;(prind lisp-argument-types) (prind possible-by-name) (prind possible-by-name-and-types)
-      (assert (not (null possible-by-name)) () "Lisp function ~A was not augmented to C-namespace ~A" lisp-fun namespace)
+      (assert (not (null possible-by-name)) () "Lisp function ~A was not augmented to C-namespace~%~A" lisp-fun namespace)
       (assert (not (null possible-by-name-and-types)) () "Lisp function ~A was augmented to C-namespace, but argument types do not match requested types ~A" lisp-fun lisp-argument-types)
       (let* ((c-fun-assoc (car possible-by-name-and-types))
 	     (c-fun (cdr c-fun-assoc)))
-	(assert c-fun-assoc () "Lisp function ~A was not augmented to C-namespace ~A" lisp-fun namespace)
+	(assert c-fun-assoc () "Lisp function ~A was not augmented to C-namespace~%~A" lisp-fun namespace)
 	c-fun))))
 
 (defun convert-type-from-cffi-to-c (type)
@@ -431,12 +431,12 @@ Return the augmented NAMESPACE."
 	 (bindings-code (loop for binding in (walker:form-bindings ast) for binding-sym in bindings-syms collect
 			     (cond
 			       ((subtypep (type-of ast) 'walker:let-form)
-				(let ((value-code (emitc (walker:binding-value binding) bindings-namespace (list binding-sym))))
+				(let ((value-code (emitc (walker:binding-value binding) namespace (list binding-sym))))
 				  (c-code (c-declaration binding-sym)
 					  (c-scope value-code))))
 			       ((subtypep (type-of ast) 'walker:flet-form)
 				(let* ((parameters (walker:llist-required (walker:form-llist binding)))
-				       (parameters-namespace bindings-namespace)
+				       (parameters-namespace namespace)
 				       (c-parameters (loop for par in parameters collect
 							  (let* ((c-par (walker:argument-var par))
 								 (declspec-type0 (sym-declspec-type c-par))
