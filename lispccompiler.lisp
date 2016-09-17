@@ -1,6 +1,6 @@
 ;;;; Lisp to C Compiler
 
-(load "/home/toni/quicklisp/setup.lisp")
+(load "~/quicklisp/setup.lisp")
 (ql:quickload :walker)
 
 ;;;; Package
@@ -1017,10 +1017,10 @@ Return the augmented NAMESPACE."
 
 (defun compile-voxelneu ()
   (let ((code 
-	 (with-open-file (stream "/home/toni/voxelneu/lisp/all-code.lisp")
+	 (with-open-file (stream "~/voxelneu/lisp/all-code.lisp")
 	   (read stream))))
     (defparameter *all-code* code)
     (let ((c-code (emit-c code)))
-      (with-open-file (stream "/home/toni/voxelneu/lisp/all-code.c" :direction :output :if-exists :supersede :if-does-not-exist :create)
+      (with-open-file (stream "~/voxelneu/lisp/all-code.c" :direction :output :if-exists :supersede :if-does-not-exist :create)
 	(format stream "~A" (subseq c-code 1 (1- (length c-code))))))))
       
