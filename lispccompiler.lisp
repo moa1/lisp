@@ -70,7 +70,8 @@
   ((var :initarg :sym :accessor walker:form-var :type walker:var)
    (arguments :initarg :arguments :accessor walker:form-arguments :type list :documentation "list of GENERALFORMs")))
 (defclass prind-form (walker:form walker:body-form)
-  ())
+  ((lexicalnamespace :initarg :lexicalnamespace :accessor walker:form-lexicalnamespace)
+   (freenamespace :initarg :freenamespace :accessor walker:form-freenamespace)))
 
 (defmethod print-object ((object multiple-value-bind-form) stream)
   (print-unreadable-object (object stream :type t :identity t)
@@ -97,7 +98,7 @@
   (declare (ignore customparsep-function customparse-function customparsedeclspecp-function customparsedeclspec-function lexical-namespace free-namespace parent))
   (and (listp form)
        (let ((head (car form)))
-	 (find head '(multiple-value-bind values nth-value defun declaim funcall prind)))))
+	 (find head '(multiple-value-bind values nth-value defun declaim funcall)))))
 
 (defun parse-some-macros (form lexical-namespace free-namespace parent &key customparsep-function customparse-function customparsedeclspecp-function customparsedeclspec-function)
   (declare (optimize (debug 3)))
@@ -176,7 +177,8 @@
 	   (setf (walker:form-arguments current) (nreverse parsed-arguments))
 	   current))
 	((eq head 'prind)
-	 (let* ((current (make-instance 'prind-form :parent parent)))
+	 (let* ((current (make-instance 'prind-form :parent parent :lexicalnamespace lexical-namespace :freenamespace free-namespace)))
+	   (setf (walker:form-body current) (parse-body rest current))
 	   current))
 	))))
 
@@ -208,6 +210,10 @@
   (list* 'funcall
 	 (funcall recurse-function (walker:form-var ast) ast)
 	 (mapcar (lambda (arg) (funcall recurse-function arg ast)) (walker:form-arguments ast))))
+(defun deparse-prind-form (ast parent recurse-function)
+  (declare (ignore parent))
+  (list* 'prind
+	 (walker:deparse-body ast recurse-function nil nil)))
 
 (defun deparse-typecase (ast parent &key &allow-other-keys)
   (declare (ignore parent))
@@ -218,6 +224,7 @@
     (defun-form #'deparse-defun-form)
     (declaim-form #'deparse-declaim-form)
     (funcall-form #'deparse-funcall-form)
+    (prind-form #'deparse-prind-form)
     (t nil)))
 
 (defun deparse-some-macros (ast parent)
@@ -549,7 +556,6 @@ Return the augmented NAMESPACE."
 			     (abs "abs_float" (single-float) (single-float))
 			     (signum "signum_float" (single-float) (single-float))
 			     ;; misc
-			     (print "print_int" (integer) (integer))
 			     (eq "eq_int_int" (symbol symbol) (integer))
 			     ;; comparison: int int
 			     (< "less_int_int" (integer integer) (integer))
@@ -601,6 +607,11 @@ Return the augmented NAMESPACE."
 			     (v4.* "v4_scale_v4sf" (v4s-float single-float) (v4s-float))
 			     (make-v4 "make_v4_float_float_float_float" (single-float single-float single-float single-float) (v4s-float))
 			     (fractional-part "fractional_part_float" (single-float) (single-float))
+			     (prind-helper "prind_helper_string_int" (string integer) ())
+			     (prind-helper "prind_helper_string_float" (string single-float) ())
+			     (prind-helper "prind_helper_string_v4sf" (string v4s-float) ())
+			     (prind-helper "prind_helper_string_string" (string string) ())
+			     (prind-helper-format "prind_helper_format_string" (string) ())
 			     ;;(advance-ray-3d "ADVANCE_RAY_3D0" (v4s-float v4s-float single-float single-float single-float single-float single-float single-float integer) (v4s-float single-float symbol))
 			     ;;(intersect-border "INTERSECT_BORDER0" (v4s-float v4s-float v4s-float single-float single-float single-float single-float single-float single-float single-float) (v4s-float single-float))
 			     ;;(outside-border-p "OUTSIDE_BORDER0" (v4s-float single-float single-float single-float) (boolean))
@@ -618,11 +629,14 @@ Return the augmented NAMESPACE."
     (loop for (lisp-sym c-name args-types values-types) in builtin-functions do
 	 (setf namespace (augment-namespace-with-builtin-function lisp-sym c-name args-types values-types namespace)))
     (let ((free-namespace (walker:make-empty-free-namespace))
-	  (macros '(and or when cond assert error loop setf incf)))
+	  (macros
+	   '(and or when cond assert error loop setf incf prind)))
+	   ;;'(when cond assert error loop setf incf prind)))
       (loop for macro in macros do
 	   (walker:augment-free-namespace (make-instance 'walker:fun :name macro :freep t :declspecs nil :macrop t) free-namespace))
       (loop for (lisp-sym c-name type) in global-variables do
 	   (let ((walker-sym (walker:namespace-lookup/create 'walker:var lisp-sym (walker:make-empty-lexical-namespace) free-namespace)))
+	     (walker:parse-declspecs `((type ,type ,lisp-sym)) (walker:make-empty-lexical-namespace) free-namespace nil)
 	     (setf namespace (augment-nso namespace (make-var c-name (convert-type-from-lisp-to-cffi type)) :lispsym walker-sym :insist-on-name t))))
       (let* ((ast (walker-parse form nil :free-namespace free-namespace))
 	     (c-lines (emitc ast namespace values))
@@ -652,7 +666,7 @@ Return the augmented NAMESPACE."
 	 (c-assign (car values) obj)))
       ((subtypep (type-of obj) 'string)
        (unless (null values)
-	 (c-assign (car values) (format nil "~S" obj))))
+	 (c-assign (car values) (format nil "\"~A\"" obj))))
       (t
        (error "unknown type of selfevalobject ~S" obj)))))
 
@@ -662,7 +676,7 @@ Return the augmented NAMESPACE."
 	 (c-obj (format nil "~A /*~A*/"
 			(etypecase obj
 			  (integer obj)
-			  (float obj)
+			  (single-float obj)
 			  (symbol (sxhash obj)))
 			obj)))
     (unless (null values)
@@ -687,7 +701,7 @@ Return the augmented NAMESPACE."
 	 (values-type (caddr c-fun-type)))
     (loop for p1 in parameters-type for p2 in parameters do (assert (equal p1 (nso-type p2))))
     (loop for v1 in values-type for v2 in values do (assert (equal v1 (cadr (nso-type v2)))))
-    (format nil "int ~A (~A)"
+    (format nil "void ~A (~A)"
 	    (nso-name fun)
 	    (join-strings (append
 			   (mapcar (lambda (x) (format nil "~A" (convert-type-from-cffi-to-c (nso-type x) (nso-name x)))) parameters)
@@ -930,12 +944,9 @@ Return the augmented NAMESPACE."
 	 (c-fun-values (nso-values c-fun)))
     (prind "RETURN-FROM-form" blo c-fun-values)
     (c-code (emitc (walker:form-value ast) namespace c-fun-values)
-	    (format nil "return ~A;" (length c-fun-values)))))
+	    ;;(format nil "return ~A;" (length c-fun-values)))))
+	    (format nil "return;"))))
 
-(defmethod emitc ((ast prind-form) (namespace namespace) values)
-  ;; TODO: parse and emulate PRIND with printf.
-  )
-     
 (defmethod emitc ((ast walker:macroapplication-form) (namespace namespace) values)
   "This method rewrites some macro-applications to known special forms and calls #'EMITC on them."
   (declare (optimize (debug 3)))
@@ -981,7 +992,7 @@ Return the augmented NAMESPACE."
 	    ((assert)
 	     (labels ((helper (test-form &optional place-form datum-form &rest argument-form)
 			(declare (ignore place-form argument-form))
-			(let* ((error-message (substitute #\Space #\Newline (format nil "failed assertion: ~S datum: ~S" test-form datum-form))))
+			(let* ((error-message (substitute #\Space #\Newline (format nil "failed assertion: ~S datum: ~A" test-form datum-form))))
 			  ;; TODO: implement printing ARGUMENT-FORMs
 			  `(if (not ,test-form)
 			       (fail-with-message ,error-message)))))
@@ -1009,6 +1020,19 @@ Return the augmented NAMESPACE."
 	     (labels ((helper (arguments)
 			(let ((inc (if (null (cdr arguments)) 1 (cadr arguments))))
 			  `(setq ,(car arguments) (+ ,(car arguments) ,inc)))))
+	       (helper arguments)))
+	    ((prind)
+	     (labels ((helper (arguments)
+			(let ((ins (loop for arg in arguments collect
+					(let* ((arg-ast (walker-parse arg nil :lexical-namespace lexical-namespace :free-namespace free-namespace))
+					       (arg-type (cond
+							   ((and (typep arg-ast 'walker:selfevalobject) (stringp (walker:selfevalobject-object arg-ast))) 'string)
+							   ((typep arg-ast 'walker:the-form) (walker:form-type arg-ast))
+							   (t (sym-declspec-type arg-ast)))))
+					  `(prind-helper (the string ,(format nil "~A:" arg)) (the ,arg-type ,arg))))))
+			  `(progn
+			     ,@(apply #'append (loop for in in (butlast ins) collect `(,in (prind-helper-format " "))))
+			     ,@(unless (null ins) `(,(car (last ins)) (prind-helper-format "\\n")))))))
 	       (helper arguments)))
 	    )))
     (prind form)
