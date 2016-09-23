@@ -798,26 +798,29 @@ Return the augmented NAMESPACE."
 					 (emitc arg arguments-namespace (list parg-sym))))))
 	 (all-values (loop for value-type in fun-values-type for i from 0 collect
 			  (if (< i (length values))
-			      (elt values i)
-			      (let ((value-sym (make-var (format nil "value~A" i) (list :pointer value-type))))
+			      (list nil (elt values i))
+			      (let ((value-sym (make-var (format nil "cvalue~A" i) value-type))
+				    (pvalue-sym (make-var (format nil "pvalue~A" i) (list :pointer value-type))))
 				(setf arguments-namespace (augment-nso arguments-namespace value-sym))
-				value-sym)))))
+				(setf arguments-namespace (augment-nso arguments-namespace pvalue-sym))
+				(list value-sym pvalue-sym))))))
     (loop for value in values for value-type in fun-values-type do
 	 (assert (eq (cadr (nso-type value)) value-type) () "Wrong type for ~S, expected (:POINTER ~S), in application form:~%~S" value value-type (walker-deparse ast nil)))
     (c-code (c-scope (loop for (arg-sym parg-sym) in arguments-syms collect
 			  (c-code
 			   (c-declaration arg-sym)
 			   (c-declaration parg-sym (format nil "&~A" (nso-name arg-sym)))))
-		     (loop for sym in all-values for i from 0 collect
+		     (loop for (sym psym) in all-values for i from 0 collect
 			  (unless (< i (length values))
-			    (c-code (c-declaration sym))))
+			    (c-code (c-declaration sym)
+				    (c-declaration psym (format nil "&~A" (nso-name sym))))))
 		     arguments-code
 		     (format nil "~A(~A);"
 			     (etypecase ast (walker:application-form (nso-name c-fun)) (funcall-form (format nil "(*~A)" (nso-name c-fun))))
 			     (join-strings
 			      (concatenate 'list
 					   (mapcar #'nso-name (mapcar #'car arguments-syms))
-					   (mapcar (lambda (v) (format nil "~A" (nso-name v))) all-values))
+					   (mapcar (lambda (v) (format nil "~A" (nso-name (cadr v)))) all-values))
 			      ", "))))))
   
 (defmethod emitc ((ast walker:application-form) (namespace namespace) values)
