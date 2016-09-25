@@ -1,8 +1,6 @@
 ;; DONE: when an ai plays :KING, there is no entry in the history that shows the cards that each swapping player had. Maybe instead, I should have a nnet that is updated when the player plays :PRIEST or :KING (and in the case of :KING, also the target's nnet is updated), and the nnet receives the other player's player number (i.e. TARGET for PLAYER, and PLAYER for TARGET) and the knowledge about that player's card; the output of the nnet is kept in an array for each player (that means the array stores the ai's knowledge about the other players), and is fed into the SELECT-CARD, SELECT-TARGET, SELECT-GUESS nnets instead of the current HISTORY array. This might help the ais to represent knowledge about other players' hand, which they currently suck at. Hmm... Maybe update each player's belief of the other players' hands after each player, and feed it the played card, the belief-array of the targeted player, and the belief-array of the playing player, and interpret the output as the updated belief-arrays of the two players (targeted and playing player). That way the ais might learn that if a player plays :KING on somebody, probably that somebody has :PRINCESS.
 ;; maybe TODO (only maybe because I'm assigning the players in the next round randomly so the first-player advantage should even out): make the last winner be the dealer for the next round.
 
-(load "game-nnet.lisp")
-
 #|
 1 princess: if you play/drop her, you lose.
 1 duchess: must play her if you have the king or prince.
@@ -232,27 +230,13 @@ Note that #'MAKE-NNET-AI-PLAYER and this function are separated because this fun
 	     t))
     (values #'player-turn updater-beliefs)))
 
+;;;; AI FUNCTIONS
+
+(load "game-nnet.lisp")
+
 (defstruct ai
   (genes-belief nil :type nnet)
   (genes-cardtarget nil :type nnet))
-
-(defun maximal-index (sequence)
-  "Return two values: the index with the highest value in SEQUENCE and the highest value, or NIL if SEQUENCE is empty."
-  (when (= 0 (length sequence))
-    (return-from maximal-index nil))
-  (let ((max-value (elt sequence 0))
-	(max-index 0)
-	(len (length sequence)))
-    (loop
-       for i from 1 below len do
-	 (let ((e (elt sequence i)))
-	   (when (> e max-value)
-	     (setf max-value e max-index i))))
-    (values max-index max-value)))
-
-(defun copy-array-to-array (input output &optional (input-start-index 0) (output-start-index 0) (size (length input)))
-  (loop for i below size do
-       (setf (aref output (+ i output-start-index)) (aref input (+ i input-start-index)))))
 
 (defun make-nnet-ai-player (edition num-players ai)
   "This function makes an nnet AI player, and must be implemented for every different ai type and game."

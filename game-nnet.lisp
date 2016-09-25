@@ -1,3 +1,23 @@
+;;;; MISCELLANEOUS
+
+(defun copy-array-to-array (input output &optional (input-start-index 0) (output-start-index 0) (size (length input)))
+  (loop for i below size do
+       (setf (aref output (+ i output-start-index)) (aref input (+ i input-start-index)))))
+
+(defun maximal-index (sequence)
+  "Return two values: the index with the highest value in SEQUENCE and the highest value, or NIL if SEQUENCE is empty."
+  (when (= 0 (length sequence))
+    (return-from maximal-index nil))
+  (let ((max-value (elt sequence 0))
+	(max-index 0)
+	(len (length sequence)))
+    (loop
+       for i from 1 below len do
+	 (let ((e (elt sequence i)))
+	   (when (> e max-value)
+	     (setf max-value e max-index i))))
+    (values max-index max-value)))
+
 ;;;; NNET
 
 (declaim (inline sigmoid))
