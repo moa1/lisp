@@ -6,31 +6,31 @@
 ;;(in-package :sdl2-examples)
 ;;(require :sdl2)
 
+(defun fformat (stream string &rest rest)
+  (apply #'format stream string rest)
+  (finish-output))
 
 (defun basic-test ()
   "The kitchen sink."
   (sdl2:with-init (:everything)
-    (format t "Using SDL Library Version: ~D.~D.~D~%"
-            sdl2-ffi:+sdl-major-version+
-            sdl2-ffi:+sdl-minor-version+
-            sdl2-ffi:+sdl-patchlevel+)
-    (finish-output)
+    (fformat t "Using SDL Library Version: ~D.~D.~D~%"
+	     sdl2-ffi:+sdl-major-version+
+	     sdl2-ffi:+sdl-minor-version+
+	     sdl2-ffi:+sdl-patchlevel+)
 
     (sdl2:with-window (win :flags '(:shown))
       (let ((controllers ())
 	    (haptic ()))
 
 	;; basic window/gl setup
-	(format t "Setting up window: ~A.~%" win)
-	(finish-output)
+	(fformat t "Setting up window: ~A.~%" win)
 
-	(format t "Opening game controllers.~%")
-	(finish-output)
+	(fformat t "Opening game controllers.~%")
 	;; open any game controllers
 	(loop for i from 0 upto (- (sdl2:joystick-count) 1)
 	   do (when (sdl2:game-controller-p i)
-		(format t "Found gamecontroller: ~a~%"
-			(sdl2:game-controller-name-for-index i))
+		(fformat t "Found gamecontroller: ~a~%"
+			 (sdl2:game-controller-name-for-index i))
 		(let* ((gc (sdl2:game-controller-open i))
 		       (joy (sdl2:game-controller-get-joystick gc)))
 		  (setf controllers (acons i gc controllers))
@@ -40,8 +40,7 @@
 		      (sdl2:rumble-init h))))))
 
 	;; main loop
-	(format t "Beginning main loop.~%")
-	(finish-output)
+	(fformat t "Beginning main loop.~%")
 	(sdl2:with-event-loop (:method :poll)
 	  (:keydown
 	   (:keysym keysym)
@@ -49,10 +48,10 @@
 		 (sym (sdl2:sym-value keysym))
 		 (mod-value (sdl2:mod-value keysym)))
 	     (cond
-	       ((sdl2:scancode= scancode :scancode-w) (format t "~a~%" "WALK"))
+	       ((sdl2:scancode= scancode :scancode-w) (fformat t "~a~%" "WALK"))
 	       ((sdl2:scancode= scancode :scancode-s) (sdl2:show-cursor))
 	       ((sdl2:scancode= scancode :scancode-h) (sdl2:hide-cursor)))
-	     (format t "Key sym: ~a, code: ~a, mod: ~a~%"
+	     (fformat t "Key sym: ~a, code: ~a, mod: ~a~%"
 		     sym
 		     scancode
 		     mod-value)))
@@ -61,16 +60,16 @@
 	   (:keysym keysym)
 	   (when (sdl2:scancode= (sdl2:scancode-value keysym) :scancode-escape)
 	     (sdl2:push-event :quit)))
-
+	  
 	  (:mousemotion
 	   (:x x :y y :xrel xrel :yrel yrel :state state)
-	   (format t "Mouse motion abs(rel): ~a (~a), ~a (~a)~%Mouse state: ~a~%"
-		   x xrel y yrel state))
-
+	   (fformat t "Mouse motion abs(rel): ~a (~a), ~a (~a)~%Mouse state: ~a~%"
+		    x xrel y yrel state))
+	  
 	  (:controlleraxismotion
 	   (:which controller-id :axis axis-id :value value)
-	   (format t "Controller axis motion: Controller: ~a, Axis: ~a, Value: ~a~%"
-		   controller-id axis-id value))
+	   (fformat t "Controller axis motion: Controller: ~a, Axis: ~a, Value: ~a~%"
+		    controller-id axis-id value))
 
 	  (:controllerbuttondown
 	   (:which controller-id)
@@ -83,8 +82,7 @@
 
 	  (:quit () t))
 
-	(format t "Closing opened game controllers.~%")
-	(finish-output)
+	(fformat t "Closing opened game controllers.~%")
 	;; close any game controllers that were opened
 	;; as well as any haptics
 	(loop for (i . controller) in controllers
@@ -95,28 +93,24 @@
 (defun software-render-pixels ()
   "Software renderer example, drawing single pixels on the screen."
   (sdl2:with-init (:everything)
-    (format t "Using SDL Library Version: ~D.~D.~D~%"
+    (fformat t "Using SDL Library Version: ~D.~D.~D~%"
             sdl2-ffi:+sdl-major-version+
             sdl2-ffi:+sdl-minor-version+
             sdl2-ffi:+sdl-patchlevel+)
-    (finish-output)
 
     (sdl2:with-window (win :flags '(:shown))
       ;; basic window/gl setup
-      (format t "Setting up window: ~A.~%" win)
-      (finish-output)
+      (fformat t "Setting up window: ~A.~%" win)
 
       ;;(let ((wrend (sdl2:create-renderer win -1 '(:software :targettexture))))
       (let ((wrend (sdl2:create-renderer win -1 '(:software))))
 
-	(format t "Window renderer: ~A~%" wrend)
-	(finish-output)
+	(fformat t "Window renderer: ~A~%" wrend)
 
 	(sdl2-ffi.functions:sdl-set-render-draw-color wrend 255 0 0 255)
 
 	;; main loop
-	(format t "Beginning main loop.~%")
-	(finish-output)
+	(fformat t "Beginning main loop.~%")
 	(sdl2:with-event-loop (:method :poll)
 	  (:keyup
 	   (:keysym keysym)
@@ -125,8 +119,8 @@
 
 	  (:mousemotion
 	   (:x x :y y :xrel xrel :yrel yrel :state state)
-	   (format t "Mouse motion abs(rel): ~a (~a), ~a (~a)~%Mouse state: ~a~%"
-		   x xrel y yrel state))
+	   (fformat t "Mouse motion abs(rel): ~a (~a), ~a (~a)~%Mouse state: ~a~%"
+		    x xrel y yrel state))
 
 	  (:idle
 	   ()
@@ -138,8 +132,7 @@
 
 	  (:quit () t))
 
-	(format t "End of main loop.~%")
-	(finish-output)
+	(fformat t "End of main loop.~%")
 	))))
 
 (defun sdl-lock-surface (surface)
@@ -154,18 +147,17 @@
   "Software renderer example, drawing a texture on the screen.
 See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_frames_to_the_screen."
   (sdl2:with-init (:everything)
-    (format t "Using SDL Library Version: ~D.~D.~D~%"
-            sdl2-ffi:+sdl-major-version+
-            sdl2-ffi:+sdl-minor-version+
-            sdl2-ffi:+sdl-patchlevel+)
-    (finish-output)
+    (fformat t "Using SDL Library Version: ~D.~D.~D~%"
+	     sdl2-ffi:+sdl-major-version+
+	     sdl2-ffi:+sdl-minor-version+
+	     sdl2-ffi:+sdl-patchlevel+)
 
     (sdl2:with-window (win :flags '(:shown))
       ;; basic window/gl setup
-      (format t "Setting up window: ~A.~%" win)
-      (finish-output)
+      (fformat t "Setting up window: ~A.~%" win)
 
-      (let* ((wrend (sdl2:create-renderer win -1 '(:software :targettexture)))
+      ;;(let* ((wrend (sdl2:create-renderer win -1 '(:software :targettexture)))
+      (let* ((wrend (sdl2:create-renderer win -1 '(:software)))
 	     (tex (sdl2:create-texture wrend :ARGB8888 :streaming 800 600))
 	     (sur (sdl2:create-rgb-surface 800 600 32
 					   :r-mask #x00ff0000
@@ -178,17 +170,15 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 
 ;; get sur->pixels using (cffi:foreign-slot-value sur ...).
 
-	(format t "Window renderer: ~A~%" wrend)
-	(format t "Texture: ~A~%" tex)
-	(format t "Surface: ~A~%" sur)
-	(format t "Pixels: ~A~%" pix)
-	(finish-output)
+	(fformat t "Window renderer: ~A~%" wrend)
+	(fformat t "Texture: ~A~%" tex)
+	(fformat t "Surface: ~A~%" sur)
+	(fformat t "Pixels: ~A~%" pix)
 
 	(sdl2-ffi.functions:sdl-set-render-draw-color wrend 255 0 0 255)
 
 	;; main loop
-	(format t "Beginning main loop.~%")
-	(finish-output)
+	(fformat t "Beginning main loop.~%")
 	(sdl2:with-event-loop (:method :poll)
 	  (:keyup
 	   (:keysym keysym)
@@ -197,8 +187,8 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 
 	  (:mousemotion
 	   (:x x :y y :xrel xrel :yrel yrel :state state)
-	   (format t "Mouse motion abs(rel): ~a (~a), ~a (~a)~%Mouse state: ~a~%"
-		   x xrel y yrel state))
+	   (fformat t "Mouse motion abs(rel): ~a (~a), ~a (~a)~%Mouse state: ~a~%"
+		    x xrel y yrel state))
 
 	  (:idle
 	   ()
@@ -218,20 +208,21 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 			 (setf (cffi:mem-aref pix :uint32 (+ 801 index)) color))
 		       (incf index 2))
 		  (incf index 800)))
+
 	   (sdl-unlock-surface sur)
 	   (sdl2:update-texture tex pix :width (* 4 800))
 	   ;;TODO: call SDL_RenderClear(sdlRenderer);
 	   (sdl2:render-copy wrend tex)
 	   (sdl2:render-present wrend)
 	   (let ((now (float (/ (get-internal-real-time) internal-time-units-per-second))))
-	     (format t "fps: ~A~%" (float (/ 1 (- now last-frame-time))))
-	     (setf last-frame-time now))
-	   )
+	     (let ((elapsed (- now last-frame-time)))
+	       (fformat t "fps: ~A~%" (if (= 0 elapsed) nil (float (/ 1 elapsed))))
+	       (setf last-frame-time now)))
 
+	   )
 	  (:quit () t))
 
-	(format t "End of main loop.~%")
-	(finish-output)
+	(fformat t "End of main loop.~%")
 	))))
 
 ;; (let* ((sur (sdl2:create-rgb-surface 800 600 32
