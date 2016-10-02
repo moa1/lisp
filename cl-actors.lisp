@@ -108,7 +108,7 @@
   (let ((sp (spreader-starter)))
     (send sp (cons 'spread i))))
 
-;;;; testing on pc1400:
+;;;; testing #'SPREADER-TEST on pc1400:
 ;; CL-USER> (spreader-test 7)
 ;; CL-USER> *spreader-time*
 ;; (128 0.957)
@@ -138,3 +138,12 @@
 ;; CL-USER> (spreader-test 12)
 ;; CL-USER> *spreader-time*
 ;; (4096 28.98)
+
+(defun thread-test ()
+  (loop for i from 0 do (print i) (bt:make-thread #'(lambda () (loop do (sleep 100))) :name (format nil "~A" i))))
+
+;; testing #'THREAD-TEST on pc1400:
+;; memory consumption as reported by unix `top` after running (memory-test)
+;; nthreads VIRT     RES    SHR
+;; 0:       603548   59840  23372
+;; 577:     3132876  76136  23408
