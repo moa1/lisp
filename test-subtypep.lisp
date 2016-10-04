@@ -107,3 +107,24 @@
 ;; the computation "C := join(A,B)" sets C to the types in the union of A and B. (For example, if A is (OR CONS NUMBER) and B is FLOAT, then C is (OR CONS NUMBER).)
 ;; I infer this from the following sentence: "With this encoding for the number of components in a multiple value, it is easy to perform lattice meet and join--they are simply logand and logior of the representation numbers."
 
+;; How to construct the graph from the return values of #'SUBTYPES-OF-ALL?
+;; for example, (SUBTYPES-OF-ALL '(SIGNED-BYTE BIGNUM BIT NIL FIXNUM UNSIGNED-BYTE T)) returns
+;;
+;; T is a supertype of (SIGNED-BYTE BIGNUM BIT NIL FIXNUM UNSIGNED-BYTE)
+;; UNSIGNED-BYTE is a supertype of (BIT NIL)
+;; FIXNUM is a supertype of (BIT NIL)
+;; NIL is a supertype of NIL
+;; BIT is a supertype of (NIL)
+;; BIGNUM is a supertype of (NIL)
+;; SIGNED-BYTE is a supertype of (BIGNUM BIT NIL FIXNUM UNSIGNED-BYTE)
+;;
+;; This implies the following graph:
+;;                   T
+;;                   |
+;;             SIGNED-BYTE 
+;;            /      |    \
+;;  UNSIGNED-BYTE  FIXNUM  BIGNUM
+;;            \   /       /
+;;             BIT    ___/
+;;               \   /
+;;                NIL
