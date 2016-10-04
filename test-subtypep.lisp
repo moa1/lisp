@@ -1,5 +1,23 @@
 ;;;; This tests subtype relationships between Common Lisp types.
 
+(defmacro prind (&rest args)
+  "Print args"
+  ;; TODO: modify the pretty print dispatch table so that it prints representations readable by #'READ. (especially modify the table so that printing a float respects *print-base*.)
+  (let ((i (gensym "I")))
+    `(let ((*print-pretty* t)
+	   (*print-right-margin* most-positive-fixnum))
+       ,@(loop for a in args collect
+	      (if (eq a T)
+		  `(format t "~%")
+		  `(progn
+		     (format t "~A:" ,(format nil "~A" a))
+		     (dolist (,i (multiple-value-list ,a))
+		       (prin1 ,i)
+		       (princ " ")))))
+       (format t "~%"))))
+
+(setf *print-circle* t)
+
 (defparameter +cl-types+
   '(arithmetic-error function simple-condition 
     array generic-function simple-error 
@@ -64,7 +82,9 @@
     fixnum
     rational
     cons
-    nil ;NIL added although it doesn't occur in the example
+    unsigned-byte
+    bit ;added to demonstrate that types can converge in the graph to a type other than NIL
+    nil
     ))
 
 (defun all-against-all (types)
@@ -86,7 +106,7 @@
 		    ret)))
     ret))
 
-(defun subtypes-of-all (types)
+(defun subtypes-of-all (types &key print)
   "From the output O of this function it would be possible to construct a graph, where T is at the top, NIL is at the bottom, and for all lists in O, the there are lines from (CAR O) to all types in (CDR O)."
   (let* ((all-against-all-ret (all-against-all types))
 	 (ret (mapcar (lambda (type) (cons type nil)) (remove-duplicates (mapcar #'car all-against-all-ret)))))
@@ -95,8 +115,9 @@
 	   (let ((assoc (assoc type1 ret)))
 	     (assert (not (null assoc)))
 	     (setf (cdr assoc) (cons type2 (cdr assoc))))))
-    (loop for (supertype . subtypes) in ret do
-	 (format t "~S is a supertype of ~S~%" supertype subtypes))
+    (when print
+      (loop for (supertype . subtypes) in ret do
+	   (format t "~S is a supertype of ~S~%" supertype subtypes)))
     ret))
 
 ;;;; Comments on "The Nimble Type Inferencer for Common Lisp-84"
@@ -106,6 +127,8 @@
 ;; the computation "C := meet(A,B)" apparently sets C to the types in the intersection of A and B. (For example, if A is (OR FLOAT CONS) and B is NUMBER, then C can is FLOAT.)
 ;; the computation "C := join(A,B)" sets C to the types in the union of A and B. (For example, if A is (OR CONS NUMBER) and B is FLOAT, then C is (OR CONS NUMBER).)
 ;; I infer this from the following sentence: "With this encoding for the number of components in a multiple value, it is easy to perform lattice meet and join--they are simply logand and logior of the representation numbers."
+
+;;;; GRAPH
 
 ;; How to construct the graph from the return values of #'SUBTYPES-OF-ALL?
 ;; for example, (SUBTYPES-OF-ALL '(SIGNED-BYTE BIGNUM BIT NIL FIXNUM UNSIGNED-BYTE T)) returns
@@ -128,3 +151,147 @@
 ;;             BIT    ___/
 ;;               \   /
 ;;                NIL
+
+(defstruct typenode
+  (type (error "must specify TYPE for TYPENODE"))
+  (supertypes nil :type list)
+  (subtypes nil :type list))
+
+(defun print-typegraph (typegraph-topnode)
+  ;;(when (eq (typenode-type typegraph-topnode) nil)
+  (let ((type (typenode-type typegraph-topnode))
+	(subtypes (typenode-subtypes typegraph-topnode)))
+    (format t "supertype: ~S subtypes: ~S~%" type (mapcar #'typenode-type subtypes))
+    (loop for subtype in subtypes do
+	 (print-typegraph subtype))))
+
+#|
+initialize the visited nodes with NIL.
+
+T is a supertype of (SIGNED-BYTE BIGNUM BIT NIL FIXNUM UNSIGNED-BYTE)
+UNSIGNED-BYTE is a supertype of (BIT NIL)
+FIXNUM is a supertype of (BIT NIL)
+NIL is a supertype of ()
+BIT is a supertype of (NIL)
+BIGNUM is a supertype of (NIL)
+SIGNED-BYTE is a supertype of (BIGNUM BIT NIL FIXNUM UNSIGNED-BYTE)
+:
+remove NIL from the relations, because it has no subtypes.
+
+T is a supertype of (SIGNED-BYTE BIGNUM BIT NIL FIXNUM UNSIGNED-BYTE)
+UNSIGNED-BYTE is a supertype of (BIT NIL)
+FIXNUM is a supertype of (BIT NIL)
+BIT is a supertype of (NIL)
+BIGNUM is a supertype of (NIL)
+SIGNED-BYTE is a supertype of (BIGNUM BIT NIL FIXNUM UNSIGNED-BYTE)
+:
+BIT and BIGNUM have NIL as the only subtype, and NIL was already visited.
+add BIT as supertype of NIL.
+add BIGNUM as supertype of NIL.
+remove NIL everywhere.
+
+T is a supertype of (SIGNED-BYTE BIGNUM BIT FIXNUM UNSIGNED-BYTE)
+UNSIGNED-BYTE is a supertype of (BIT)
+FIXNUM is a supertype of (BIT)
+BIT is a supertype of ()
+BIGNUM is a supertype of ()
+SIGNED-BYTE is a supertype of (BIGNUM BIT FIXNUM UNSIGNED-BYTE)
+:
+remove BIT and BIGNUM from the relations, because they have no subtypes.
+
+T is a supertype of (SIGNED-BYTE BIGNUM BIT FIXNUM UNSIGNED-BYTE)
+UNSIGNED-BYTE is a supertype of (BIT)
+FIXNUM is a supertype of (BIT)
+SIGNED-BYTE is a supertype of (BIGNUM BIT FIXNUM UNSIGNED-BYTE)
+:
+FIXNUM and UNSIGNED-BYTE have BIT as the only subtype, and BIT was already visited.
+add FIXNUM as supertype of BIT.
+add UNSIGNED-BYTE as supertype of BIT.
+remove BIT everywhere.
+
+T is a supertype of (SIGNED-BYTE BIGNUM FIXNUM UNSIGNED-BYTE)
+UNSIGNED-BYTE is a supertype of ()
+FIXNUM is a supertype of ()
+SIGNED-BYTE is a supertype of (BIGNUM FIXNUM UNSIGNED-BYTE)
+:
+remove FIXNUM and UNSIGNED-BYTE from the relations, because they have no subtypes.
+
+T is a supertype of (SIGNED-BYTE BIGNUM FIXNUM UNSIGNED-BYTE)
+SIGNED-BYTE is a supertype of (BIGNUM FIXNUM UNSIGNED-BYTE)
+:
+SIGNED-BYTE has BIGNUM FIXNUM UNSIGNED-BYTE as the only subtypes, and all were already visited.
+add SIGNED-BYTE as supertype of BIGNUM FIXNUM UNSIGNED-BYTE.
+remove BIGNUM FIXNUM UNSIGNED-BYTE everywhere.
+
+T is a supertype of (SIGNED-BYTE)
+SIGNED-BYTE is a supertype of ()
+:
+remove SIGNED-BYTE from the relations, because it has no subtypes.
+
+T is a supertype of (SIGNED-BYTE)
+:
+T has SIGNED-BYTE as the only subtype, and SIGNED-BYTE was already visited.
+add T as supertype of SIGNED-BYTE.
+remove SIGNED-BYTE everywhere.
+
+T is a supertype of ()
+:
+remove T from the relations, because it has no subtypes.
+|#
+
+(defun set-equal (seq1 seq2 &key (test #'eql))
+  (let ((ht (make-hash-table :test test)))
+    (map nil (lambda (a) (setf (gethash a ht) 0)) seq1)
+    (map nil (lambda (a)
+	       (unless (nth-value 1 (gethash a ht))
+		 (return-from set-equal nil))
+	       (incf (gethash a ht)))
+	 seq2)
+    (maphash (lambda (key value)
+	       (declare (ignore key))
+	       (unless (> value 0)
+		 (return-from set-equal nil)))
+	     ht)
+    t))
+
+(defun make-typegraph (types)
+  (declare (optimize (debug 3)))
+  (assert (position nil types))
+  (assert (find t types))
+  (let ((created (make-hash-table :test #'equal)))
+    (labels ((visit-typenode (type)
+	       (multiple-value-bind (value present) (gethash type created)
+		 (if present
+		     value
+		     (let ((node (make-typenode :type type)))
+		       (setf (gethash type created) node)
+		       node))))
+	     (was-visited (type)
+	       (nth-value 1 (gethash type created))))
+      (visit-typenode nil)
+      (let ((relations (subtypes-of-all types)))
+	;; remove types from the relations that have no subtypes.
+	(setf relations (remove-if (lambda (relation) (null (cdr relation))) relations))
+	(loop until (null relations) do
+	   ;; find visited types that are the only subtypes in at least one relation
+	     (let ((vtypes (loop for (type2 . subtypes) in relations do
+				(when (loop for subtype in subtypes always (was-visited subtype))
+				  (return subtypes)))))
+	       (prind vtypes)
+	       ;; add TYPES as subtypes of all types that have TYPES as the only subtypes.
+	       (loop for (type . subtypes) in relations do
+		    (when (set-equal subtypes vtypes :test #'equal)
+		      (prind type)
+		      (let ((type (visit-typenode type)))
+			(loop for vtype in vtypes do
+			     (let ((vtype (gethash vtype created)))
+			       (push vtype (typenode-subtypes type))
+			       (push type (typenode-supertypes vtype)))))))
+	       ;; remove vtypes everywhere.
+	       (loop for relation in relations do
+		    (loop for vtype in vtypes do
+			 (setf (cdr relation) (remove vtype (cdr relation))))))
+	   ;; remove types from the relations that have no subtypes.
+	     (setf relations (remove-if (lambda (relation) (null (cdr relation))) relations))
+	     )))
+    (gethash t created)))
