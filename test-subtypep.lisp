@@ -1,3 +1,21 @@
+;;;; This tests how type information of functions can be represented in lisp.
+
+;; for example types could be represented as a list of OR-concatenated types. This has the disadvantage that the correspondence of input types and output types is not clearly readable.
+(declaim (ftype (function ((or float integer) (or float integer)) (or (vector integer) (vector float))) f1))
+(defun f1 (a b)
+  (make-array 2 :initial-contents (list a b)))
+
+#|
+;; declaring function type as concatenated declare specifications doesn't work, since they are interpreted as AND-concatenated types, leading to conflicts.
+(defun test2 ()
+  (flet ((f1 (a b)
+	   (make-array 2 :initial-contents (list a b))))
+    (declare (ftype (function (integer integer) (vector integer)) f1)
+	     (ftype (function (float float) (vector float)) f1))
+    (f1 2 3)
+    (f1 2.0 3.0)))
+|#
+
 ;;;; This tests subtype relationships between Common Lisp types.
 
 (defmacro prind (&rest args)
