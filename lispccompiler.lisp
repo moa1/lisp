@@ -680,7 +680,7 @@ Return the augmented NAMESPACE."
 			(etypecase obj
 			  (integer obj)
 			  (single-float obj)
-			  (symbol (sxhash obj)))
+			  (symbol (logand #x7fffffff (sxhash obj))))
 			obj)))
     (unless (null values)
       (c-assign (car values) c-obj))))
@@ -690,7 +690,7 @@ Return the augmented NAMESPACE."
   (cond
     ((keywordp (walker:nso-name nso))
      (unless (null values)
-       (c-assign (car values) (sxhash (walker:nso-name nso)))))
+       (c-assign (car values) (logand #x7fffffff (sxhash (walker:nso-name nso))))))
     (t
      (let* ((c-nso (find-var-for-lisp-var namespace nso)))
        (if (null values)
