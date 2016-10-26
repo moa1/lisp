@@ -103,6 +103,7 @@
     rational
     cons
     unsigned-byte
+    signed-byte
     bit ;added to demonstrate that types can converge in the graph to a type other than NIL
     nil
     ))
@@ -154,20 +155,21 @@
 ;;;; GRAPH
 
 ;; How to construct the graph from the return values of #'SUBTYPES-OF-ALL?
-;; for example, (SUBTYPES-OF-ALL '(SIGNED-BYTE BIGNUM BIT NIL FIXNUM UNSIGNED-BYTE T) :PRINT T) prints
+;; for example, (SUBTYPES-OF-ALL '(SIGNED-BYTE BIGNUM BIT NIL FIXNUM UNSIGNED-BYTE INTEGER T) :PRINT T) prints
 ;;
-;; T is a supertype of (SIGNED-BYTE BIGNUM BIT NIL FIXNUM UNSIGNED-BYTE)
+;; T is a supertype of (SIGNED-BYTE BIGNUM BIT NIL FIXNUM UNSIGNED-BYTE INTEGER)
+;; INTEGER is a supertype of (SIGNED-BYTE BIGNUM BIT NIL FIXNUM UNSIGNED-BYTE)
 ;; UNSIGNED-BYTE is a supertype of (BIT NIL)
 ;; FIXNUM is a supertype of (BIT NIL)
 ;; NIL is a supertype of NIL
 ;; BIT is a supertype of (NIL)
 ;; BIGNUM is a supertype of (NIL)
-;; SIGNED-BYTE is a supertype of (BIGNUM BIT NIL FIXNUM UNSIGNED-BYTE)
+;; SIGNED-BYTE is a supertype of (BIGNUM BIT NIL FIXNUM UNSIGNED-BYTE INTEGER)
 ;;
 ;; This implies the following graph:
 ;;                   T
 ;;                   |
-;;             SIGNED-BYTE 
+;;         SIGNED-BYTE=INTEGER
 ;;            /      |    \
 ;;  UNSIGNED-BYTE  FIXNUM  BIGNUM
 ;;            \   /       /
@@ -224,9 +226,33 @@
 ;;
 ;; this means that SIGNED-BYTE and INTEGER are the same type. TODO: figure out how to handle this.
 
+;; CL-USER> (SUBTYPES-OF-ALL '(NIL ERROR CONDITION SERIOUS-CONDITION SIMPLE-ERROR SIMPLE-CONDITION T) :PRINT T)
+;;
+;; T is a supertype of (NIL ERROR CONDITION SERIOUS-CONDITION SIMPLE-ERROR SIMPLE-CONDITION)
+;; SIMPLE-CONDITION is a supertype of (NIL SIMPLE-ERROR)
+;; SIMPLE-ERROR is a supertype of (NIL)
+;; SERIOUS-CONDITION is a supertype of (NIL ERROR SIMPLE-ERROR)
+;; CONDITION is a supertype of (NIL ERROR SERIOUS-CONDITION SIMPLE-ERROR SIMPLE-CONDITION)
+;; ERROR is a supertype of (NIL SIMPLE-ERROR)
+;; NIL is a supertype of NIL
+;;
+;; this implies the following graph:
+;;                    T
+;;                    |
+;;                CONDITION
+;;               /         \
+;;      SERIOUS-CONDITION   SIMPLE-CONDITION
+;;              |          /
+;;            ERROR     __/
+;;              |      / 
+;;         SIMPLE-ERROR
+;;
+;; This means that searching for the first common descendant is harder than just walking down the subtypes, because walking down the subtypes first finds SIMPLE-ERROR as first common descendant, while we would like to find ERROR.
+
 (defstruct typenode
   (type (error "must specify TYPE for TYPENODE"))
   (supertypes nil :type list)
+  (siblings nil :type list)
   (subtypes nil :type list))
 
 (defun print-typegraph (typegraph-topnode)
@@ -237,79 +263,17 @@
     (loop for subtype in subtypes do
 	 (print-typegraph subtype))))
 
-#|
-initialize the visited nodes with NIL.
-
-T is a supertype of (SIGNED-BYTE BIGNUM BIT NIL FIXNUM UNSIGNED-BYTE)
-UNSIGNED-BYTE is a supertype of (BIT NIL)
-FIXNUM is a supertype of (BIT NIL)
-NIL is a supertype of ()
-BIT is a supertype of (NIL)
-BIGNUM is a supertype of (NIL)
-SIGNED-BYTE is a supertype of (BIGNUM BIT NIL FIXNUM UNSIGNED-BYTE)
-:
-remove NIL from the relations, because it has no subtypes.
-
-T is a supertype of (SIGNED-BYTE BIGNUM BIT NIL FIXNUM UNSIGNED-BYTE)
-UNSIGNED-BYTE is a supertype of (BIT NIL)
-FIXNUM is a supertype of (BIT NIL)
-BIT is a supertype of (NIL)
-BIGNUM is a supertype of (NIL)
-SIGNED-BYTE is a supertype of (BIGNUM BIT NIL FIXNUM UNSIGNED-BYTE)
-:
-BIT and BIGNUM have NIL as the only subtype, and NIL was already visited.
-add BIT as supertype of NIL.
-add BIGNUM as supertype of NIL.
-remove NIL everywhere.
-
-T is a supertype of (SIGNED-BYTE BIGNUM BIT FIXNUM UNSIGNED-BYTE)
-UNSIGNED-BYTE is a supertype of (BIT)
-FIXNUM is a supertype of (BIT)
-BIT is a supertype of ()
-BIGNUM is a supertype of ()
-SIGNED-BYTE is a supertype of (BIGNUM BIT FIXNUM UNSIGNED-BYTE)
-:
-remove BIT and BIGNUM from the relations, because they have no subtypes.
-
-T is a supertype of (SIGNED-BYTE BIGNUM BIT FIXNUM UNSIGNED-BYTE)
-UNSIGNED-BYTE is a supertype of (BIT)
-FIXNUM is a supertype of (BIT)
-SIGNED-BYTE is a supertype of (BIGNUM BIT FIXNUM UNSIGNED-BYTE)
-:
-FIXNUM and UNSIGNED-BYTE have BIT as the only subtype, and BIT was already visited.
-add FIXNUM as supertype of BIT.
-add UNSIGNED-BYTE as supertype of BIT.
-remove BIT everywhere.
-
-T is a supertype of (SIGNED-BYTE BIGNUM FIXNUM UNSIGNED-BYTE)
-UNSIGNED-BYTE is a supertype of ()
-FIXNUM is a supertype of ()
-SIGNED-BYTE is a supertype of (BIGNUM FIXNUM UNSIGNED-BYTE)
-:
-remove FIXNUM and UNSIGNED-BYTE from the relations, because they have no subtypes.
-
-T is a supertype of (SIGNED-BYTE BIGNUM FIXNUM UNSIGNED-BYTE)
-SIGNED-BYTE is a supertype of (BIGNUM FIXNUM UNSIGNED-BYTE)
-:
-SIGNED-BYTE has BIGNUM FIXNUM UNSIGNED-BYTE as the only subtypes, and all were already visited.
-add SIGNED-BYTE as supertype of BIGNUM FIXNUM UNSIGNED-BYTE.
-remove BIGNUM FIXNUM UNSIGNED-BYTE everywhere.
-
-T is a supertype of (SIGNED-BYTE)
-SIGNED-BYTE is a supertype of ()
-:
-remove SIGNED-BYTE from the relations, because it has no subtypes.
-
-T is a supertype of (SIGNED-BYTE)
-:
-T has SIGNED-BYTE as the only subtype, and SIGNED-BYTE was already visited.
-add T as supertype of SIGNED-BYTE.
-remove SIGNED-BYTE everywhere.
-
-T is a supertype of ()
-:
-remove T from the relations, because it has no subtypes.
-|#
+(defun unique (seq &key (test #'eql) (count nil))
+  "Return the list of all unique (under TEST) elements of sequence SEQ."
+  (let ((ht (make-hash-table :test test)))
+    (map nil (lambda (elt) (incf (gethash elt ht 0))) seq)
+    (let ((res nil))
+      (cond
+	((null count)
+	 (loop for k being the hash-key of ht do (push k res)))
+	((numberp count)
+	 (maphash (lambda (k v) (when (= v count) (push k res))) ht)))
+      res)))
 
 (defun set-subset (seq1 seq2 &key (test #'eql))
   "Return whether SEQ1 is a subset of SEQ2, where SEQ1 and SEQ2 are passed as sequences."
@@ -337,60 +301,8 @@ remove T from the relations, because it has no subtypes.
 	     ht)
     t))
 
-;; TODO: FIXME: (MAKE-TYPEGRAPH '(SYMBOL NULL CONS LIST NIL T)) loops infinitely.
-;; TODO: FIXME: (MAKE-TYPEGRAPH '(SYMBOL LIST SEQUENCE ARRAY ATOM VECTOR NIL T)) doesn't return that VECTOR is a subtype of SEQUENCE.
-(defun make-typegraph-buggy (types)
-  (declare (optimize (debug 3)))
-  (assert (position nil types))
-  (assert (position t types))
-  (let ((created (make-hash-table :test #'equal)))
-    (labels ((visit-typenode (type)
-	       (multiple-value-bind (value present) (gethash type created)
-		 (if present
-		     value
-		     (let ((node (make-typenode :type type)))
-		       (setf (gethash type created) node)
-		       node))))
-	     (was-visited (type)
-	       (nth-value 1 (gethash type created))))
-      (visit-typenode nil)
-      (let ((relations (subtypes-of-all types)))
-	;; remove types from the relations that have no subtypes.
-	(setf relations (remove-if (lambda (relation) (null (cdr relation))) relations))
-	(loop until (null relations) do
-	   ;; find visited types that are the only subtypes in at least one relation
-	     ;;(prind relations)
-	     (let ((vtypes (loop for (type2 . subtypes) in relations do
-				(when (loop for subtype in subtypes always (was-visited subtype))
-				  (return subtypes)))))
-	       ;;(prind vtypes)
-	       ;; add TYPES as subtypes of all types that have TYPES as the only subtypes.
-	       (loop for (type . subtypes) in relations do
-		    ;;(when (set-equal subtypes vtypes :test #'equal)
-		    (when (set-subset subtypes vtypes :test #'equal)
-		      ;;(prind type)
-		      (let ((type (visit-typenode type)))
-			(loop for stype in subtypes do
-			     (let ((stype (gethash stype created)))
-			       (push stype (typenode-subtypes type))
-			       (push type (typenode-supertypes stype)))))))
-	       ;; remove vtypes everywhere.
-	       (loop for relation in relations do
-		    (loop for vtype in vtypes do
-			 (setf (cdr relation) (remove vtype (cdr relation))))))
-	   ;; remove types from the relations that have no subtypes.
-	     (setf relations (remove-if (lambda (relation) (null (cdr relation))) relations))
-	     )))
-    ;;(gethash t created)
-    created
-    ))
-
-(defun make-typegraph (types)
-  (declare (optimize (debug 3)))
-  (assert (position nil types))
-  (assert (position t types))
-  (let ((relations (subtypes-of-all types))
-	(relhash (make-hash-table :test #'equal)))
+(defun make-typehash (relations)
+  (let ((relhash (make-hash-table :test #'equal)))
     (loop for (supertype . subtypes) in relations do
 	 (let ((set (make-hash-table :test #'equal)))
 	   (loop for subtype in subtypes do
@@ -403,18 +315,24 @@ remove T from the relations, because it has no subtypes.
 		       value
 		       (let ((node (make-typenode :type type)))
 			 (setf (gethash type typehash) node)
-			 node)))))
+			 node))))
+	       (siblingp (type1 type2)
+		 "Return whether TYPE1 and TYPE2 are siblings, i.e. both are subtypes of each other."
+		 (and (gethash type1 (gethash type2 relhash))
+		      (gethash type2 (gethash type1 relhash)))))
 	(loop for (supertype . subtypes) in relations do
-	     (prind supertype subtypes)
-	     (let ((immediate-subtypes nil))
-	       (loop for t1 in subtypes do
+	     ;;(prind supertype subtypes)
+	     (let ((siblings (remove-if (lambda (x) (not (siblingp x supertype))) subtypes))
+		   (subtypes-nosiblings (remove-if (lambda (x) (siblingp x supertype)) subtypes))
+		   (immediate-subtypes nil))
+	       (loop for t1 in subtypes-nosiblings do
 		    (unless
-			(loop for t2 in subtypes thereis
+			(loop for t2 in subtypes-nosiblings thereis
 			     (cond
 			       ((eq t1 t2)
 				nil)
-			       ((and (gethash t1 (gethash t2 relhash))
-				     (gethash t2 (gethash t1 relhash)))
+			       ((siblingp t1 t2)
+				;; otherwise both siblings would exclude each other.
 				nil)
 			       ((gethash t1 (gethash t2 relhash))
 				;;(prind "excluding" t1 "because of" t2)
@@ -422,64 +340,83 @@ remove T from the relations, because it has no subtypes.
 			       (t
 				nil)))
 		      (push t1 immediate-subtypes)))
-	       (prind supertype immediate-subtypes)
+	       ;;(prind supertype immediate-subtypes)
 	       (let ((supertype-node (visit-typenode supertype)))
+		 (loop for subtype in siblings do
+		      (let ((subtype-node (visit-typenode subtype)))
+			;;(prind "SIBLINGS:" subtype supertype)
+			(unless (find subtype-node (typenode-siblings supertype-node))
+			  (push subtype-node (typenode-siblings supertype-node)))
+			(unless (find supertype-node (typenode-siblings subtype-node))
+			  (push supertype-node (typenode-siblings subtype-node)))))
 		 (loop for subtype in immediate-subtypes do
 		      (let ((subtype-node (visit-typenode subtype)))
 			(push supertype-node (typenode-supertypes subtype-node))
 			(push subtype-node (typenode-subtypes supertype-node))))))))
       typehash)))
 
+(defun maxima-of (subtype-relations)
+  "Starting from the node NIL, find all top-most supertypes (those reachable nodes which have no supertypes) in TYPEHASH."
+  (let ((typehash (make-typehash subtype-relations)))
+    (let ((toptypes nil))
+      (labels ((rec (node)
+		 (let ((supertypes (typenode-supertypes node)))
+		   (if (null supertypes)
+		       (push (typenode-type node) toptypes)
+		       (loop for supertype in supertypes do
+			    (rec supertype))))))
+	(rec (gethash 'nil typehash))
+	(unique toptypes :test #'equal)))))
+
+(defun make-typegraph (types)
+  (declare (optimize (debug 3)))
+  (assert (position nil types))
+  (assert (position t types))
+  (let ((relations (subtypes-of-all types)))
+    (make-typehash relations)))
+
+(defun subtypes-of (type typehash)
+  "Compute all (also recursive) subtypes of TYPE in the typegraph stored in TYPEHASH.
+Return the type relations of the subtypes."
+  (assert (gethash type typehash))
+  (labels ((rec (type)
+	     (if (null type)
+		 (values '((nil)) '(nil))
+		 (let* ((type1 (gethash type typehash))
+			(subtypes (mapcar #'typenode-type (typenode-subtypes type1)))
+			(recsubtypes nil)
+			(recrels))
+		   (loop for subtype in subtypes do
+			(multiple-value-bind (rels subtypes) (rec subtype)
+			  (setf recsubtypes (append subtypes recsubtypes))
+			  (setf recrels (append rels recrels))))
+		   (setf recsubtypes (unique recsubtypes :test #'equal))
+		   (values (cons (cons type recsubtypes) recrels)
+			   (cons type recsubtypes))))))
+    (unique (rec type) :test #'equal)))
+
 (defun meet-type (type1 type2 typehash)
-  "Return the first common descendant of TYPE1 and TYPE2 in the typegraph stored in TYPEHASH."
+  "Return the common descendants of TYPE1 and TYPE2 in the typegraph stored in TYPEHASH."
   (declare (optimize (debug 3)))
   (assert (and (gethash type1 typehash) (gethash type2 typehash)))
-  ;; check if TYPE1 and TYPE2 have a common descendant
-  (let ((types1 (list type1))
-	(types2 (list type2))
-	(visited1 nil)
-	(visited2 nil)
-	(subtypes1 (list type1))
-	(subtypes2 (list type2)))
-    (loop do
-	 (let* ((t1 (car types1))
-		(t2 (car types2))
-		(n1 (gethash t1 typehash))
-		(n2 (gethash t2 typehash))
-		(s1 (mapcar #'typenode-type (typenode-subtypes n1)))
-		(s2 (mapcar #'typenode-type (typenode-subtypes n2))))
-	   (setf types1 (cdr types1))
-	   (setf types2 (cdr types2))
-	   (setf types1 (append types1 s1))
-	   (setf types2 (append types2 s2))
-	   (setf subtypes1 (append subtypes1 s1))
-	   (setf subtypes2 (append subtypes2 s2))
-	   (let ((c1 (loop for subtype1 in subtypes1 when (find subtype1 subtypes2) return subtype1))
-		 (c2 (loop for subtype2 in subtypes2 when (find subtype2 subtypes1) return subtype2)))
-	     ;;(prind t1 t2 (position t1 visited1) (position t2 visited2) c1 c2 subtypes1 subtypes2)
-	     (cond
-	       (c1
-		(return c1))
-	       (c2
-		(return c2))
-	       ((and (null types1) (null types2))
-		(return nil))))
-	   (when (and (loop for t1 in types1 always (position t1 visited1))
-		      (loop for t2 in types2 always (position t2 visited2)))
-	     (return nil))
-	   (setf visited1 (cons t1 visited1))
-	   (setf visited2 (cons t2 visited2))))))
+  (let* ((subtypes1 (subtypes-of type1 typehash))
+	 (subtypes2 (subtypes-of type2 typehash))
+	 (intersection (unique (append subtypes1 subtypes2) :test #'equal :count 2)))
+    (maxima-of intersection)))
 
 (defun is-subtypep (type1 type2 typehash)
-  (let ((m (meet-type type1 type2 typehash)))
-    ;;(prind m)
-    (cond
-      ((eq m type1)
-       t)
-      ((or (eq m type2) (null m))
-       nil)
-      (t
-       nil))))
+  (cond
+    ((let ((siblings1 (mapcar #'typenode-type (typenode-siblings (gethash type1 typehash)))))
+       (position type2 siblings1 :test #'equal))
+     t)
+    (t
+     (let ((m (meet-type type1 type2 typehash)))
+       ;;(prind m)
+       (cond
+	 ((position type1 m :test #'equal)
+	  t)
+	 (t
+	  nil))))))
 
 (defun test1 ()
   (let ((typehash (make-typegraph +cl-types+)))
