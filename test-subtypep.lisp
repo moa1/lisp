@@ -1,9 +1,11 @@
 ;;;; This tests how type information of functions can be represented in lisp.
 
 ;; for example types could be represented as a list of OR-concatenated types. This has the disadvantage that the correspondence of input types and output types is not clearly readable.
+#|
 (declaim (ftype (function ((or float integer) (or float integer)) (or (vector integer) (vector float))) f1))
 (defun f1 (a b)
   (make-array 2 :initial-contents (list a b)))
+|#
 
 #|
 ;; declaring function type as concatenated declare specifications doesn't work, since they are interpreted as AND-concatenated types, leading to conflicts.
@@ -12,6 +14,7 @@
 	   (make-array 2 :initial-contents (list a b))))
     (declare (ftype (function (integer integer) (vector integer)) f1)
 	     (ftype (function (float float) (vector float)) f1))
+
     (f1 2 3)
     (f1 2.0 3.0)))
 |#
@@ -36,7 +39,7 @@
 		       (princ " ")))))
        (format t "~%"))))
 
-(setf *print-circle* t)
+;;(setf *print-circle* t)
 
 (defparameter +cl-types+
   '(arithmetic-error function simple-condition 
@@ -250,7 +253,12 @@
 ;; This means that searching for the first common descendant is harder than just walking down the subtypes, because walking down the subtypes first finds SIMPLE-ERROR as first common descendant, while we would like to find ERROR.
 
 (defstruct typenode
-  (type (error "must specify TYPE for TYPENODE"))
+  "An instance of this structure represents a type in a type lattice.
+TYPE is the name of the type.
+SUPERTYPES is the list of TYPENODEs that are supertypes of TYPE in the lattice.
+SIBLINGS is the list of TYPENODEs that are the same type as TYPE in the lattice.
+SUBTYPES is the list of TYPENODEs that are subtypes of TYPE in the lattice."
+  (type (error "must specify TYPE for TYPENODE") :type (or symbol list))
   (supertypes nil :type list)
   (siblings nil :type list)
   (subtypes nil :type list))
@@ -264,7 +272,8 @@
 	 (print-typegraph subtype))))
 
 (defun unique (seq &key (test #'eql) (count nil))
-  "Return the list of all unique (under TEST) elements of sequence SEQ."
+  "Return the list of all unique (under TEST) elements of sequence SEQ.
+When COUNT is specified, only elements that occur COUNT times in SEQ are returned."
   (let ((ht (make-hash-table :test test)))
     (map nil (lambda (elt) (incf (gethash elt ht 0))) seq)
     (let ((res nil))
@@ -274,32 +283,6 @@
 	((numberp count)
 	 (maphash (lambda (k v) (when (= v count) (push k res))) ht)))
       res)))
-
-(defun set-subset (seq1 seq2 &key (test #'eql))
-  "Return whether SEQ1 is a subset of SEQ2, where SEQ1 and SEQ2 are passed as sequences."
-  (let ((ht (make-hash-table :test test)))
-    (map nil (lambda (a) (setf (gethash a ht) 0)) seq2)
-    (map nil (lambda (a)
-	       (unless (nth-value 1 (gethash a ht))
-		 (return-from set-subset nil)))
-	 seq1)
-    t))
-
-(defun set-equal (seq1 seq2 &key (test #'eql))
-  "Return whether SEQ1 contains the same set of elements as SEQ2, where SEQ1 and SEQ2 are passed as sequences."
-  (let ((ht (make-hash-table :test test)))
-    (map nil (lambda (a) (setf (gethash a ht) 0)) seq1)
-    (map nil (lambda (a)
-	       (unless (nth-value 1 (gethash a ht))
-		 (return-from set-equal nil))
-	       (incf (gethash a ht)))
-	 seq2)
-    (maphash (lambda (key value)
-	       (declare (ignore key))
-	       (unless (> value 0)
-		 (return-from set-equal nil)))
-	     ht)
-    t))
 
 (defun make-typehash (relations)
   (let ((relhash (make-hash-table :test #'equal)))
@@ -355,8 +338,10 @@
 			(push subtype-node (typenode-subtypes supertype-node))))))))
       typehash)))
 
-(defun maxima-of (subtype-relations)
-  "Starting from the node NIL, find all top-most supertypes (those reachable nodes which have no supertypes) in TYPEHASH."
+(defun maxmin-of (subtype-relations &key (maxmin :max))
+  "Starting from the node NIL, find all top-most supertypes (those reachable nodes which have no supertypes) in TYPEHASH.
+When MAXMIN == :MAX, SUBTYPE-RELATIONS must be pairs of (SUPERTYPE . SUBTYPES) relations.
+When MAXMIN == :MIN, SUBTYPE-RELATIONS must be pairs of (SUBTYPE . SUPERTYPES) relations."
   (let ((typehash (make-typehash subtype-relations)))
     (let ((toptypes nil))
       (labels ((rec (node)
@@ -365,25 +350,36 @@
 		       (push (typenode-type node) toptypes)
 		       (loop for supertype in supertypes do
 			    (rec supertype))))))
-	(rec (gethash 'nil typehash))
+	(rec (gethash (ecase maxmin ((:max) 'nil) ((:min) 't)) typehash))
 	(unique toptypes :test #'equal)))))
 
+(defun maxima-of (subtype-relations)
+  "Starting from the node NIL, find all top-most supertypes (those reachable nodes which have no supertypes) in TYPEHASH."
+  (maxmin-of subtype-relations :maxmin :max))
+
+(defun minima-of (subtype-relations)
+  "Starting from the node NIL, find all top-most supertypes (those reachable nodes which have no supertypes) in TYPEHASH."
+  (maxmin-of subtype-relations :maxmin :min))
+
 (defun make-typegraph (types)
-  (declare (optimize (debug 3)))
   (assert (position nil types))
   (assert (position t types))
   (let ((relations (subtypes-of-all types)))
     (make-typehash relations)))
 
-(defun subtypes-of (type typehash)
-  "Compute all (also recursive) subtypes of TYPE in the typegraph stored in TYPEHASH.
-Return the type relations of the subtypes."
+(defun subsupertypes-of (type typehash &key (subsuper :sub))
   (assert (gethash type typehash))
   (labels ((rec (type)
 	     (if (null type)
-		 (values '((nil)) '(nil))
+		 (ecase subsuper
+		   ((:sub)
+		    (values '((nil)) '(nil)))
+		   ((:super)
+		    (values '((t)) '(t))))
 		 (let* ((type1 (gethash type typehash))
-			(subtypes (mapcar #'typenode-type (typenode-subtypes type1)))
+			(subtypes (mapcar #'typenode-type (ecase subsuper
+							    ((:sub) (typenode-subtypes type1))
+							    ((:super) (typenode-supertypes type1)))))
 			(recsubtypes nil)
 			(recrels))
 		   (loop for subtype in subtypes do
@@ -395,14 +391,49 @@ Return the type relations of the subtypes."
 			   (cons type recsubtypes))))))
     (unique (rec type) :test #'equal)))
 
-(defun meet-type (type1 type2 typehash)
-  "Return the common descendants of TYPE1 and TYPE2 in the typegraph stored in TYPEHASH."
-  (declare (optimize (debug 3)))
+(defun subtypes-of (type typehash)
+  "Compute all (also recursive) subtypes of TYPE in the typegraph stored in TYPEHASH.
+Return the type relations of the subtypes."
+  (subsupertypes-of type typehash :subsuper :sub))
+
+(defun supertypes-of (type typehash)
+  "Compute all (also recursive) supertypes of TYPE in the typegraph stored in TYPEHASH.
+Return the type relations of the supertypes."
+  (subsupertypes-of type typehash :subsuper :super))
+
+(defun meet-types (type1 type2 typehash)
+  "Return the common maximal descendants of TYPE1 and TYPE2 in the typegraph stored in TYPEHASH."
   (assert (and (gethash type1 typehash) (gethash type2 typehash)))
   (let* ((subtypes1 (subtypes-of type1 typehash))
 	 (subtypes2 (subtypes-of type2 typehash))
 	 (intersection (unique (append subtypes1 subtypes2) :test #'equal :count 2)))
     (maxima-of intersection)))
+
+(defun join-types (type1 type2 typehash)
+  "Return the common minimal ancestors of TYPE1 and TYPE2 in the typegraph stored in TYPEHASH."
+  (assert (and (gethash type1 typehash) (gethash type2 typehash)))
+  (let* ((supertypes1 (supertypes-of type1 typehash))
+	 (supertypes2 (supertypes-of type2 typehash))
+	 (intersection (unique (append supertypes1 supertypes2) :test #'equal :count 2)))
+    (minima-of intersection)))
+
+(defun meet-type (type1 type2 typehash)
+  "Return the common maximal descendant of TYPE1 and TYPE2 in the typegraph stored in TYPEHASH."
+  (let ((m (meet-types type1 type2 typehash)))
+    (loop until (<= (length m) 1) do
+	 (let ((m1 (car m))
+	       (m2 (cadr m)))
+	   (setf m (append (cddr m) (meet-types m1 m2 typehash) ))))
+    (car m)))
+
+(defun join-type (type1 type2 typehash)
+  "Return the common minimal ancestor of TYPE1 and TYPE2 in the typegraph stored in TYPEHASH."
+  (let ((m (join-types type1 type2 typehash)))
+    (loop until (<= (length m) 1) do
+	 (let ((m1 (car m))
+	       (m2 (cadr m)))
+	   (setf m (append (cddr m) (join-types m1 m2 typehash) ))))
+    (car m)))
 
 (defun is-subtypep (type1 type2 typehash)
   (cond
@@ -411,10 +442,9 @@ Return the type relations of the subtypes."
      t)
     (t
      (let ((m (meet-type type1 type2 typehash)))
-       ;;(prind m)
+       ;;(when (> (length m) 1) (prind m))
        (cond
-	 ((position type1 m :test #'equal)
-	  t)
+	 ((eq m type1) t)
 	 (t
 	  nil))))))
 
@@ -425,13 +455,3 @@ Return the type relations of the subtypes."
 	      ;;(prind t1 t2)
 	      (if (not (eq (is-subtypep t1 t2 typehash) (subtypep t1 t2)))
 		  (format t "(IS-SUBTYPEP '~A '~A)=~A but (SUBTYPEP '~A '~A)=~A~%" t1 t2 (is-subtypep t1 t2 typehash) t1 t2 (subtypep t1 t2)))))))
-
-(defun meet-types (types1 types2 typehash)
-  "Take TYPES1 and TYPES2 to be the types (OR ,@TYPES1) and (OR ,@TYPES2), respectively, and compute the intersection of TYPES1 and TYPES2."
-  (let ((res nil))
-    (loop for t1 in types1 do
-	 (loop for t2 in types2 do
-	      (let ((m (meet-type t1 t2 typehash)))
-		(unless (or (null m) (find m res))
-		  (push m res)))))
-    res))
