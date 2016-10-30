@@ -403,7 +403,7 @@ Return the type relations of the supertypes."
 
 (defun meet-types (type1 type2 typehash)
   "Return the common maximal descendants of TYPE1 and TYPE2 in the typegraph stored in TYPEHASH."
-  (assert (and (gethash type1 typehash) (gethash type2 typehash)))
+  (assert (and (gethash type1 typehash) (gethash type2 typehash)) () "TYPE1:~S or TYPE2:~S is not in TYPEHASH." type1 type2)
   (let* ((subtypes1 (subtypes-of type1 typehash))
 	 (subtypes2 (subtypes-of type2 typehash))
 	 (intersection (unique (append subtypes1 subtypes2) :test #'equal :count 2)))
@@ -417,23 +417,29 @@ Return the type relations of the supertypes."
 	 (intersection (unique (append supertypes1 supertypes2) :test #'equal :count 2)))
     (minima-of intersection)))
 
-(defun meet-type (type1 type2 typehash)
-  "Return the common maximal descendant of TYPE1 and TYPE2 in the typegraph stored in TYPEHASH."
-  (let ((m (meet-types type1 type2 typehash)))
+(defun meet-typelist (typelist typehash)
+  (let ((m typelist))
     (loop until (<= (length m) 1) do
 	 (let ((m1 (car m))
 	       (m2 (cadr m)))
 	   (setf m (append (cddr m) (meet-types m1 m2 typehash) ))))
     (car m)))
 
-(defun join-type (type1 type2 typehash)
-  "Return the common minimal ancestor of TYPE1 and TYPE2 in the typegraph stored in TYPEHASH."
-  (let ((m (join-types type1 type2 typehash)))
+(defun meet-type (type1 type2 typehash)
+  "Return the common maximal descendant of TYPE1 and TYPE2 in the typegraph stored in TYPEHASH."
+  (meet-typelist (meet-types type1 type2 typehash) typehash))
+
+(defun join-typelist (typelist typehash)
+  (let ((m typelist))
     (loop until (<= (length m) 1) do
 	 (let ((m1 (car m))
 	       (m2 (cadr m)))
 	   (setf m (append (cddr m) (join-types m1 m2 typehash) ))))
     (car m)))
+
+(defun join-type (type1 type2 typehash)
+  "Return the common minimal ancestor of TYPE1 and TYPE2 in the typegraph stored in TYPEHASH."
+  (join-typelist (join-types type1 type2 typehash) typehash))
 
 (defun is-subtypep (type1 type2 typehash)
   (cond
@@ -455,3 +461,4 @@ Return the type relations of the supertypes."
 	      ;;(prind t1 t2)
 	      (if (not (eq (is-subtypep t1 t2 typehash) (subtypep t1 t2)))
 		  (format t "(IS-SUBTYPEP '~A '~A)=~A but (SUBTYPEP '~A '~A)=~A~%" t1 t2 (is-subtypep t1 t2 typehash) t1 t2 (subtypep t1 t2)))))))
+(test1)
