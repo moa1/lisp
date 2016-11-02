@@ -1,4 +1,5 @@
-;; TODO: think about how ASSERT can be included. The NTI paper says: """In the classical non-deterministic manner, the flow of control is terminated only by branches of the computation that fail in the sense that there are no legitimate values for variables. In this setting, predicates are modelled by partial functions whose results are ignored. One particularly valuable partial function of this kind is "assert(p)" which is defined only for the argument "true".""" One way to include ASSERT would be to model it as an IF-FORM, which has as its (only) THEN-FORM the code following the ASSERT. (What about: (PROGN (LET ((A 1)) (ASSERT (INTEGERP A))) (LET ((B 1)) B))? Should the THEN-FORM include the second LET?)
+;; TODO: think about how ASSERT can be included. The NTI paper says: """In the classical non-deterministic manner, the flow of control is terminated only by branches of the computation that fail in the sense that there are no legitimate values for variables. In this setting, predicates are modelled by partial functions whose results are ignored. One particularly valuable partial function of this kind is "assert(p)" which is defined only for the argument "true".""" One way to include ASSERT would be to model it as an IF-FORM, which has as its (only) THEN-FORM the code following the ASSERT. What about: (LET ((A 1)) (PROGN (ASSERT (INTEGERP A))) (LET ((B 1)) B))? Should the THEN-FORM include the second LET? SBCL compiles the following without a warning, although it would be possible to infer that the assertion always fails: (DEFUN TEST (X Y) (ASSERT (AND (> X Y) (<= X Y)))). Neither does SBCL complain for (DEFUN TEST (X) (ASSERT (AND (INTEGERP X) (TYPEP X 'SINGLE-FLOAT)))) or for (DEFUN TEST (X) (DECLARE (TYPE SINGLE-FLOAT X)) (ASSERT (INTEGERP X))).
+
 
 (load "~/quicklisp/setup.lisp")
 (ql:quickload :walker)
@@ -113,13 +114,19 @@
     ;;(intersect-border "INTERSECT_BORDER0" (v4s-float v4s-float v4s-float single-float single-float single-float single-float single-float single-float single-float) (v4s-float single-float))
     ;;(outside-border-p "OUTSIDE_BORDER0" (v4s-float single-float single-float single-float) (boolean))
     ;;(scan-line-continuous "SCAN_LINE_CONTINUOUS0" (v4s-float v4s-float single-float (function (v4s-float) boolean) single-float single-float single-float single-float single-float single-float) (v4s-float v4s-float boolean single-float))
+    (make-array-single-float "make_array_float_uint_uint" (unsigned-byte unsigned-byte) ((array single-float)))
+    (make-array-integer "make_array_int_uint_uint" (unsigned-byte unsigned-byte) ((array integer)))
+    (aref "aref_array_float_uint" ((array single-float) unsigned-byte) (single-float))
+    (aref "aref_array_integer_uint" ((array integer) unsigned-byte) (integer))
     ))
 
 (defstruct v4s-float)
 (defparameter +builtin-types+
-  '(nil t integer single-float
-    number
-    symbol v4s-float))
+  '(nil t
+    number integer unsigned-byte single-float
+    symbol null
+    v4s-float
+    array (array integer) (array single-float)))
 
 ;; transform the program representation as parsed by WALKER to a program which only uses the following constructs: 1. selfevalobjects, (self-evaluating) variable and function symbols, let-form, setq-form, (function) application-form.
 
@@ -156,6 +163,12 @@
   (loop for i below (length results1) collect
        (meet-type (elt results1 i) (elt results2 i) +builtin-typehash+)))
 
+(defun meet-arguments (args1 args2)
+  "ARGS1 and ARGS2 are each a list of TYPES, one for each NTH-VALUE. Meet the types of same N."
+  (assert (= (length args1) (length args2)))
+  (loop for i below (length args1) collect
+       (meet-type (elt args1 i) (elt args2 i) +builtin-typehash+)))
+
 (defun var-declared-type (var)
   (let* ((declspecs (walker:nso-declspecs var))
 	 (types (mapcar #'walker:declspec-type (remove-if-not (lambda (x) (subtypep (type-of x) 'walker:declspec-type)) declspecs)))
@@ -173,14 +186,16 @@
 	 (when (and (eq fun lisp-name)
 		    ;;(equal arg-types fun-arg-types)
 		    (loop for arg-type in arg-types for fun-arg-type in fun-arg-types always
-			 (subtypep arg-type fun-arg-type)))
+			 (subtypep fun-arg-type arg-type)))
 	   (push fun-results-types possible)))
-    (assert (not (null possible)))
+    (when (null possible)
+      (return-from fun-result-lookup '(nil))) ;TODO: return multiple values representation number
+    (assert (not (null possible)) () "Unknown function ~S with types ~S" fun arg-types)
     ;; POSSIBLE is now a ((TYPE-RESULT1 TYPE-RESULT2 ...) (TYPE-RESULT1 TYPE-RESULT2 ...) ...). Meet the types TYPE-RESULT1, then TYPE-RESULT2, ..., to get a list of TYPE-RESULTs.
     (assert (apply #'= (mapcar #'length possible)))
     (let ((length (length (car possible))))
       (loop for l below length collect
-	   (meet-typelist (loop for poss in possible collect (elt poss l)) +builtin-typehash+)))))
+	   (join-typelist (loop for poss in possible collect (elt poss l)) +builtin-typehash+)))))
 
 (defun fun-arguments-lookup (fun results-types)
   "RESULTS-TYPES is the list of types of (result1-type result2-type ...)"
@@ -188,18 +203,22 @@
 		 (walker:nso-name fun)
 		 fun))
 	(possible nil))
+    ;;(prind fun results-types)
     (loop for (lisp-name c-name fun-arg-types fun-results-types) in +builtin-functions+ do
 	 (when (and (eq fun lisp-name)
 		    ;;(equal arg-types fun-arg-types)
-		    (loop for result-type in results-types for fun-result-type in fun-results-types always
-			 (subtypep result-type fun-result-type)))
+		    (loop for fun-result-type in fun-results-types for result-type in results-types always
+			 (subtypep fun-result-type result-type)))
 	   (push fun-arg-types possible)))
+    ;;(prind possible)
+    (when (null possible)
+      (return-from fun-arguments-lookup '(nil))) ;TODO: return the correct number of arguments
     (assert (not (null possible)))
     ;; POSSIBLE is now a ((TYPE-ARG1 TYPE-ARG2 ...) (TYPE-ARG1 TYPE-ARG2 ...) ...). Meet the types TYPE-ARG1, then TYPE-ARG2, ..., to get a list of TYPE-ARGs.
     (assert (apply #'= (mapcar #'length possible)))
     (let ((length (length (car possible))))
       (loop for l below length collect
-	   (meet-typelist (loop for poss in possible collect (elt poss l)) +builtin-typehash+)))))
+	   (join-typelist (loop for poss in possible collect (elt poss l)) +builtin-typehash+)))))
 
 (defclass flowstate ()
   ((prev-upper :initarg :prev-upper :accessor form-prev-upper)
@@ -288,7 +307,12 @@
 		 :form-upper (list 'function) :form-lower (list nil)))
 
 (defmethod prepare-ast ((ast walker:var-binding) prev-upper prev-lower)
-  (make-instance 'var-binding :sym (walker:form-sym ast) :value (prepare-ast (walker:form-value ast) prev-upper prev-lower)))
+  (let ((value (if (null (walker:form-value ast))
+		   (make-instance 'selfevalobject :object nil
+				  :prev-upper prev-upper :prev-lower prev-lower :next-upper prev-upper :next-lower prev-lower
+				  :form-upper (list 'null) :form-lower (list nil))
+		   (prepare-ast (walker:form-value ast) prev-upper prev-lower))))
+    (make-instance 'var-binding :sym (walker:form-sym ast) :value value)))
 
 (defmethod prepare-ast ((ast walker:let-form) prev-upper prev-lower)
   (let* ((bindings (loop for binding in (walker:form-bindings ast) collect (prepare-ast binding prev-upper prev-lower)))
@@ -361,6 +385,8 @@
 		   :body-upper next-upper :body-lower next-lower
 		   :form-upper (list t) :form-lower (list nil))))
 
+;;; DEDUCE-FORWARD
+
 (defmethod deduce-forward ((ast selfevalobject))
   ;; nothing to do, PREPARE-AST already initialized FORM-UPPER and FORM-LOWER.
   nil)
@@ -369,26 +395,27 @@
   (declare (optimize (debug 3)))
   (let ((upper (namespace-lookup (form-var ast) (form-prev-upper ast)))
 	(lower (namespace-lookup (form-var ast) (form-prev-lower ast))))
-    (setf (form-upper ast) (list upper))
-    (setf (form-lower ast) (list lower))))
+    ;; do we have to MEET here, or can we just set the result to the type of the variable?
+    (setf (form-upper ast) (list (meet upper (car (form-upper ast)))))
+    (setf (form-lower ast) (list (meet lower (car (form-upper ast)))))))
 
 (defmethod deduce-forward ((ast let-form))
   (declare (optimize (debug 3)))
   (let ((body-upper (form-body-upper ast))
 	(body-lower (form-body-lower ast)))
     (loop for binding in (walker:form-bindings ast) do
-	 (let ((sym (walker:form-sym binding))
+	 (let ((var (walker:form-sym binding))
 	       (value (walker:form-value binding)))
 	   (deduce-forward value)
 	   (let* ((value-upper (car (form-upper value)))
 		  (value-lower (car (form-lower value)))
-		  (old-upper (namespace-lookup sym body-upper))
+		  (old-upper (namespace-lookup var body-upper))
 		  ;; TODO: FIXME: are the following MEETs correct?
 		  (new-upper (meet value-upper old-upper))
 		  (new-lower (meet value-lower old-upper)))
-	     (assert (not (null new-upper)) () "Impossible type for variable ~S: cannot meet types ~S and ~S" sym value-upper old-upper)
-	     (setf (namespace-lookup sym body-upper) new-upper)
-	     (setf (namespace-lookup sym body-lower) new-lower))))
+	     (assert (not (null new-upper)) () "Impossible type for variable ~S: cannot meet types ~S and ~S" var value-upper old-upper)
+	     (setf (namespace-lookup var body-upper) new-upper)
+	     (setf (namespace-lookup var body-lower) new-lower))))
     (loop for form in (butlast (walker:form-body ast)) do
 	 (deduce-forward form))
     (let ((last-form (car (last (walker:form-body ast)))))
@@ -445,6 +472,7 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 		    (handler-case (progn (deduce-forward ,ast-sym) (assert nil () "failed (ASSERT-ERROR ~S)" ,form-sym))
 		      ;; TODO: replace T with something like TYPE-ERROR.
 		      (t () t))))))
+    (assert-result '1 '(integer))
     (assert-result '(+ 1 2) '(integer))
     (assert-result '(+ 1 2.0) '(single-float))
     (assert-result '(let ((a 1) (b 2)) (+ a b)) '(integer))
@@ -454,6 +482,87 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
     (assert-error '(let ((a 1.0)) (declare (type single-float a)) (setq a 1) (+ a 2)))
     ))
 
-;; handle the function application using the t-function, or like a 'GO if it is a recursive call.
-;; (see "If we have a program point where two states split,")
+;;; DEDUCE-BACKWARD
 
+(defmethod deduce-backward ((ast selfevalobject))
+  ;; nothing to do, PREPARE-AST already initialized FORM-UPPER and FORM-LOWER.
+  nil)
+
+(defmethod deduce-backward ((ast var))
+  (declare (optimize (debug 3)))
+  (let* ((var (form-var ast))
+	 (prev-upper (form-prev-upper ast))
+	 (prev-lower (form-prev-lower ast))
+	 (old-upper (namespace-lookup var prev-upper)))
+    ;; do we have to MEET here, or can we just set the result to the type of the variable?
+    (setf (namespace-lookup var prev-upper) (meet (car (form-upper ast)) old-upper))
+    (setf (namespace-lookup var prev-lower) (meet (car (form-lower ast)) old-upper))))
+
+(defmethod deduce-backward ((ast let-form))
+  (declare (optimize (debug 3)))
+  (let ((form (car (last (walker:form-body ast)))))
+    (setf (form-upper form) (meet-results (form-upper ast) (form-upper form)))
+    (setf (form-lower form) (meet-results (form-lower ast) (form-upper form)))
+    (deduce-backward form))
+  (loop for form in (reverse (butlast (walker:form-body ast))) do
+       (deduce-backward form))
+  (let ((body-upper (form-body-upper ast))
+	(body-lower (form-body-lower ast)))
+    (loop for binding in (reverse (walker:form-bindings ast)) do
+	 (deduce-backward (walker:form-value binding))
+	 (let* ((var (walker:form-sym binding))
+		(value (walker:form-value binding))
+		(old-upper (car (form-upper value)))
+		(old-lower (car (form-lower value)))
+		(var-upper (namespace-lookup var body-upper))
+		(var-lower (namespace-lookup var body-lower))
+		;; TODO: FIXME: are the following MEETs correct?
+		(new-upper (meet old-upper var-upper))
+		(new-lower (meet old-lower var-upper)))
+	   (declare (ignore var-lower))
+	   (setf (car (form-upper value)) new-upper)
+	   (setf (car (form-lower value)) new-lower)
+	   (assert (not (null new-upper)) () "Impossible type for variable ~S: cannot meet types ~S and ~S" var var-upper old-upper)
+	   ))))
+
+(defmethod deduce-backward ((ast application-form))
+  (declare (optimize (debug 3)))
+  (let* ((prev-upper (form-prev-upper ast))
+	 (prev-lower (form-prev-lower ast))
+	 (fun (walker:form-fun ast))
+	 (results-upper (form-upper ast))
+	 (results-lower (form-lower ast))
+	 (args (walker:form-arguments ast))
+	 (arg-types-upper (loop for arg in args collect (namespace-lookup arg prev-upper)))
+	 (arg-types-lower (loop for arg in args collect (namespace-lookup arg prev-lower)))
+	 (fun-args-upper (fun-arguments-lookup fun results-upper))
+	 (fun-args-lower (fun-arguments-lookup fun results-lower))
+	 (met-arguments (meet-arguments fun-args-upper arg-types-upper)))
+    (declare (ignore arg-types-lower fun-args-lower))
+    (loop for arg in args for type in met-arguments do
+	 (setf (namespace-lookup arg prev-upper) type))
+    ;; "upper(z) = upper(zbefore)" ? What does it mean?
+    ))
+
+(defmethod deduce-backward ((ast setq-form))
+  (declare (optimize (debug 3)))
+  (deduce-backward (form-value ast))
+  (let* ((var (form-var ast))
+	 (value (form-value ast))
+	 (old-upper (car (form-upper value)))
+	 (old-lower (car (form-lower value)))
+	 (var-upper (namespace-lookup var (form-next-upper ast)))
+	 (var-lower (namespace-lookup var (form-next-lower ast)))
+	 ;; TODO: FIXME: are the following MEETs correct?
+	 (new-upper (meet old-upper var-upper))
+	 (new-lower (meet old-lower var-upper)))
+    (declare (ignore var-lower))
+    (setf (car (form-upper value)) new-upper)
+    (setf (car (form-lower value)) new-lower)
+    (assert (not (null new-upper)) () "Impossible type for variable ~S: cannot meet types ~S and ~S" var var-upper old-upper)))
+
+(let* ((form '(aref (make-array-single-float 10 20) 2))
+       (ast (walker:parse-with-empty-namespaces form :free-common-lisp-namespace t))
+       (ast (prepare-ast ast nil nil)))
+  (deduce-backward ast)
+  (assert (eq 'array (namespace-lookup (walker:form-sym (car (walker:form-bindings ast))) (form-body-upper ast)))))
