@@ -411,7 +411,7 @@ Return the type relations of the supertypes."
 
 (defun join-types (type1 type2 typehash)
   "Return the common minimal ancestors of TYPE1 and TYPE2 in the typegraph stored in TYPEHASH."
-  (assert (and (gethash type1 typehash) (gethash type2 typehash)))
+  (assert (and (gethash type1 typehash) (gethash type2 typehash)) () "TYPE1:~S or TYPE2:~S is not in TYPEHASH." type1 type2)
   (let* ((supertypes1 (supertypes-of type1 typehash))
 	 (supertypes2 (supertypes-of type2 typehash))
 	 (intersection (unique (append supertypes1 supertypes2) :test #'equal :count 2)))
