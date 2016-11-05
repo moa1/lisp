@@ -6,7 +6,7 @@
 (ql:quickload :equals)
 
 (defpackage :nimble-type-inferencer
-  (:documentation "Nimble type inferencer for ANSI Lisp.")
+  (:documentation "Nimble type inferencer for ANSI Lisp, see the paper \"The Nimble Type Inferencer for Common Lisp-84\" by Henry G. Baker.")
   (:use :cl :equals)
   (:export
    ;; for classes: export the class and _all_ accessors on one line so that deleting a class doesn't have to consider all exports of other classes
@@ -165,26 +165,55 @@
 (defun meet (type1 type2)
   (meet-type type1 type2 +builtin-typehash+))
 
+(defstruct (results (:constructor make-results*))
+  "The type of multiple values: NVALUES is the number of finite values; FINITE is of type (LIST TYPE); and INFINITE is of type TYPE."
+  (nvalues -1 :type integer)
+  (finite nil :type list)
+  (infinite nil :type (or symbol list)))
+
 (defun make-results (&rest results)
-  results)
+  (make-results* :nvalues (length results) :finite results :infinite nil))
 
 (defun result1 (results)
-  (car results))
+  (if (< (results-nvalues results) 1)
+      (results-infinite results)
+      (car (results-finite results))))
 
 (defun (setf result1) (value results)
-  (setf (car results) value))
+  (cond
+    ((<= (results-nvalues results) 0)
+     (setf (results-nvalues results) 1)
+     (setf (results-finite results) (list value)))
+    (t
+     (setf (car (results-finite results)) value))))
+
+(defun process-results (results1 results2 function)
+  "RESULTS1 and RESULTS2 are each of type RESULTS. Apply FUNCTION to them."
+  (declare (optimize (debug 3)))
+  (let* ((nv1 (results-nvalues results1))
+	 (nv2 (results-nvalues results2))
+	 (min-nv (max 0 (min nv1 nv2)))
+	 (max-nv (max nv1 nv2))
+	 (finite (append (loop for i below min-nv for t1 in (results-finite results1) for t2 in (results-finite results2) collect
+			      (funcall function t1 t2))
+			 (loop for i from min-nv below max-nv collect
+			      (let ((t1 (if (>= i nv1) (results-infinite results1) (elt (results-finite results1) i)))
+				    (t2 (if (>= i nv2) (results-infinite results2) (elt (results-finite results2) i))))
+				(funcall function t1 t2)))))
+	 (infinite (funcall function (results-infinite results1) (results-infinite results2)))
+	 (finite-cropped (let* ((last 0))
+			   (loop for i from (1- (length finite)) downto 0 do
+				(when (not (equal (elt finite i) infinite)) (setf last (1+ i)) (return)))
+			   (subseq finite 0 last))))
+    (make-results* :nvalues (length finite-cropped) :finite finite-cropped :infinite infinite)))    
 
 (defun meet-results (results1 results2)
-  "RESULTS1 and RESULTS2 are each a list of TYPES, one for each NTH-VALUE. Meet the types of same N."
-  (assert (= (length results1) (length results2)))
-  (loop for i below (length results1) collect
-       (meet-type (elt results1 i) (elt results2 i) +builtin-typehash+)))
+  "RESULTS1 and RESULTS2 are each of type RESULTS. Meet them."
+  (process-results results1 results2 #'meet))
 
 (defun join-results (results1 results2)
-  "RESULTS1 and RESULTS2 are each a list of TYPES, one for each NTH-VALUE. Join the types of same N."
-  (assert (= (length results1) (length results2)))
-  (loop for i below (length results1) collect
-       (join-type (elt results1 i) (elt results2 i) +builtin-typehash+)))
+  "RESULTS1 and RESULTS2 are each of type RESULTS. Join them."
+  (process-results results1 results2 #'join))
 
 (defun meet-arguments (args1 args2)
   "ARGS1 and ARGS2 are each a list of TYPES, one for each NTH-VALUE. Meet the types of same N."
@@ -212,15 +241,16 @@
 			 (subtypep fun-arg-type arg-type)))
 	   (push fun-results-types possible)))
     (when (null possible)
-      (return-from fun-result-lookup '(nil))) ;TODO: return multiple values representation number
-    (assert (not (null possible)) () "Unknown function ~S with types ~S" fun arg-types)
+      (return-from fun-result-lookup (make-results* :nvalues 0 :infinite nil))) ;TODO: return multiple values representation number
+    ;;(assert (not (null possible)) () "Unknown function ~S with types ~S" fun arg-types)
     ;; POSSIBLE is now a ((TYPE-RESULT1 TYPE-RESULT2 ...) (TYPE-RESULT1 TYPE-RESULT2 ...) ...). Meet the types TYPE-RESULT1, then TYPE-RESULT2, ..., to get a list of TYPE-RESULTs.
     (assert (apply #'= (mapcar #'length possible)))
     (let ((length (length (car possible))))
-      (loop for l below length collect
-	   (join-typelist (loop for poss in possible collect (elt poss l)) +builtin-typehash+)))))
+      (apply #'make-results
+	     (loop for l below length collect
+		  (join-typelist (loop for poss in possible collect (elt poss l)) +builtin-typehash+))))))
 
-(defun fun-arguments-lookup (fun results-types)
+(defun fun-arguments-lookup (fun results)
   "RESULTS-TYPES is the list of types of (result1-type result2-type ...)"
   (let ((fun (if (subtypep (type-of fun) 'walker:fun)
 		 (walker:nso-name fun)
@@ -230,8 +260,10 @@
     (loop for (lisp-name c-name fun-arg-types fun-results-types) in +builtin-functions+ do
 	 (when (and (eq fun lisp-name)
 		    ;;(equal arg-types fun-arg-types)
-		    (loop for fun-result-type in fun-results-types for result-type in results-types always
-			 (subtypep fun-result-type result-type)))
+		    (block always
+		      (process-results (apply #'make-results fun-results-types) results
+				       (lambda (t1 t2) (unless (subtypep t1 t2) (return-from always nil)) nil))
+		      t))
 	   (push fun-arg-types possible)))
     ;;(prind possible)
     (when (null possible)
@@ -326,23 +358,21 @@
 		(t t))))
     (make-instance 'selfevalobject :object (walker:selfevalobject-object ast)
 		   :prev-upper prev-upper :prev-lower prev-lower :next-upper prev-upper :next-lower prev-lower
-		   :form-upper (list type) :form-lower (list nil))))
+		   :form-upper (make-results type) :form-lower (make-results nil))))
 
 (defmethod prepare-ast ((ast walker:var) prev-upper prev-lower)
   (make-instance 'var :var ast
 		 :prev-upper prev-upper :prev-lower prev-lower :next-upper prev-upper :next-lower prev-lower
-		 :form-upper (list t) :form-lower (list nil)))
+		 :form-upper (make-results t) :form-lower (make-results nil)))
 
 (defmethod prepare-ast ((ast walker:fun) prev-upper prev-lower)
   (make-instance 'fun :fun ast
 		 :prev-upper prev-upper :prev-lower prev-lower :next-upper prev-upper :next-lower prev-lower
-		 :form-upper (list 'function) :form-lower (list nil)))
+		 :form-upper (make-results 'function) :form-lower (make-results nil)))
 
 (defmethod prepare-ast ((ast walker:var-binding) prev-upper prev-lower)
   (let ((value (if (null (walker:form-value ast))
-		   (make-instance 'selfevalobject :object nil
-				  :prev-upper prev-upper :prev-lower prev-lower :next-upper prev-upper :next-lower prev-lower
-				  :form-upper (list 'null) :form-lower (list nil))
+		   (prepare-ast (make-instance 'walker:selfevalobject :object nil) prev-upper prev-lower)
 		   (prepare-ast (walker:form-value ast) prev-upper prev-lower))))
     (make-instance 'var-binding :sym (walker:form-sym ast) :value value)))
 
@@ -367,7 +397,7 @@
     (make-instance 'let-form :bindings bindings :declspecs (walker:form-declspecs ast) :body body
 		   :prev-upper prev-upper :prev-lower prev-lower :next-upper prev-upper :next-lower prev-lower
 		   :body-upper next-upper :body-lower next-lower
-		   :form-upper (list t) :form-lower (list nil))))
+		   :form-upper (make-results* :infinite t) :form-lower (make-results* :infinite nil))))
 
 (defmethod prepare-ast ((ast walker:application-form) prev-upper prev-lower)
   (declare (optimize (debug 3)))
@@ -388,11 +418,11 @@
 		       namespace))
 	 (body (list (make-instance 'application-form :fun (walker:form-fun ast) :arguments arguments
 				    :prev-upper next-upper :prev-lower next-lower :next-upper next-upper :next-lower next-lower
-				    :form-upper (list t) :form-lower (list nil))))
+				    :form-upper (make-results* :infinite t) :form-lower (make-results* :infinite nil))))
 	 (let-form (make-instance 'let-form :bindings bindings :body body :declspecs nil
 				  :prev-upper prev-upper :prev-lower prev-lower :next-upper prev-upper :next-lower prev-lower
 				  :body-upper next-upper :body-lower next-lower
-				  :form-upper (list t) :form-lower (list nil))))
+				  :form-upper (make-results* :infinite t) :form-lower (make-results* :infinite nil))))
     let-form))
 
 (defmethod prepare-ast ((ast walker:setq-form) prev-upper prev-lower)
@@ -409,13 +439,13 @@
 	   (setf next-upper next-upper2 next-lower next-lower2)
 	   (push (make-instance 'setq-form :var var :value value2
 				:prev-upper prev-upper2 :prev-lower prev-lower2 :next-upper next-upper :next-lower next-lower
-				:form-upper (list t) :form-lower (list nil))
+				:form-upper (make-results t) :form-lower (make-results nil))
 		 body)))
     ;; wrap the multiple SETQ-FORMs in a substitute for a PROGN-FORM.
     (make-instance 'let-form :bindings nil :declspecs nil :body (nreverse body)
 		   :prev-upper prev-upper :prev-lower prev-lower :next-upper next-upper :next-lower next-lower
 		   :body-upper next-upper :body-lower next-lower
-		   :form-upper (list t) :form-lower (list nil))))
+		   :form-upper (make-results t) :form-lower (make-results nil))))
 
 (defmethod prepare-ast ((ast walker:if-form) prev-upper prev-lower)
   (let* ((next-upper-inside (copy-namespace prev-upper))
@@ -429,7 +459,7 @@
 	 (next-lower-outside (copy-namespace prev-lower)))
     (make-instance 'alt-form :branches branches
 		   :prev-upper prev-upper :prev-lower prev-lower :next-upper next-upper-outside :next-lower next-lower-outside
-		   :form-upper (list t) :form-lower (list nil))))
+		   :form-upper (make-results* :infinite t) :form-lower (make-results* :infinite nil))))
 
 ;;; DEDUCE-FORWARD
 
@@ -442,8 +472,8 @@
   (let ((upper (namespace-lookup (form-var ast) (form-prev-upper ast)))
 	(lower (namespace-lookup (form-var ast) (form-prev-lower ast))))
     ;; TODO: FIXME: do we have to MEET here, or can we just set the result to the type of the variable?
-    (setf (form-upper ast) (make-results (meet upper (car (form-upper ast)))))
-    (setf (form-lower ast) (make-results (meet lower (car (form-upper ast)))))))
+    (setf (form-upper ast) (make-results (meet upper (result1 (form-upper ast)))))
+    (setf (form-lower ast) (make-results (meet lower (result1 (form-upper ast)))))))
 
 (defmethod deduce-forward ((ast let-form))
   (declare (optimize (debug 3)))
@@ -453,8 +483,8 @@
 	 (let ((var (walker:form-sym binding))
 	       (value (walker:form-value binding)))
 	   (deduce-forward value)
-	   (let* ((value-upper (car (form-upper value)))
-		  (value-lower (car (form-lower value)))
+	   (let* ((value-upper (result1 (form-upper value)))
+		  (value-lower (result1 (form-lower value)))
 		  (old-upper (namespace-lookup var body-upper))
 		  ;; TODO: FIXME: are the following MEETs correct?
 		  (new-upper (meet value-upper old-upper))
@@ -537,7 +567,11 @@ lower(A) = (lower(B) join lower(C)) meet upper(A)"
 	 (assert-result (form upper)
 	   (let* ((ast (prepare form)))
 	     (deduce-forward ast)
-	     (assert (equal (form-upper ast) upper)))))
+	     (let* ((results (form-upper ast))
+		    (finite (results-finite results))
+		    (results (loop for i below (length upper) collect
+				  (if (< i (length finite)) (elt finite i) (results-infinite results)))))
+	       (assert (equal results upper) () "failed assertion for form ~S: results=~S upper:~S" form results upper)))))
   (macrolet ((assert-error (form)
 	       (let ((ast-sym (gensym "AST")) (form-sym (gensym "FORM")))
 		 `(let* ((,form-sym ,form)
