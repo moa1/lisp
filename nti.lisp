@@ -156,7 +156,8 @@
   (apply #'mapc
 	 (lambda (&rest cells)
 	   (assert (let ((var (caar cells))) (loop for cell in (cdr cells) always (equals (car cell) var))) () "Variable names are not equal: ~S" (mapcar #'car cells))
-	   (apply function cells))
+	   (unless (typep (caar cells) 'walker:tag)
+	     (apply function cells)))
 	 (mapcar #'reverse namespaces)))
 
 (load "nti-subtypep.lisp")
@@ -289,8 +290,8 @@
 
 (defclass flowstate ()
   ((prev-upper :initarg :prev-upper :accessor form-prev-upper)
-   (next-upper :initarg :next-upper :accessor form-next-upper)
    (prev-lower :initarg :prev-lower :accessor form-prev-lower)
+   (next-upper :initarg :next-upper :accessor form-next-upper)
    (next-lower :initarg :next-lower :accessor form-next-lower))
   (:documentation "The namespaces before and after the form are distinct objects, because there may be a SETQ of a lexically visible variable inside the LET."))
 
@@ -307,6 +308,13 @@
 
 (defclass fun (flowstate formvalue)
   ((fun :initarg :fun :accessor form-fun)))
+
+(defclass tag (formvalue) ;no parent FLOWSTATE, because a TAG may have multiple PREV states. FORMVALUE is needed by #'DEDUCE-FORWARD and #'DEDUCE-BACKWARD.
+  ((tag :initarg :tag :accessor form-tag)
+   (prevs-upper :initarg :prevs-upper :accessor form-prevs-upper)
+   (prevs-lower :initarg :prevs-lower :accessor form-prevs-lower)
+   (next-upper :initarg :next-upper :accessor form-next-upper)
+   (next-lower :initarg :next-lower :accessor form-next-lower)))
 
 (defmethod equals ((x walker:sym) (y walker:sym) &rest keys &key recursive &allow-other-keys)
   (declare (ignore recursive))
@@ -332,9 +340,19 @@
 (defclass alt-form (walker:special-form flowstate formvalue)
   ((branches :initarg :branches :accessor form-branches :documentation "A list of branches that may be taken by the IF- or COND-form.")))
 
+(defclass tagbody-form (walker:tagbody-form flowstate formvalue)
+  ()) ;we don't define BODY-PREV-UPPER etc.; we rather access FORM-PREV-UPPER etc. from the first and last forms of BODY directly.
+
+(defclass go-form (walker:go-form flowstate formvalue) ;FORMVALUE is needed by #'DEDUCE-FORWARD and #'DEDUCE-BACKWARD.
+  ())
+
 (defmethod print-object ((object var) stream)
   (print-unreadable-object (object stream :type t :identity t)
-    (format stream "VAR:~S UPPER:~S LOWER:~S" (form-var object) (form-upper object) (form-lower object))))
+    (format stream "UPPER:~S LOWER:~S VAR:~S " (form-upper object) (form-lower object) (form-var object))))
+
+(defmethod print-object ((object tag) stream)
+  (print-unreadable-object (object stream :type t :identity t)
+    (format stream "~S" (form-tag object))))
 
 (defmethod print-object ((object let-form) stream)
   (print-unreadable-object (object stream :type t :identity t)
@@ -358,6 +376,10 @@
 (defmethod print-object ((object alt-form) stream)
   (print-unreadable-object (object stream :type t :identity t)
     (format stream "UPPER:~S LOWER:~S ~S" (form-upper object) (form-lower object) (form-branches object))))
+
+(defmethod print-object ((object tagbody-form) stream)
+  (print-unreadable-object (object stream :type t :identity t)
+    (format stream "UPPER:~S LOWER:~S ~A" (form-upper object) (form-lower object) (walker:format-body object nil nil))))
 
 ;;; PREPARE-AST
 
@@ -471,23 +493,80 @@
 		   :prev-upper prev-upper :prev-lower prev-lower :next-upper next-upper-outside :next-lower next-lower-outside
 		   :form-upper (make-results* :infinite t) :form-lower (make-results* :infinite nil))))
 
+(defmethod prepare-ast ((ast walker:tagbody-form) prev-upper prev-lower)
+  (let ((tags-upper prev-upper)
+	(tags-lower prev-lower)
+	(tags (make-hash-table :test #'equal)))
+    (loop for form in (walker:form-body ast) do
+	 (when (typep form 'walker:tag)
+	   (let ((ast (make-instance 'tag :tag form :prevs-upper nil :prevs-lower nil :form-upper (make-results 'null) :form-lower (make-results 'null))))
+	     (when (gethash form tags)
+	       (error "Tag ~S appears more than once in TAGBODY ~S" (walker:nso-name form) ast))
+	     (setf (gethash form tags) ast)
+	     (setf tags-upper (augment-namespace form ast tags-upper))
+	     (setf tags-lower (augment-namespace form ast tags-lower)))))
+    (let* ((next-upper tags-upper)
+	   (next-lower tags-lower)
+	   (body (loop for form in (walker:form-body ast) collect
+		      (cond
+			((typep form 'walker:tag)
+			 (let ((ast (gethash form tags nil)))
+			   (push next-upper (form-prevs-upper ast))
+			   (push next-lower (form-prevs-lower ast))
+			   (setf (form-next-upper ast) next-upper)
+			   (setf (form-next-lower ast) next-lower)
+			   ast))
+			(t
+			 (let ((ast (prepare-ast form next-upper next-lower)))
+			   (setf next-upper (form-next-upper ast))
+			   (setf next-lower (form-next-lower ast))
+			   ast))))))
+      (make-instance 'tagbody-form :body body
+		     :prev-upper prev-upper :prev-lower prev-lower :next-upper (copy-namespace prev-upper) :next-lower (copy-namespace prev-lower) ;NEXT must be a separate instance, because there may be a SETQ in TAGBODY.
+		     :form-upper (make-results 'null) :form-lower (make-results 'null)))))
+
+(defmethod prepare-ast ((ast walker:go-form) prev-upper prev-lower)
+  (let ((tag (namespace-lookup (walker:form-tag ast) prev-upper)))
+    (unless (find prev-upper (form-prevs-upper tag))
+      (push prev-upper (form-prevs-upper tag))
+      (push prev-lower (form-prevs-lower tag)))
+    (make-instance 'go-form :tag (walker:form-tag ast)
+		   :prev-upper prev-upper :prev-lower prev-lower :next-upper prev-upper :next-lower prev-lower
+		   :form-upper (make-results 'null) :form-lower (make-results 'null))))
+
 ;;; DEDUCE-FORWARD
 
 (defun carry-prev-to-next (prev-upper prev-lower next-upper next-lower)
-  "Carry over changes from PREV to NEXT."
+  "Carry over changes from PREV to NEXT.
+  Derived from forward propagation rule for when A splits into B and C, but there is no C.
+upper(B) = upper(A) meet upper(B)
+upper(C) = upper(A) meet upper(C)
+lower(B) = lower(A) meet upper(B)
+lower(C) = lower(A) meet upper(C)"
   (map-namespace (lambda (a-upper a-lower b-upper b-lower)
 		   (setf (cdr b-upper) (meet (cdr a-upper) (cdr b-upper)))
 		   (setf (cdr b-lower) (meet (cdr a-lower) (cdr b-upper))))
 		 prev-upper prev-lower next-upper next-lower))
 
+(defun merge-branches (prevs-upper prevs-lower next-upper next-lower)
+  "Backward propagation rule for split of A into B and C:
+upper(A) = (upper(B) join upper(C)) meet upper(A)
+lower(A) = (lower(B) join lower(C)) meet upper(A)"
+  (let ((after-upper (lambda (a-upper &rest branches-upper)
+		       (setf (cdr a-upper) (meet (join-typelist (mapcar #'cdr branches-upper) +builtin-typehash+) (cdr a-upper)))))
+	(after-lower (lambda (a-upper a-lower &rest branches-lower)
+		       (setf (cdr a-lower) (meet (join-typelist (mapcar #'cdr branches-lower) +builtin-typehash+) (cdr a-upper))))))
+    (apply #'map-namespace after-upper next-upper prevs-upper)
+    (apply #'map-namespace after-lower next-upper next-lower prevs-lower)))
+
 (defmethod deduce-forward ((ast selfevalobject))
-  ;; nothing to do, PREPARE-AST already initialized FORM-UPPER and FORM-LOWER.
-  ;; no need to carry over PREV to NEXT; they are the same object, since there cannot be a type change inside a SELFEVALOBJECT form.
+  ;; nothing to do, #'PREPARE-AST already initialized FORM-UPPER and FORM-LOWER.
+  ;; no need to carry over PREV to NEXT; #'PREPARE-AST defined them the same object, since there cannot be a type change inside a SELFEVALOBJECT form.
   nil)
 
 (defmethod deduce-forward ((ast var))
   (declare (optimize (debug 3)))
-  ;; no need to carry over PREV to NEXT; they are the same object, since there cannot be a type change inside a VAR form.
+  ;; no need to carry over PREV to NEXT; #'PREPARE-AST defined them the same object.
   (let* ((upper (namespace-lookup (form-var ast) (form-prev-upper ast)))
 	 (lower (namespace-lookup (form-var ast) (form-prev-lower ast)))
 	 ;; TODO: FIXME: do we have to MEET here, or can we just set the result to the type of the variable?
@@ -527,7 +606,7 @@
   "upper(z) = t-function(f,0,upper(x),upper(y)) meet upper(z)
 lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
   (declare (optimize (debug 3)))
-  ;; no need to carry over PREV to NEXT; they are the same object, since there cannot be a type change inside a APPLICATION-FORM.
+  ;; no need to carry over PREV to NEXT; #'PREPARE-AST defined them the same object.
   (let* ((prev-upper (form-prev-upper ast))
 	 (prev-lower (form-prev-lower ast))
 	 (fun (walker:form-fun ast))
@@ -559,27 +638,42 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 
 (defmethod deduce-forward ((ast alt-form))
   (declare (optimize (debug 3)))
-  "Forward propagation rule for when A splits into B and C:
-upper(B) = upper(A) meet upper(B)
-upper(C) = upper(A) meet upper(C)
-lower(B) = lower(A) meet upper(B)
-lower(C) = lower(A) meet upper(C)
-Forward propagation rule for B and C merging into A:
-upper(A) = (upper(B) join upper(C)) meet upper(A)
-lower(A) = (lower(B) join lower(C)) meet upper(A)"
-  (let ((branches (form-branches ast))
-	(after-upper (lambda (a-upper &rest branches-upper)
-		       (setf (cdr a-upper) (meet (join-typelist (mapcar #'cdr branches-upper) +builtin-typehash+) (cdr a-upper)))))
-	(after-lower (lambda (a-upper a-lower &rest branches-lower)
-		       (setf (cdr a-lower) (meet (join-typelist (mapcar #'cdr branches-lower) +builtin-typehash+) (cdr a-upper))))))
+  (let ((branches (form-branches ast)))
     (loop for branch in branches do
 	 (carry-prev-to-next (form-prev-upper ast) (form-prev-lower ast) (form-prev-upper branch) (form-prev-lower branch)))
     (loop for branch in branches do
 	 (deduce-forward branch))
-    (apply #'map-namespace after-upper (form-next-upper ast) (mapcar #'form-next-upper branches))
-    (apply #'map-namespace after-lower (form-next-upper ast) (form-next-lower ast) (mapcar #'form-next-lower branches))
+    (merge-branches (mapcar #'form-next-upper branches) (mapcar #'form-next-lower branches) (form-next-upper ast) (form-next-lower ast))
     (setf (form-upper ast) (meet-results (reduce #'join-results (mapcar #'form-upper branches) :initial-value (form-upper (car branches))) (form-upper ast)))
     (setf (form-lower ast) (meet-results (reduce #'join-results (mapcar #'form-lower branches) :initial-value (form-lower (car branches))) (form-upper ast)))))
+
+(defmethod deduce-forward ((ast tagbody-form))
+  (declare (optimize (debug 3)))
+  (let* ((first-form (car (walker:form-body ast)))
+	 (last-form (car (last (walker:form-body ast)))))
+    (cond
+      ((null first-form)
+       (assert (null last-form))
+       (carry-prev-to-next (form-prev-upper ast) (form-prev-lower ast)  (form-next-upper ast) (form-next-lower ast)))
+      (t
+       (let ((body-upper (if (typep first-form 'tag) (car (last (form-prevs-upper first-form))) (form-prev-upper first-form)))
+	     (body-lower (if (typep first-form 'tag) (car (last (form-prevs-upper first-form))) (form-prev-lower first-form))))
+	 (unless (null first-form)
+	   (carry-prev-to-next (form-prev-upper ast) (form-prev-lower ast) body-upper body-lower)))
+       (loop for form in (walker:form-body ast) do
+	    (deduce-forward form))
+       (unless (null last-form)
+	 (carry-prev-to-next (form-next-upper last-form) (form-next-lower last-form) (form-next-upper ast) (form-next-lower ast)))
+       ;; no need to update FORM-UPPER or FORM-LOWER, since TAGBODY always returns NIL.
+       ))))
+
+(defmethod deduce-forward ((ast tag))
+  (declare (optimize (debug 3)))
+  (merge-branches (form-prevs-upper ast) (form-prevs-lower ast) (form-next-upper ast) (form-next-lower ast)))
+
+(defmethod deduce-forward ((ast go-form))
+  ;; no need to carry over PREV to NEXT; #'PREPARE-AST defined them the same object.
+  )
 
 (labels ((prepare (form)
 	   (let* ((ast (walker:parse-with-empty-namespaces form :free-common-lisp-namespace t))
@@ -614,7 +708,9 @@ lower(A) = (lower(B) join lower(C)) meet upper(A)"
     (assert-result '(let ((a 1)) (if 1 (setq a 2)) a) '(integer))
     (assert-result '(let ((a nil)) (if 1 (setq a 1) (setq a 2)) a) '(integer))
     (assert-result '(let ((a nil)) (if 1 (setq a 1) (setq a nil)) a) '(t))
-    ;;(assert-result '(let ((a nil)) (let () (setq a 1)) a) '(integer))
+    (assert-result '(let ((a nil)) (let () (setq a 1)) a) '(integer))
+    (assert-result '(tagbody a (go b) b) '(null))
+    (assert-result '(let ((a nil)) (tagbody (if (null a) (setq a 10)) s (setq a (1- a)) (if (<= a 0) (go e)) (go s) e) a) '(number))
     ))
 
 ;;; DEDUCE-BACKWARD
@@ -706,27 +802,44 @@ lower(A) = (lower(B) join lower(C)) meet upper(A)"
 
 (defmethod deduce-backward ((ast alt-form))
   (declare (optimize (debug 3)))
-  "Backward propagation rule for split of A into B and C:
-upper(A) = (upper(B) join upper(C)) meet upper(A)
-lower(A) = (lower(B) join lower(C)) meet upper(A)
-Backward propagation rule for join of B,C into A:
-upper(B) = upper(A) meet upper(B)
-upper(C) = upper(A) meet upper(C)
-lower(B) = lower(A) meet upper(B)
-lower(C) = lower(A) meet upper(C)"
-  (let ((branches (form-branches ast))
-	(before-upper (lambda (a-upper &rest branches-upper)
-			    (setf (cdr a-upper) (meet (join-typelist (mapcar #'cdr branches-upper) +builtin-typehash+) (cdr a-upper)))))
-	(before-lower (lambda (a-upper a-lower &rest branches-lower)
-			    (setf (cdr a-lower) (meet (join-typelist (mapcar #'cdr branches-lower) +builtin-typehash+) (cdr a-upper))))))
+  (let ((branches (form-branches ast)))
     (loop for branch in branches do
 	 (carry-prev-to-next (form-prev-upper ast) (form-prev-lower ast) (form-prev-upper branch) (form-prev-lower branch)))
     (loop for branch in branches do
 	 (setf (form-upper branch) (meet-results (form-upper ast) (form-upper branch)))
 	 (setf (form-lower branch) (meet-results (form-lower ast) (form-upper branch)))
 	 (deduce-backward branch))
-    (apply #'map-namespace before-upper (form-next-upper ast) (mapcar #'form-next-upper branches))
-    (apply #'map-namespace before-lower (form-next-upper ast) (form-next-lower ast) (mapcar #'form-next-lower branches))))
+    (merge-branches (mapcar #'form-next-upper branches) (mapcar #'form-next-lower branches) (form-next-upper ast) (form-next-lower ast))))
+
+(defmethod deduce-backward ((ast tagbody-form))
+  (declare (optimize (debug 3)))
+  (let* ((first-form (car (walker:form-body ast)))
+	 (last-form (car (last (walker:form-body ast)))))
+    (cond
+      ((null first-form)
+       (assert (null last-form))
+       (carry-prev-to-next (form-next-upper ast) (form-next-lower ast)  (form-prev-upper ast) (form-prev-lower ast)))
+      (t
+       ;; no need to update FORM-UPPER or FORM-LOWER, since TAGBODY always returns NIL.
+       (unless (null last-form)
+	 (carry-prev-to-next (form-next-upper ast) (form-next-lower ast) (form-next-upper last-form) (form-next-lower last-form)))
+       (loop for form in (walker:form-body ast) do
+	    (deduce-backward form))
+       (let ((body-upper (if (typep first-form 'tag) (car (last (form-prevs-upper first-form))) (form-prev-upper first-form)))
+	     (body-lower (if (typep first-form 'tag) (car (last (form-prevs-upper first-form))) (form-prev-lower first-form))))
+	 (unless (null first-form)
+	   (carry-prev-to-next body-upper body-lower (form-prev-upper ast) (form-prev-lower ast))))))))
+
+(defmethod deduce-backward ((ast tag))
+  (declare (optimize (debug 3)))
+  (let ((prevs-upper (form-prevs-upper ast))
+	(prevs-lower (form-prevs-lower ast)))
+    (loop for prev-upper in prevs-upper for prev-lower in prevs-lower do
+	 (carry-prev-to-next (form-next-upper ast) (form-next-lower ast) prev-upper prev-lower))))
+
+(defmethod deduce-backward ((ast go-form))
+  ;; no need to carry over PREV to NEXT; #'PREPARE-AST defined them the same object.
+  )
 
 (let* ((form '(aref (make-array-single-float 10 20) 2))
        (ast (walker:parse-with-empty-namespaces form :free-common-lisp-namespace t))
