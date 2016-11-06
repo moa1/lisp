@@ -120,14 +120,6 @@
     (aref "aref_array_integer_uint" ((array integer) unsigned-byte) (integer))
     ))
 
-(defstruct v4s-float)
-(defparameter +builtin-types+
-  '(nil t
-    number integer unsigned-byte single-float
-    symbol null
-    v4s-float
-    array (array integer) (array single-float)))
-
 ;; transform the program representation as parsed by WALKER to a program which only uses the following constructs: 1. selfevalobjects, (self-evaluating) variable and function symbols, let-form, setq-form, (function) application-form.
 
 
@@ -161,6 +153,14 @@
 	 (mapcar #'reverse namespaces)))
 
 (load "nti-subtypep.lisp")
+
+(defstruct v4s-float)
+(defparameter +builtin-types+
+  '(nil t null ;these are always needed: NIL and T as bottom and top element of the type lattice, and NULL as result of TAGBODY.
+    number integer unsigned-byte single-float
+    symbol
+    v4s-float
+    array (array integer) (array single-float)))
 
 (defparameter +builtin-typehash+ (make-typegraph +builtin-types+))
 
@@ -234,14 +234,14 @@
 
 (defun var-declared-type (var)
   (let* ((declspecs (walker:nso-declspecs var))
-	 (types (mapcar #'walker:declspec-type (remove-if-not (lambda (x) (subtypep (type-of x) 'walker:declspec-type)) declspecs)))
+	 (types (mapcar #'walker:declspec-type (remove-if-not (lambda (x) (typep x 'walker:declspec-type)) declspecs)))
 	 (type (reduce #'meet types :initial-value t)))
     (assert (not (null type)) () "Impossible type declarations for variable ~S: ~S" var types)
     type))
 
 (defun fun-result-lookup (fun arg-types)
   "ARG-TYPES is the list of types of (arg1-type arg2-type ...)"
-  (let ((fun (if (subtypep (type-of fun) 'walker:fun)
+  (let ((fun (if (typep fun 'walker:fun)
 		 (walker:nso-name fun)
 		 fun))
 	(possible nil))
@@ -249,7 +249,7 @@
 	 (when (and (eq fun lisp-name)
 		    ;;(equal arg-types fun-arg-types)
 		    (loop for arg-type in arg-types for fun-arg-type in fun-arg-types always
-			 (subtypep fun-arg-type arg-type)))
+			 (is-subtypep fun-arg-type arg-type +builtin-typehash+)))
 	   (push fun-results-types possible)))
     (when (null possible)
       (return-from fun-result-lookup (make-results* :nvalues 0 :infinite nil))) ;TODO: return multiple values representation number
@@ -263,7 +263,7 @@
 
 (defun fun-arguments-lookup (fun results)
   "RESULTS-TYPES is the list of types of (result1-type result2-type ...)"
-  (let ((fun (if (subtypep (type-of fun) 'walker:fun)
+  (let ((fun (if (typep fun 'walker:fun)
 		 (walker:nso-name fun)
 		 fun))
 	(possible nil))
@@ -273,7 +273,7 @@
 		    ;;(equal arg-types fun-arg-types)
 		    (block always
 		      (process-results (apply #'make-results fun-results-types) results
-				       (lambda (t1 t2) (unless (subtypep t1 t2) (return-from always nil)) nil))
+				       (lambda (t1 t2) (unless (is-subtypep t1 t2 +builtin-typehash+) (return-from always nil)) nil))
 		      t))
 	   (push fun-arg-types possible)))
     ;;(prind possible)
@@ -511,8 +511,8 @@
 		      (cond
 			((typep form 'walker:tag)
 			 (let ((ast (gethash form tags nil)))
-			   (push next-upper (form-prevs-upper ast))
-			   (push next-lower (form-prevs-lower ast))
+			   (push (copy-namespace next-upper) (form-prevs-upper ast))
+			   (push (copy-namespace next-lower) (form-prevs-lower ast))
 			   (setf (form-next-upper ast) next-upper)
 			   (setf (form-next-lower ast) next-lower)
 			   ast))
@@ -615,8 +615,12 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 	 (arg-types-lower (loop for arg in args collect (namespace-lookup arg prev-lower)))
 	 (fun-result-upper (fun-result-lookup fun arg-types-upper))
 	 (fun-result-lower (fun-result-lookup fun arg-types-lower)))
+    (when (null (result1 fun-result-upper))
+      (error "Function application ~S yields impossible type ~S." ast fun-result-upper))
     (setf (form-upper ast) (meet-results fun-result-upper (form-upper ast)))
-    (setf (form-lower ast) (meet-results fun-result-lower (form-upper ast)))))
+    (setf (form-lower ast) (meet-results fun-result-lower (form-upper ast)))
+    (when (null (form-upper ast))
+      (error "Meet in function application ~S between types ~S and ~S yields impossible type." ast fun-result-upper (form-upper ast)))))
 
 (defmethod deduce-forward ((ast setq-form))
   (declare (optimize (debug 3)))
@@ -710,6 +714,7 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
     (assert-result '(let ((a nil)) (if 1 (setq a 1) (setq a nil)) a) '(t))
     (assert-result '(let ((a nil)) (let () (setq a 1)) a) '(integer))
     (assert-result '(tagbody a (go b) b) '(null))
+    (assert-result '(let ((a 10)) (tagbody s (setq a (1- a)) (if (<= a 0) (go e)) (go s) e) a) '(integer))
     (assert-result '(let ((a nil)) (tagbody (if (null a) (setq a 10)) s (setq a (1- a)) (if (<= a 0) (go e)) (go s) e) a) '(number))
     ))
 
