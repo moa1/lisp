@@ -149,7 +149,7 @@
 	 (multiple-value-bind (fun-type name) (walker:valid-function-name-p (car rest))
 	   (let* ((lambda-list-and-body (cdr rest))
 		  (block-name (ecase fun-type ((walker:fun) name) ((walker:setf-fun) (cadr name)))) ;CLHS Glossary "function block name" defines "If the function name is a list whose car is setf and whose cadr is a symbol, its function block name is the symbol that is the cadr of the function name."
-		  (blo (make-instance 'walker:blo :name block-name :freep nil))
+		  (blo (make-instance 'walker:blo :name block-name :freep nil :jumpers nil))
 		  (current (make-instance 'defun-form :parent parent :blo blo))
 		  (sym (walker:namespace-lookup/create 'walker:fun name lexical-namespace free-namespace)))
 	     (walker:parse-and-set-functiondef lambda-list-and-body #'walker:parse-ordinary-lambda-list (walker:augment-lexical-namespace blo lexical-namespace) free-namespace current :customparsep-function customparsep-function :customparse-function customparse-function :customparsedeclspecp-function customparsedeclspecp-function :customparsedeclspec-function customparsedeclspec-function)
