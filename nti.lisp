@@ -871,7 +871,7 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 	 (arg-types-lower (loop for arg in args collect (namespace-lookup arg prev-lower))))
     (flet ((determine-fun-result ()
 	     (if (namespace-boundp fun prev-upper)
-		 (values (form-upper ast) (form-lower ast))
+		 (values (form-upper ast) (form-lower ast)) ;the computation is done by #'DEDUCE-FORWARD on FUN-APPLICATION.
 		 (let ((fun-result-upper (fun-result-lookup fun arg-types-upper))
 		       (fun-result-lower (fun-result-lookup fun arg-types-lower)))
 		   (values fun-result-upper fun-result-lower)))))
@@ -1040,25 +1040,78 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 	 (deduce-backward (walker:form-value binding)))
     (carry-prev-to-next (form-prev-upper first-form) (form-prev-lower first-form) (form-prev-upper ast) (form-prev-lower ast))))
 
+(defmethod deduce-backward ((ast fun-binding))
+  (declare (optimize (debug 3)))
+  (let* ((llist (walker:form-llist ast))
+	 (first-form (car (walker:form-body ast)))
+	 (body-upper (form-prev-upper first-form))
+	 (body-lower (form-prev-lower first-form)))
+    ;; push result types to call sites
+    (let ((last-form (car (last (walker:form-body ast))))
+	  (application-forms (form-prevs-upper ast)))
+      (setf (form-upper last-form) (meet-results (reduce #'join-results (mapcar #'form-upper (cdr application-forms)) :initial-value (form-upper (car application-forms))) (form-upper last-form)))
+      (setf (form-lower last-form) (meet-results (reduce #'join-results (mapcar #'form-lower (cdr application-forms)) :initial-value (form-lower (car application-forms))) (form-upper last-form))))
+    (loop for form in (reverse (walker:form-body ast)) do
+	 (deduce-backward form))
+    ;; TODO: implement &OPTIONAL, &REST, and &KEY arguments
+    (loop for application-form in (form-prevs-upper ast) do
+	 (loop for arg in (walker:llist-required llist) for i from 0 do
+	      (let ((arg (elt (walker:form-arguments application-form) i))
+		    (var (walker:argument-var (elt (walker:llist-required llist) i))))
+		(setf (namespace-lookup arg (form-prev-upper application-form))
+		      (let* ((var-upper (namespace-lookup var body-upper))
+			     (arg-upper (namespace-lookup arg (form-prev-upper application-form)))
+			     (type (meet var-upper arg-upper)))
+			(assert (not (null type)) () "Impossible type for variable ~S: cannot meet types ~S and ~S" arg var-upper arg-upper)
+			type))
+		(setf (namespace-lookup arg (form-prev-lower application-form))
+		      (meet (namespace-lookup var body-lower) (namespace-lookup arg (form-prev-upper application-form)))))))))
+
+(defmethod deduce-backward ((ast flet-form))
+  (declare (optimize (debug 3)))
+  (let* ((first-form (car (walker:form-body ast)))
+	 (body-upper (form-prev-upper first-form))
+	 (body-lower (form-prev-lower first-form)))
+    (flet ((process-body ()
+	     (let ((last-form (car (last (walker:form-body ast)))))
+	       (carry-prev-to-next (form-next-upper ast) (form-next-lower ast) (form-next-upper last-form) (form-next-lower last-form))
+	       (setf (form-upper last-form) (meet-results (form-upper ast) (form-upper last-form)))
+	       (setf (form-lower last-form) (meet-results (form-lower ast) (form-upper last-form)))
+	       (deduce-backward last-form))
+	     (loop for form in (reverse (butlast (walker:form-body ast))) do
+		  (deduce-backward form))))
+      ;; deduce-forward the body, to determine argument types to functions.
+      (process-body)
+      ;; deduce-forward the functions.
+      (loop for binding in (walker:form-bindings ast) do
+	   (deduce-backward binding))
+      ;; deduce-forward the body again, to propagate the updated result types of the functions.
+      (process-body))
+    (carry-prev-to-next body-upper body-lower (form-prev-upper ast) (form-prev-lower ast))))
+
 (defmethod deduce-backward ((ast application-form))
   (declare (optimize (debug 3)))
   ;; no need to carry over NEXT to PREV; they are the same object, since there cannot be a type change inside a APPLICATION-FORM.
   (let* ((prev-upper (form-prev-upper ast))
-	 (prev-lower (form-prev-lower ast))
+	 ;;(prev-lower (form-prev-lower ast))
 	 (fun (walker:form-fun ast))
 	 (results-upper (form-upper ast))
-	 (results-lower (form-lower ast))
+	 ;;(results-lower (form-lower ast))
 	 (args (walker:form-arguments ast))
 	 (arg-types-upper (loop for arg in args collect (namespace-lookup arg prev-upper)))
-	 (arg-types-lower (loop for arg in args collect (namespace-lookup arg prev-lower)))
-	 (fun-args-upper (fun-arguments-lookup fun results-upper))
-	 (fun-args-lower (fun-arguments-lookup fun results-lower))
-	 (met-arguments (meet-arguments fun-args-upper arg-types-upper)))
-    (declare (ignore arg-types-lower fun-args-lower))
-    (loop for arg in args for type in met-arguments do
-	 (setf (namespace-lookup arg prev-upper) type))
-    ;; "upper(z) = upper(zbefore)" ? What does it mean?
-    ))
+	 ;;(arg-types-lower (loop for arg in args collect (namespace-lookup arg prev-lower)))
+	 )
+    (flet ((determine-fun-arguments ()
+	     (if (namespace-boundp fun prev-upper)
+		 arg-types-upper ;the computation is done by #'DEDUCE-BACKWARD on FUN-APPLICATION.
+		 (let* ((fun-args-upper (fun-arguments-lookup fun results-upper))
+			;;(fun-args-lower (fun-arguments-lookup fun results-lower))
+			(met-arguments (meet-arguments fun-args-upper arg-types-upper)))
+		   met-arguments))))
+      (loop for arg in args for type in (determine-fun-arguments) do
+	   (setf (namespace-lookup arg prev-upper) type))
+      ;; "upper(z) = upper(zbefore)" ? What does it mean?
+      )))
 
 (defmethod deduce-backward ((ast setq-form))
   (declare (optimize (debug 3)))
@@ -1133,7 +1186,7 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
     (carry-prev-to-next (form-next-upper value) (form-next-upper value) (form-next-upper block-form) (form-next-lower block-form))
     (setf (form-upper value) (meet-results (form-upper block-form) (form-upper value)))
     (setf (form-lower value) (meet-results (form-lower block-form) (form-upper value)))
-    (deduce-forward value)))
+    (deduce-backward value)))
 
 (let* ((form '(aref (make-array-single-float 10 20) 2))
        (ast (walker:parse-with-empty-namespaces form :free-common-lisp-namespace t))
@@ -1145,3 +1198,8 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
        (ast (prepare-ast ast nil nil)))
   (deduce-backward ast)
   (assert (eq 'number (result1 (form-upper (walker:form-value (car (walker:form-bindings ast))))))))
+(let* ((form '(flet ((f1 (a) a)) (1+ (f1 1))))
+       (ast (walker:parse-with-empty-namespaces form :free-common-lisp-namespace t))
+       (ast (prepare-ast ast nil nil)))
+  (deduce-backward ast)
+  (assert (eq 'number (result1 (form-upper (car (walker:form-body (car (walker:form-bindings ast)))))))))
