@@ -84,8 +84,10 @@
 
 (defun walker-parse (form parent &key lexical-namespace free-namespace)
   (let ((lexical-namespace (if lexical-namespace lexical-namespace (walker:make-empty-lexical-namespace)))
-	(free-namespace (if free-namespace free-namespace (walker:make-default-free-common-lisp-namespace))))
-    (walker:parse form lexical-namespace free-namespace parent :customparsep-function #'walker-plus:parse-p :customparse-function #'walker-plus:parse)))
+	(free-namespace (if free-namespace free-namespace (walker:make-default-free-common-lisp-namespace)))
+	(reparse (walker:make-custom-parser (list #'walker-plus:parse-p #'walker:parse-p) (list #'walker-plus:parse #'walker:parse)))
+	(declspec-reparse (walker:make-custom-parser (list #'walker:parse-p-declspec) (list #'walker:parse-declspec))))
+    (walker:parse form lexical-namespace free-namespace parent :reparse reparse :declspec-reparse declspec-reparse)))
 
 (defun walker-deparse (ast parent)
   (walker-plus:deparse ast parent))
@@ -489,7 +491,7 @@ Return the augmented NAMESPACE."
 	   (walker:augment-free-namespace (make-instance 'walker:fun :name macro :freep t :declspecs nil :macrop t) free-namespace))
       (loop for (lisp-sym c-name type) in global-variables do
 	   (let ((walker-sym (walker:namespace-lookup/create 'walker:var lisp-sym (walker:make-empty-lexical-namespace) free-namespace)))
-	     (walker:parse-declspecs `((type ,type ,lisp-sym)) (walker:make-empty-lexical-namespace) free-namespace nil)
+	     (walker:parse-declspecs `((type ,type ,lisp-sym)) (walker:make-empty-lexical-namespace) free-namespace nil :declspec-reparse (walker:make-custom-parser (list #'walker:parse-p-declspec) (list #'walker:parse-declspec)))
 	     (setf namespace (augment-nso namespace (make-var c-name (convert-type-from-lisp-to-cffi type)) :lispsym walker-sym :insist-on-name t))))
       (let* ((ast (walker-parse form nil :free-namespace free-namespace))
 	     (c-lines (emitc ast namespace values))
