@@ -197,60 +197,114 @@
   (meet-type type1 type2 +builtin-typehash+))
 
 (defstruct (results (:constructor make-results*))
-  "The type of multiple values: NVALUES is the number of finite values; FINITE is of type (LIST TYPE); and INFINITE is of type TYPE."
-  (nvalues -1 :type integer)
-  (finite nil :type list)
-  (infinite nil :type (or symbol list)))
+  "The type of multiple values: NVALUES is the number of possible finite values exponentiated by 2 and LOGIOR'd together; FINITE is of type (LIST TYPE); and INFINITE is of type TYPE."
+  (nvalues -1 :type integer :read-only t) ;the number of values of the result, -1 means any number of values
+  (finite nil :type list) ;the beginning of the values list of the result
+  (infinite nil :type (or symbol list))) ;the infinite part of the values list of the result
 
 (defun make-results (&rest results)
-  (make-results* :nvalues (length results) :finite results :infinite nil))
+  (make-results* :nvalues (expt 2 (length results)) :finite (copy-list results) :infinite 'null))
+
+(defun most-significant-bit (n)
+  "Returns the number of the most significant bit, which is set in N. N must be an unsigned number. Returns -1 if N is 0."
+  (declare (type unsigned-byte n))
+  (if (= 0 n)
+      -1
+      (let ((e 1))
+	(loop for i from 0 do
+	     (when (/= 0 (logior n e))
+	       (setf n (logandc2 n e)))
+	     (when (= n 0)
+	       (return i))
+	     (setf e (* e 2))))))
+
+(defun resultn (results n)
+  (assert (or (= (results-nvalues results) -1) (< n (most-significant-bit (results-nvalues results)))) () "Trying to read ~Sth element of at most ~S values" n (most-significant-bit (results-nvalues results)))
+  (cond
+    ((< n (length (results-finite results)))
+     (elt (results-finite results) n))
+    (t
+     (results-infinite results))))
+
+(defun (setf resultn) (value results n)
+  (let ((nf (length (results-finite results))))
+    (assert (or (= (results-nvalues results) -1) (< n (most-significant-bit (results-nvalues results)))) () "Trying to set ~Sth element of at most ~S values" n (most-significant-bit (results-nvalues results)))
+    (cond
+      ((< n nf)
+       (setf (elt (results-finite results) n) value))
+      (t
+       (setf (results-finite results) (append (results-finite results)
+					      (loop for i below (- n nf) collect
+						   (results-infinite results))
+					      (list value))))))
+  ;; remove FINITE tail that is equal to INFINITE.
+  (let ((l (loop for i from (length (results-finite results)) downto 0 for e in (reverse (cons nil (results-finite results))) do
+		(when (or (= i 0) (not (equal e (results-infinite results))))
+		  (return i)))))
+    (setf (results-finite results) (subseq (results-finite results) 0 l))))
 
 (defun result1 (results)
-  (if (< (results-nvalues results) 1)
-      (results-infinite results)
-      (car (results-finite results))))
+  (resultn results 0))
 
 (defun (setf result1) (value results)
-  (cond
-    ((<= (results-nvalues results) 0)
-     (setf (results-nvalues results) 1)
-     (setf (results-finite results) (list value)))
-    (t
-     (setf (car (results-finite results)) value))))
+  (setf (resultn results 0) value))
 
-(defun process-results (results1 results2 function)
+(defmethod print-object ((object results) stream)
+  (print-unreadable-object (object stream :type t)
+    (format stream "[~S]" (results-nvalues object))
+    (loop for type in (append (results-finite object) (list (results-infinite object))) do
+	 (format stream " ~A" type))
+    (format stream "...")))
+
+(let ((r (make-results* :nvalues -1 :finite nil :infinite nil)))
+  (setf (resultn r 0) 1)
+  (assert (= (resultn r 0) 1))
+  (setf (result1 r) 2)
+  (assert (= (resultn r 0) (result1 r) 2))
+  (setf (result1 r) nil)
+  (assert (and (= (results-nvalues r) -1) (null (results-finite r)) (null (results-infinite r))))
+  (setf (resultn r 1) 1)
+  (assert (and (= (results-nvalues r) -1) (equal (results-finite r) '(nil 1)) (null (results-infinite r)))))
+(let ((r (make-results* :nvalues 4 :finite nil :infinite nil)))
+  (setf (resultn r 0) 1)
+  (assert (and (= (result1 r) (resultn r 0) 1) (= (results-nvalues r) 4)))
+  (setf (result1 r) nil)
+  (assert (and (null (resultn r 0)) (null (result1 r)) (= (results-nvalues r) 4) (null (results-finite r)) (null (results-infinite r))))
+  (setf (resultn r 1) 1)
+  (assert (and (= (results-nvalues r) 4) (equal (results-finite r) '(nil 1)) (null (results-infinite r))))
+  (setf (resultn r 1) nil)
+  (assert (and (= (results-nvalues r) 4) (null (results-finite r)) (null (results-infinite r)))))
+
+(defun process-results (results1 results2 function nvalues-function)
   "RESULTS1 and RESULTS2 are each of type RESULTS. Apply FUNCTION to them."
   (declare (optimize (debug 3)))
-  (let* ((nv1 (results-nvalues results1))
-	 (nv2 (results-nvalues results2))
-	 (min-nv (max 0 (min nv1 nv2)))
-	 (max-nv (max nv1 nv2))
-	 (finite (append (loop for i below min-nv for t1 in (results-finite results1) for t2 in (results-finite results2) collect
+  (let* ((nf1 (length (results-finite results1)))
+	 (nf2 (length (results-finite results2)))
+	 (min-nf (max 0 (min nf1 nf2)))
+	 (max-nf (max nf1 nf2))
+	 (finite (append (loop for i below min-nf for t1 in (results-finite results1) for t2 in (results-finite results2) collect
 			      (funcall function t1 t2))
-			 (loop for i from min-nv below max-nv collect
-			      (let ((t1 (if (>= i nv1) (results-infinite results1) (elt (results-finite results1) i)))
-				    (t2 (if (>= i nv2) (results-infinite results2) (elt (results-finite results2) i))))
+			 (loop for i from min-nf below max-nf collect
+			      (let ((t1 (if (>= i nf1) (results-infinite results1) (elt (results-finite results1) i)))
+				    (t2 (if (>= i nf2) (results-infinite results2) (elt (results-finite results2) i))))
 				(funcall function t1 t2)))))
 	 (infinite (funcall function (results-infinite results1) (results-infinite results2)))
 	 (finite-cropped (let* ((last 0))
 			   (loop for i from (1- (length finite)) downto 0 do
 				(when (not (equal (elt finite i) infinite)) (setf last (1+ i)) (return)))
-			   (subseq finite 0 last))))
-    (make-results* :nvalues (length finite-cropped) :finite finite-cropped :infinite infinite)))    
+			   (subseq finite 0 last)))
+	 (nv1 (results-nvalues results1))
+	 (nv2 (results-nvalues results2))
+	 (nv (funcall nvalues-function nv1 nv2)))
+    (make-results* :nvalues nv :finite finite-cropped :infinite infinite)))    
 
 (defun meet-results (results1 results2)
   "RESULTS1 and RESULTS2 are each of type RESULTS. Meet them."
-  (process-results results1 results2 #'meet))
+  (process-results results1 results2 #'meet #'logand))
 
 (defun join-results (results1 results2)
   "RESULTS1 and RESULTS2 are each of type RESULTS. Join them."
-  (process-results results1 results2 #'join))
-
-(defmethod print-object ((object results) stream)
-  (print-unreadable-object (object stream :type t)
-    (loop for type in (append (results-finite object) (list (results-infinite object))) do
-	 (format stream "~A " type))
-    (format stream "...")))
+  (process-results results1 results2 #'join #'logior))
 
 (defun meet-arguments (args1 args2)
   "ARGS1 and ARGS2 are each a list of TYPES, one for each NTH-VALUE. Meet the types of same N."
@@ -258,7 +312,7 @@
   (loop for i below (length args1) collect
        (meet-type (elt args1 i) (elt args2 i) +builtin-typehash+)))
 
-(defun fun-result-lookup (fun arg-types)
+(defun fun-result-lookup-upper (fun arg-types)
   "ARG-TYPES is the list of types of (arg1-type arg2-type ...)"
   (let ((fun (if (typep fun 'walker:fun)
 		 (walker:nso-name fun)
@@ -274,15 +328,18 @@
 			 (is-subtypep fun-arg-type arg-type +builtin-typehash+)))
 	   (push fun-results-types possible)))
     (assert name-found () "Unknown function ~S" fun)
-    (when (null possible)
-      (return-from fun-result-lookup (make-results* :nvalues 0 :infinite nil))) ;TODO: return multiple values representation number
-    ;;(assert (not (null possible)) () "Unknown function ~S with types ~S" fun arg-types)
+    (assert (not (null possible)))
     ;; POSSIBLE is now a ((TYPE-RESULT1 TYPE-RESULT2 ...) (TYPE-RESULT1 TYPE-RESULT2 ...) ...). Meet the types TYPE-RESULT1, then TYPE-RESULT2, ..., to get a list of TYPE-RESULTs.
     (assert (apply #'= (mapcar #'length possible)))
     (let ((length (length (car possible))))
       (apply #'make-results
 	     (loop for l below length collect
 		  (join-typelist (loop for poss in possible collect (elt poss l)) +builtin-typehash+))))))
+
+(defun fun-result-lookup-lower (fun arg-types)
+  "ARG-TYPES is the list of types of (arg1-type arg2-type ...)"
+  (declare (ignore fun arg-types))
+  (make-results* :nvalues -1 :infinite nil)) ;TODO: FIXME: store in lookup table and lookup the lower bound.
 
 (defun fun-arguments-lookup (fun results)
   "RESULTS-TYPES is the list of types of (result1-type result2-type ...)"
@@ -297,7 +354,8 @@
 		    ;;(equal arg-types fun-arg-types)
 		    (block always
 		      (process-results (apply #'make-results fun-results-types) results
-				       (lambda (t1 t2) (unless (is-subtypep t1 t2 +builtin-typehash+) (return-from always nil)) nil))
+				       (lambda (t1 t2) (unless (is-subtypep t1 t2 +builtin-typehash+) (return-from always nil)) nil)
+				       (constantly 0)) ;the value doesn't matter
 		      t))
 	   (push fun-arg-types possible)))
     (assert name-found () "Unknown function ~S" fun)
@@ -442,12 +500,6 @@
   ())
 
 (defclass return-from-form (walker:return-from-form flowstate formvalue) ;FORMVALUE is needed by #'DEDUCE-FORWARD and #'DEDUCE-BACKWARD.
-  ())
-
-(defclass values-form (walker-plus:values-form flowstate formvalue)
-  ())
-
-(defclass multiple-value-bind-form (walker-plus:multiple-value-bind-form flowstate formvalue)
   ())
 
 (defmethod print-object ((object var) stream)
@@ -704,26 +756,6 @@
 		   :prev-upper prev-upper :prev-lower prev-lower :next-upper next-upper :next-lower next-lower
 		   :form-upper (make-results t) :form-lower (make-results nil))))
 
-#|
-(defmethod prepare-ast ((ast walker:if-form) prev-upper prev-lower)
-  (let* ((test-form (prepare-ast (walker:form-test ast) prev-upper prev-lower))
-	 (next-upper-inside (copy-namespace (form-next-upper test-form))) ;the TEST-FORM could contain a SETQ
-	 (next-lower-inside (copy-namespace (form-next-lower test-form)))
-	 (then-branch (prepare-ast (walker:form-then ast) next-upper-inside next-lower-inside))
-	 (else-branch (if (walker:form-else ast)
-			  (prepare-ast (walker:form-else ast) next-upper-inside next-lower-inside)
-			  (prepare-ast (make-instance 'walker:selfevalobject :object nil) next-upper-inside next-lower-inside)))
-	 (branches (list then-branch else-branch))
-	 (next-upper-outside (copy-namespace prev-upper)) ;variables local to a branch are not visible after the IF, but the branches could contain a SETQ, whose change we need to carry.
-	 (next-lower-outside (copy-namespace prev-lower))
-	 (alt-form (make-instance 'alt-form :branches branches
-				  :prev-upper prev-upper :prev-lower prev-lower :next-upper next-upper-outside :next-lower next-lower-outside
-				  :form-upper (make-results* :infinite t) :form-lower (make-results* :infinite nil))))
-    (make-instance 'let-form :declspecs nil :bindings nil :body (list test-form alt-form)
-		   :prev-upper prev-upper :prev-lower prev-lower :next-upper (copy-namespace prev-upper) :next-lower (copy-namespace prev-lower)
-		   :form-upper (make-results* :infinite t) :form-lower (make-results* :infinite nil))))
-|#
-
 (defmethod prepare-ast ((ast walker:if-form) prev-upper prev-lower)
   (let* ((test-form (prepare-ast (walker:form-test ast) prev-upper prev-lower))
 	 (upper-inside (form-next-upper test-form))
@@ -961,8 +993,8 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
     (flet ((determine-fun-result ()
 	     (if (namespace-boundp fun prev-upper)
 		 (values (form-upper ast) (form-lower ast)) ;the computation is done by #'DEDUCE-FORWARD on FUN-BINDING.
-		 (let ((fun-result-upper (fun-result-lookup fun arg-types-upper))
-		       (fun-result-lower (fun-result-lookup fun arg-types-lower)))
+		 (let ((fun-result-upper (fun-result-lookup-upper fun arg-types-upper))
+		       (fun-result-lower (fun-result-lookup-lower fun arg-types-lower)))
 		   (values fun-result-upper fun-result-lower)))))
       (multiple-value-bind (fun-result-upper fun-result-lower) (determine-fun-result)
 	(when (null (result1 fun-result-upper))
