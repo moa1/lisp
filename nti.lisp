@@ -678,25 +678,33 @@
 				     namespace)))
 	     (values bindings body-prev-upper body-prev-lower)))
 	 (make-bindings-sequential ()
-	   (let* ((bindings nil)
-		  (body-prev-upper prev-upper)
-		  (body-prev-lower prev-lower))
-	     (loop for binding in (walker:form-bindings ast) do
-		  ;; this code sucks, because there is a circular dependency: we need the namespace augmented with the parsed binding, and for parsing the binding we need the augmented namespace.
-		  (let ((fake-binding (make-instance 'fun-binding :sym (walker:form-sym binding) :prevs-upper nil :prevs-lower nil)))
-		    (setf body-prev-upper (augment-namespace (walker:form-sym binding) (etypecase ast (walker:labels-form fake-binding)) body-prev-upper))
-		    (setf body-prev-lower (augment-namespace (walker:form-sym binding) (etypecase ast (walker:labels-form fake-binding)) body-prev-lower))
-		    ;; transfer the parsed binding slots to the fake binding
-		    (let ((prepared-binding (prepare-ast binding body-prev-upper body-prev-lower)))
-		      (setf (walker:form-llist fake-binding) (walker:form-llist prepared-binding)
-			    (walker:form-declspecs fake-binding) (walker:form-declspecs prepared-binding)
-			    (walker:form-documentation fake-binding) (walker:form-documentation prepared-binding)
-			    (walker:form-body fake-binding) (walker:form-body prepared-binding)))
-		    (push fake-binding bindings)))
-	     (values (nreverse bindings) body-prev-upper body-prev-lower))))
+	   (let* ((body-prev-upper prev-upper)
+		  (body-prev-lower prev-lower)
+		  (bindings 
+		   (loop for binding in (walker:form-bindings ast) collect
+		;; this code sucks, because there is a circular dependency: we need the namespace augmented with the parsed binding, and for parsing the binding we need the augmented namespace.
+		  (etypecase ast
+		    (walker:labels-form
+		     (let ((fake-binding (make-instance 'fun-binding :sym (walker:form-sym binding) :prevs-upper nil :prevs-lower nil)))
+		       (setf body-prev-upper (augment-namespace (walker:form-sym binding) (etypecase ast (walker:labels-form fake-binding)) body-prev-upper))
+		       (setf body-prev-lower (augment-namespace (walker:form-sym binding) (etypecase ast (walker:labels-form fake-binding)) body-prev-lower))
+		       ;; transfer the parsed binding slots to the fake binding
+		       (let ((prepared-binding (prepare-ast binding body-prev-upper body-prev-lower)))
+			 (setf (walker:form-llist fake-binding) (walker:form-llist prepared-binding)
+			       (walker:form-declspecs fake-binding) (walker:form-declspecs prepared-binding)
+			       (walker:form-documentation fake-binding) (walker:form-documentation prepared-binding)
+			       (walker:form-body fake-binding) (walker:form-body prepared-binding)))
+		       fake-binding))
+		    (walker:let*-form
+		     (let ((bind (prepare-ast binding body-prev-upper body-prev-lower)))
+		       (setf body-prev-upper (augment-namespace (walker:form-sym binding) (sym-declared-type (walker:form-sym binding)) body-prev-upper))
+		       (setf body-prev-lower (augment-namespace (walker:form-sym binding) nil body-prev-lower))
+		       bind))))))
+	     (values bindings body-prev-upper body-prev-lower))))
     (multiple-value-bind (bindings body-prev-upper body-prev-lower)
 	(etypecase ast
 	  (walker:let-form (make-bindings-parallel))
+	  (walker:let*-form (make-bindings-sequential))
 	  (walker:flet-form (make-bindings-parallel))
 	  (walker:labels-form (make-bindings-sequential)))
       (let* ((body-next-upper body-prev-upper)
@@ -709,11 +717,14 @@
 			  (setf body-next-upper (form-next-upper ast))
 			  (setf body-next-lower (form-next-lower ast))
 			  ast))))
-	(make-instance (etypecase ast (walker:let-form 'let-form) (walker:flet-form 'flet-form) (walker:labels-form 'flet-form)) :bindings bindings :declspecs (walker:form-declspecs ast) :body body
+	(make-instance (etypecase ast (walker:let-form 'let-form) (walker:let*-form 'let-form) (walker:flet-form 'flet-form) (walker:labels-form 'flet-form)) :bindings bindings :declspecs (walker:form-declspecs ast) :body body
 		       :prev-upper prev-upper :prev-lower prev-lower :next-upper (copy-namespace prev-upper) :next-lower (copy-namespace prev-lower)
 		       :form-upper (make-results* :infinite t) :form-lower (make-results* :infinite nil))))))
 
 (defmethod prepare-ast ((ast walker:let-form) prev-upper prev-lower)
+  (prepare-bindings-ast ast prev-upper prev-lower))
+
+(defmethod prepare-ast ((ast walker:let*-form) prev-upper prev-lower)
   (prepare-bindings-ast ast prev-upper prev-lower))
 
 (defmethod prepare-ast ((ast walker:flet-form) prev-upper prev-lower)
@@ -889,9 +900,6 @@
     (make-instance 'multiple-value-bind-form :vars vars :values values :body body
 		   :prev-upper prev-upper :prev-lower prev-lower :next-upper (copy-namespace prev-upper) :next-lower (copy-namespace next-lower)
 		   :form-upper (make-results* :infinite t) :form-lower (make-results* :infinite nil))))
-
-;;(defmethod prepare-ast ((ast walker-plus:multiple-value-bind-form) prev-upper prev-lower)
-  
 
 ;;; DEDUCE-FORWARD
 
