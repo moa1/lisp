@@ -1000,6 +1000,10 @@
   (remove-if (lambda (s) (not (and (fboundp s) (equal (subseq (format nil "~S" (symbol-function s)) 0 11) "#<FUNCTION ")))) *lisp-symbols*)
   "Common Lisp symbols which are normal functions.")
 
+(defparameter *lisp-variables*
+  (remove-if (lambda (x) (not (boundp x)) ) *lisp-symbols*)
+  "Common Lisp special variables.")
+
 ;; TODO: investigate differences: (SET-DIFFERENCE *LISP-FUNCTIONS* *LISP-FUNCTIONS-HACK*). It seems like they are mostly due to generic functions.
 ;; Note: on SBCL 1.3.1.debian, (SET-DIFFERENCE *LISP-FUNCTIONS-HACK* *LISP-FUNCTIONS*) == NIL.
 
@@ -1046,6 +1050,12 @@
 ;; CL-USER> (set-difference *lisp-functions* *lisp-functions-clisp*)
 ;; NIL
 ;; CL-USER> (set-difference *lisp-functions-clisp* *lisp-functions*)
+;; NIL
+
+;; differences between SBCL and CLISP in *LISP-VARIABLES*:
+;; CL-USER> (set-difference *lisp-variables* *lisp-variables-clisp*)
+;; NIL
+;; CL-USER> (set-difference *lisp-variables-clisp* *lisp-variables*)
 ;; NIL
 
 ;; differences between SBCL and CLISP in *LISP-NOT-FBOUNDP*:
