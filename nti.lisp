@@ -994,11 +994,14 @@ lower(A) = (lower(B) join lower(C)) meet upper(A)"
 					(form-prevs-upper ast)))) ;note that here, (FORM-PREVS-LOWER AST)==(FORM-PREVS-UPPER AST)
     ;; CALLS-ARGUMENTS is now a list (with calls) of a list (with arguments) of types
     (loop for arg in (walker:llist-required llist) for i from 0 do
-	 (let ((calls-argument-upper (loop for types in calls-arguments-upper collect (elt types i)))
-	       (calls-argument-lower (loop for types in calls-arguments-lower collect (elt types i)))
-	       (arg-upper (namespace-lookup (walker:argument-var arg) body-upper)))
-	   (setf (namespace-lookup (walker:argument-var arg) body-upper) (meet (join-typelist calls-argument-upper +builtin-typehash+) arg-upper))
-	   (setf (namespace-lookup (walker:argument-var arg) body-lower) (meet (join-typelist calls-argument-lower +builtin-typehash+) arg-upper))))
+	 (let* ((calls-argument-upper (loop for types in calls-arguments-upper collect (elt types i)))
+		(calls-argument-lower (loop for types in calls-arguments-lower collect (elt types i)))
+		(arg-upper (namespace-lookup (walker:argument-var arg) body-upper))
+		(new-upper (if (null calls-argument-upper) t (join-typelist calls-argument-upper +builtin-typehash+)))
+		(new-lower (if (null calls-argument-upper) nil (join-typelist calls-argument-lower +builtin-typehash+))))
+	   (assert (not (null (meet new-upper arg-upper))) () "Impossible type for argument ~S: cannot meet types ~S and ~S" arg new-upper arg-upper)
+	   (setf (namespace-lookup (walker:argument-var arg) body-upper) (meet new-upper arg-upper))
+	   (setf (namespace-lookup (walker:argument-var arg) body-lower) (meet new-lower arg-upper))))
     (loop for form in (walker:form-body ast) do
 	 (deduce-forward form))
     ;; push result types to call sites
@@ -1203,6 +1206,7 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
     (assert-result '(let ((a 10)) (tagbody s (setq a (1- a)) (if (<= a 0) (go e)) (go s) e) a) '(integer))
     (assert-result '(let ((a nil)) (tagbody (if (null a) (setq a 10)) s (setq a (1- a)) (if (<= a 0) (go e)) (go s) e) a) '(number))
     (assert-result '(block bla (let ((a 1)) (return-from bla (setq a nil)) a)) '(null))
+    (assert-result '(flet ((f1 (a) (let ((b a)) b))) nil) '(null))
     (assert-result '(flet ((f1 (a) a)) (f1 1)) '(integer))
     (assert-result '(flet ((f1 (a) a)) (f1 1) (f1 1.1)) '(number))
     (assert-result '(flet ((f1 (a) (return-from f1 a))) (f1 1)) '(integer))
