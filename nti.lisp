@@ -599,6 +599,12 @@
 
 ;;; PREPARE-AST
 
+(defun meet-form (ast upper-new lower-new)
+  (let ((upper (form-upper ast)))
+    ;; TODO: FIXME: are the following MEETs correct?
+    (setf (form-upper ast) (meet-results upper-new upper))
+    (setf (form-lower ast) (meet-results lower-new upper))))
+
 (defmethod prepare-ast ((ast walker:selfevalobject) prev-upper prev-lower)
   (let ((type (etypecase (walker:selfevalobject-object ast)
 		(fixnum 'fixnum)
@@ -685,8 +691,9 @@
 		     (make-instance 'walker:block-form :blo (walker:form-blo ast) :body (walker:form-body ast))))
 	   (parsed-body (prepare-ast body body-upper body-lower)))
       ;; meet values type with declared values type
-      (setf (form-upper parsed-body) (meet-results (if (eq ftype 'function) (make-results* :infinite t) (type-values ftype)) (form-upper parsed-body)))
-      (setf (form-lower parsed-body) (meet-results (if (eq ftype 'function) (make-results* :infinite t) (type-values ftype)) (form-lower parsed-body)))
+      (meet-form parsed-body
+		 (if (eq ftype 'function) (make-results* :infinite t) (type-values ftype))
+		 (if (eq ftype 'function) (make-results* :infinite t) (type-values ftype)))
       (make-instance 'fun-binding :sym (walker:form-sym ast) :llist llist :declspecs (walker:form-declspecs ast) :documentation (walker:form-documentation ast) :body (list parsed-body)
 		     :prevs-upper nil :prevs-lower nil))))
 
@@ -1093,11 +1100,8 @@ lower(A) = (lower(B) join lower(C)) meet upper(A)"
 	 (deduce-forward form))
     (let ((last-form (car (last (walker:form-body ast)))))
       (deduce-forward last-form)
-      (let ((upper (form-upper ast)))
-	;; TODO: FIXME: are the following MEETs correct?
-	(setf (form-upper ast) (meet-results (form-upper last-form) upper))
-	(setf (form-lower ast) (meet-results (form-lower last-form) upper))
-	(carry-prev-to-next (form-next-upper last-form) (form-next-lower last-form) (form-next-upper ast) (form-next-lower ast))))))
+      (meet-form ast (form-upper last-form) (form-lower last-form))
+      (carry-prev-to-next (form-next-upper last-form) (form-next-lower last-form) (form-next-upper ast) (form-next-lower ast)))))
 
 (defmethod deduce-forward ((ast fun-binding))
   (declare (optimize (debug 3)))
@@ -1129,9 +1133,7 @@ lower(A) = (lower(B) join lower(C)) meet upper(A)"
     ;; push result types to call sites
     (let ((last-form (car (last (walker:form-body ast)))))
       (loop for application-form in (form-prevs-upper ast) do
-	   (let ((upper (form-upper application-form)))
-	     (setf (form-upper application-form) (meet-results (form-upper last-form) upper))
-	     (setf (form-lower application-form) (meet-results (form-lower last-form) upper)))))))
+	   (meet-form application-form (form-upper last-form) (form-lower last-form))))))
 
 (defmethod deduce-forward ((ast flet-form))
   (declare (optimize (debug 3)))
@@ -1144,11 +1146,8 @@ lower(A) = (lower(B) join lower(C)) meet upper(A)"
 		  (deduce-forward form))
 	     (let ((last-form (car (last (walker:form-body ast)))))
 	       (deduce-forward last-form)
-	       (let ((upper (form-upper ast)))
-		 ;; TODO: FIXME: are the following MEETs correct?
-		 (setf (form-upper ast) (meet-results (form-upper last-form) upper))
-		 (setf (form-lower ast) (meet-results (form-lower last-form) upper))
-		 (carry-prev-to-next (form-next-upper last-form) (form-next-lower last-form) (form-next-upper ast) (form-next-lower ast))))))
+	       (meet-form ast (form-upper last-form) (form-lower last-form))
+	       (carry-prev-to-next (form-next-upper last-form) (form-next-lower last-form) (form-next-upper ast) (form-next-lower ast)))))
       ;; deduce-forward the body, to determine argument types to functions.
       (process-body)
       ;; deduce-forward the functions.
@@ -1177,9 +1176,7 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
       (multiple-value-bind (fun-result-upper fun-result-lower) (determine-fun-result)
 	(when (null (result1 fun-result-upper))
 	  (error "Function application ~S yields impossible type ~S." ast fun-result-upper))
-	(let ((upper (form-upper ast)))
-	  (setf (form-upper ast) (meet-results fun-result-upper upper))
-	  (setf (form-lower ast) (meet-results fun-result-lower upper)))
+	(meet-form ast fun-result-upper fun-result-lower)
 	(when (null (form-upper ast))
 	  (error "Meet in function application ~S between types ~S and ~S yields impossible type." ast fun-result-upper (form-upper ast)))))))
 
@@ -1213,9 +1210,9 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 	 (carry-prev-to-next (form-next-upper test) (form-next-lower test) (form-prev-upper branch) (form-prev-lower branch))
 	 (deduce-forward branch))
     (merge-branches (mapcar #'form-next-upper branches) (mapcar #'form-next-lower branches) (form-next-upper ast) (form-next-lower ast))
-    (let ((upper (form-upper ast)))
-      (setf (form-upper ast) (meet-results (reduce #'join-results (mapcar #'form-upper branches) :initial-value (form-upper (car branches))) upper))
-      (setf (form-lower ast) (meet-results (reduce #'join-results (mapcar #'form-lower branches) :initial-value (form-lower (car branches))) upper)))))
+    (meet-form ast
+	       (reduce #'join-results (mapcar #'form-upper branches) :initial-value (form-upper (car branches)))
+	       (reduce #'join-results (mapcar #'form-lower branches) :initial-value (form-lower (car branches))))))
 
 (defmethod deduce-forward ((ast tagbody-form))
   (declare (optimize (debug 3)))
@@ -1243,11 +1240,8 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 (defmethod deduce-forward ((ast block-form))
   (loop for form in (walker:form-body ast) do
        (deduce-forward form))
-  (let ((last-form (car (last (walker:form-body ast))))
-	(upper (form-upper ast)))
-    ;; TODO: FIXME: are the following MEETs correct?
-    (setf (form-upper ast) (meet-results (form-upper last-form) upper))
-    (setf (form-lower ast) (meet-results (form-lower last-form) upper))
+  (let ((last-form (car (last (walker:form-body ast)))))
+    (meet-form ast (form-upper last-form) (form-lower last-form))
     (carry-prev-to-next (form-next-upper last-form) (form-next-lower last-form) (form-next-upper ast) (form-next-lower ast))))
 
 (defmethod deduce-forward ((ast return-from-form))
@@ -1257,9 +1251,7 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
     (deduce-forward value)
     (setf (form-upper ast) (form-upper value)) ;just so that #'ANNOTATE doesn't complain
     (setf (form-lower ast) (form-lower value))
-    (let ((upper (form-upper block-form)))
-      (setf (form-upper block-form) (meet-results (form-upper value) upper))
-      (setf (form-lower block-form) (meet-results (form-lower value) upper)))
+    (meet-form block-form (form-upper value) (form-lower value))
     (carry-prev-to-next (form-next-upper block-form) (form-next-lower block-form) (form-next-upper value) (form-next-upper value))))
 
 (defmethod deduce-forward ((ast values-form))
@@ -1282,17 +1274,20 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
     (deduce-forward values)
     (carry-prev-to-next (form-prev-upper ast) (form-prev-lower ast) body-upper body-lower)
     (loop for i from 0 for var in (walker:form-vars ast) do
-	 (let ((upper (namespace-lookup var body-upper)))
-	   (setf (namespace-lookup var body-upper) (meet (resultn (form-upper values) i) upper))
-	   (setf (namespace-lookup var body-lower) (meet (resultn (form-lower values) i) upper))))
+	 (let ((upper (namespace-lookup var body-upper))
+	       (new-upper (if (< i (results-most (form-upper values)))
+			      (resultn (form-upper values) i)
+			      'null))
+	       (new-lower (if (< i (results-most (form-upper values)))
+			      (resultn (form-lower values) i)
+			      'null)))
+	   (setf (namespace-lookup var body-upper) (meet new-upper upper))
+	   (setf (namespace-lookup var body-lower) (meet new-lower upper))))
     (loop for form in (butlast body) do
 	 (deduce-forward form))
     (let ((last-form (car (last body))))
       (deduce-forward last-form)
-      (let ((upper (form-upper ast)))
-	;; TODO: FIXME: are the following MEETs correct?
-	(setf (form-upper ast) (meet-results (form-upper last-form) upper))
-	(setf (form-lower ast) (meet-results (form-lower last-form) upper)))
+      (meet-form ast (form-upper last-form) (form-lower last-form))
       (carry-prev-to-next (form-next-upper last-form) (form-next-lower last-form) (form-next-upper ast) (form-next-lower ast)))))
 
 (labels ((prepare (form)
@@ -1344,6 +1339,7 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
     ;;(assert-result '(labels ((f1 (a) (if (= 0 a) 0 (f1 (1- a))))) (f1 1)) '(fixnum))
     (assert-result '(values 1 1.0) '(fixnum single-float))
     (assert-result '(multiple-value-bind (a b) (values 1 1.0) b) '(single-float))
+    (assert-result '(multiple-value-bind (a b) 1 (values a b)) '(fixnum null))
     ))
 
 ;;; DEDUCE-BACKWARD
@@ -1368,9 +1364,7 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
   (declare (optimize (debug 3)))
   (let ((last-form (car (last (walker:form-body ast)))))
     (carry-prev-to-next (form-next-upper ast) (form-next-lower ast) (form-next-upper last-form) (form-next-lower last-form))
-    (let ((upper (form-upper last-form)))
-      (setf (form-upper last-form) (meet-results (form-upper ast) upper))
-      (setf (form-lower last-form) (meet-results (form-lower ast) upper)))
+    (meet-form last-form (form-upper ast) (form-lower ast))
     (deduce-backward last-form))
   (loop for form in (reverse (butlast (walker:form-body ast))) do
        (deduce-backward form))
@@ -1399,10 +1393,10 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 	 (body-lower (form-prev-lower first-form)))
     ;; pull result types from call sites
     (let* ((last-form (car (last (walker:form-body ast))))
-	   (application-forms (form-prevs-upper ast))
-	   (upper (form-upper last-form)))
-      (setf (form-upper last-form) (meet-results (reduce #'join-results (mapcar #'form-upper (cdr application-forms)) :initial-value (form-upper (car application-forms))) upper))
-      (setf (form-lower last-form) (meet-results (reduce #'join-results (mapcar #'form-lower (cdr application-forms)) :initial-value (form-lower (car application-forms))) upper)))
+	   (application-forms (form-prevs-upper ast)))
+      (meet-form last-form
+		 (reduce #'join-results (mapcar #'form-upper (cdr application-forms)) :initial-value (form-upper (car application-forms)))
+		 (reduce #'join-results (mapcar #'form-lower (cdr application-forms)) :initial-value (form-lower (car application-forms)))))
     (loop for form in (reverse (walker:form-body ast)) do
 	 (deduce-backward form))
     ;; TODO: implement &OPTIONAL, &REST, and &KEY arguments
@@ -1425,9 +1419,7 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
     (flet ((process-body ()
 	     (let ((last-form (car (last (walker:form-body ast)))))
 	       (carry-prev-to-next (form-next-upper ast) (form-next-lower ast) (form-next-upper last-form) (form-next-lower last-form))
-	       (let ((upper (form-upper last-form)))
-		 (setf (form-upper last-form) (meet-results (form-upper ast) upper))
-		 (setf (form-lower last-form) (meet-results (form-lower ast) upper)))
+	       (meet-form last-form (form-upper ast) (form-lower ast))
 	       (deduce-backward last-form))
 	     (loop for form in (reverse (butlast (walker:form-body ast))) do
 		  (deduce-backward form))))
@@ -1487,9 +1479,7 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 	(branches (form-branches ast)))
     (loop for branch in branches do
 	 (carry-prev-to-next (form-next-upper ast) (form-next-lower ast) (form-prev-upper branch) (form-prev-lower branch))
-	 (let ((upper (form-upper branch)))
-	   (setf (form-upper branch) (meet-results (form-upper ast) upper))
-	   (setf (form-lower branch) (meet-results (form-lower ast) upper)))
+	 (meet-form branch (form-upper ast) (form-lower ast))
 	 (deduce-backward branch))
     (merge-branches (mapcar #'form-next-upper branches) (mapcar #'form-next-lower branches) (form-next-upper test) (form-next-lower test))
     (deduce-backward test)))
@@ -1533,9 +1523,7 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 	 (block-form (walker:nso-definition blo))
 	 (value (walker:form-value ast)))
     (carry-prev-to-next (form-next-upper value) (form-next-upper value) (form-next-upper block-form) (form-next-lower block-form))
-    (let ((upper (form-upper value)))
-      (setf (form-upper value) (meet-results (form-upper block-form) upper))
-      (setf (form-lower value) (meet-results (form-lower block-form) upper)))
+    (meet-form value (form-upper block-form) (form-lower block-form))
     (deduce-backward value)))
 
 (defmethod deduce-backward ((ast values-form))
@@ -1557,10 +1545,7 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 	 (values (walker:form-values ast)))
     (let ((last-form (car (last body))))
       (carry-prev-to-next (form-next-upper ast) (form-next-lower ast) (form-next-upper last-form) (form-next-lower last-form))
-      (let ((upper (form-upper last-form)))
-	;; TODO: FIXME: are the following MEETs correct?
-	(setf (form-upper last-form) (meet-results (form-upper ast) upper))
-	(setf (form-lower last-form) (meet-results (form-lower ast) upper)))
+      (meet-form last-form (form-upper ast) (form-lower ast))
       (deduce-backward last-form))
     (loop for form in (reverse (butlast body)) do
 	 (deduce-backward form))
