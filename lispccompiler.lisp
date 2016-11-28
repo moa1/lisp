@@ -53,35 +53,6 @@
 
 ;;;; The backend stuff implementing the special operators of Lisp and some macros.
 
-(defclass prind-form (walker:form walker:body-form)
-  ((lexicalnamespace :initarg :lexicalnamespace :accessor walker:form-lexicalnamespace)
-   (freenamespace :initarg :freenamespace :accessor walker:form-freenamespace)))
-
-(defun parse-some-macros (form lexical-namespace free-namespace parent &key customparsep-function customparse-function customparsedeclspecp-function customparsedeclspec-function)
-  (declare (optimize (debug 3)))
-  (labels ((reparse (form parent &key (lexical-namespace lexical-namespace))
-	     (walker:parse form lexical-namespace free-namespace parent
-			   :customparsep-function customparsep-function
-			   :customparse-function customparse-function
-			   :customparsedeclspecp-function customparsedeclspecp-function
-			   :customparsedeclspec-function customparsedeclspec-function))
-	   (parse-body (body current &key (lexical-namespace lexical-namespace))
-	     (assert (walker:proper-list-p body) () "Body is not a proper list: ~S" body)
-	     (loop for form in body collect (reparse form current :lexical-namespace lexical-namespace))))
-    (let ((head (car form))
-	  (rest (cdr form)))
-      (cond
-	((eq head 'prind)
-	 (let* ((current (make-instance 'prind-form :parent parent :lexicalnamespace lexical-namespace :freenamespace free-namespace)))
-	   (setf (walker:form-body current) (parse-body rest current))
-	   current))
-	))))
-
-(defun deparse-prind-form (ast parent recurse-function)
-  (declare (ignore parent))
-  (list* 'prind
-	 (walker:deparse-body ast recurse-function nil nil)))
-
 (defun walker-parse (form parent &key lexical-namespace free-namespace)
   (let ((lexical-namespace (if lexical-namespace lexical-namespace (walker:make-empty-lexical-namespace)))
 	(free-namespace (if free-namespace free-namespace (walker:make-free-namespace)))
