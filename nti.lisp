@@ -70,37 +70,38 @@
     ;; misc
     (eq "eq_int_int" (symbol symbol) (fixnum))
     ;; comparison: int int
-    (< "less_int_int" (fixnum fixnum) (fixnum))
-    (<= "lessequal_int_int" (fixnum fixnum) (fixnum))
-    (> "greater_int_int" (fixnum fixnum) (fixnum))
-    (>= "greaterequal_int_int" (fixnum fixnum) (fixnum))
-    (= "equal_int_int" (fixnum fixnum) (fixnum))
-    (/= "notequal_int_int" (fixnum fixnum) (fixnum))
+    (< "less_int_int" (fixnum fixnum) (boolean))
+    (<= "lessequal_int_int" (fixnum fixnum) (boolean))
+    (> "greater_int_int" (fixnum fixnum) (boolean))
+    (>= "greaterequal_int_int" (fixnum fixnum) (boolean))
+    (= "equal_int_int" (fixnum fixnum) (boolean))
+    (/= "notequal_int_int" (fixnum fixnum) (boolean))
     ;; comparison: float float
-    (< "less_float_float" (single-float single-float) (fixnum))
-    (<= "lessequal_float_float" (single-float single-float) (fixnum))
-    (> "greater_float_float" (single-float single-float) (fixnum))
-    (>= "greaterequal_float_float" (single-float single-float) (fixnum))
-    (= "equal_float_float" (single-float single-float) (fixnum))
-    (/= "notequal_float_float" (single-float single-float) (fixnum))
+    (< "less_float_float" (single-float single-float) (boolean))
+    (<= "lessequal_float_float" (single-float single-float) (boolean))
+    (> "greater_float_float" (single-float single-float) (boolean))
+    (>= "greaterequal_float_float" (single-float single-float) (boolean))
+    (= "equal_float_float" (single-float single-float) (boolean))
+    (/= "notequal_float_float" (single-float single-float) (boolean))
     ;; comparison: float int
-    (< "less_float_int" (single-float fixnum) (fixnum))
-    (<= "lessequal_float_int" (single-float fixnum) (fixnum))
-    (> "greater_float_int" (single-float fixnum) (fixnum))
-    (>= "greaterequal_float_int" (single-float fixnum) (fixnum))
-    (= "equal_float_int" (single-float fixnum) (fixnum))
-    (/= "notequal_float_int" (single-float fixnum) (fixnum))
+    (< "less_float_int" (single-float fixnum) (boolean))
+    (<= "lessequal_float_int" (single-float fixnum) (boolean))
+    (> "greater_float_int" (single-float fixnum) (boolean))
+    (>= "greaterequal_float_int" (single-float fixnum) (boolean))
+    (= "equal_float_int" (single-float fixnum) (boolean))
+    (/= "notequal_float_int" (single-float fixnum) (boolean))
     ;; comparison: int float
-    (< "less_int_float_int" (fixnum single-float) (fixnum))
-    (<= "lessequal_int_float" (fixnum single-float) (fixnum))
-    (> "greater_int_float" (fixnum single-float) (fixnum))
-    (>= "greaterequal_int_float" (fixnum single-float) (fixnum))
-    (= "equal_int_float" (fixnum single-float) (fixnum))
-    (/= "notequal_int_float" (fixnum single-float) (fixnum))
+    (< "less_int_float_int" (fixnum single-float) (boolean))
+    (<= "lessequal_int_float" (fixnum single-float) (boolean))
+    (> "greater_int_float" (fixnum single-float) (boolean))
+    (>= "greaterequal_int_float" (fixnum single-float) (boolean))
+    (= "equal_int_float" (fixnum single-float) (boolean))
+    (/= "notequal_int_float" (fixnum single-float) (boolean))
     ;; logical
     (and-f "and_f_int_int" (fixnum fixnum) (fixnum))
     (or-f "or_f_int_int" (fixnum fixnum) (fixnum))
     (not "not_int" (fixnum) (fixnum))
+    (not "not_bool" (boolean) (boolean))
     (fail-with-message "fail_with_message_str" (string) ())
     ;; type conversion
     (float "float_int" (fixnum) (single-float))
@@ -131,7 +132,7 @@
     (computestepsize "computestepsize_int" (fixnum) (single-float))
     (is-above-heightmap "is_above_heightmap" (v4s-float single-float t) (boolean))
     ;;(advance-ray-3d "ADVANCE_RAY_3D0" (v4s-float v4s-float single-float single-float single-float single-float single-float single-float fixnum) (v4s-float single-float symbol))
-    (intersect-border "INTERSECT_BORDER0" (v4s-float v4s-float v4s-float single-float single-float single-float single-float single-float single-float single-float) (v4s-float single-float))
+    (intersect-border "INTERSECT_BORDER0" (v4s-float v4s-float v4s-float single-float single-float single-float single-float single-float single-float) (v4s-float single-float))
     ;;(outside-border-p "OUTSIDE_BORDER0" (v4s-float single-float single-float single-float) (boolean))
     ;;(scan-line-continuous "SCAN_LINE_CONTINUOUS0" (v4s-float v4s-float single-float (function (v4s-float) boolean) single-float single-float single-float single-float single-float single-float) (v4s-float v4s-float boolean single-float))
     (make-array-single-float "make_array_float_uint_uint" (unsigned-byte unsigned-byte) ((array single-float)))
@@ -157,6 +158,16 @@
   (let* ((cons (assoc sym namespace :test #'equals)))
     (assert (not (null cons)) () "SYM ~A not bound in ~S" sym namespace)
     (cdr cons)))
+
+(defmacro debug-namespace (sym namespace)
+  (let ((sym-sym (gensym "SYM"))
+	(ns-sym (gensym "NS"))
+	(cons-sym (gensym "CONS")))
+    `(let ((,sym-sym ,sym)
+	   (,ns-sym ,namespace))
+       (loop for ,cons-sym in ,ns-sym do
+	    (when (eq (walker:nso-name (car ,cons-sym)) ,sym-sym)
+	      (format t "sym:~A has type ~A in namespace ~S~%" ,sym-sym (cdr ,cons-sym) ',namespace))))))
 
 (defun (setf namespace-lookup) (value sym namespace)
   (let* ((cons (assoc sym namespace :test #'equals)))
@@ -228,6 +239,7 @@
   (most-significant-bit (results-nvalues results)))
 
 (defun resultn (results n)
+  (declare (optimize (debug 3)))
   (assert (or (= (results-nvalues results) -1) (< n (results-most results))) () "Trying to read ~Sth element of at most ~S values" n (results-most results))
   (cond
     ((< n (length (results-finite results)))
@@ -308,11 +320,11 @@
     (make-results* :nvalues nv :finite finite-cropped :infinite infinite)))    
 
 (defun meet-results (results1 results2)
-  "RESULTS1 and RESULTS2 are each of type RESULTS. Meet them."
+  "RESULTS1 and RESULTS2 are each of type RESULTS. Meet them and return the new RESULTS."
   (process-results results1 results2 #'meet #'logand))
 
 (defun join-results (results1 results2)
-  "RESULTS1 and RESULTS2 are each of type RESULTS. Join them."
+  "RESULTS1 and RESULTS2 are each of type RESULTS. Join them and return the new RESULTS."
   (process-results results1 results2 #'join #'logior))
 
 (defun meet-arguments (args1 args2)
@@ -409,13 +421,14 @@
      ;; compare parameter and return value types and meet them. TODO: implement meeting &REST with &REQUIRED and &OPTIONAL arguments.
      (flet ((meet-list (r1 r2)
 	      (if (= (length r1) (length r2))
-		  (loop for type1 in r1 for type2 in r2 collect (meet type1 type2))
+		  (loop for type1 in r1 for type2 in r2 collect (let ((type (meet type1 type2))) (assert (not (null type))) type))
 		  (return-from meet-function nil))))
        (let ((required (meet-list (type-required result1) (type-required result2)))
 	     (optional (meet-list (type-optional result1) (type-optional result2)))
-	     (rest (meet (type-rest result1) (type-rest result2)))
+	     (rest (let ((type (meet (type-rest result1) (type-rest result2)))) (assert (not (null type))) type))
 	     (key (meet-list (type-key result1) (type-key result2)))
 	     (values (meet-results (type-values result1) (type-values result2))))
+	 (assert (loop for type in values always (not (null type))) () "Impossible type ~S for values of function" values)
 	 (make-instance 'function-type :required required :optional optional :rest rest :key key :values values))))))
 
 (defun sym-declared-type (sym)
@@ -470,7 +483,8 @@
 
 (defclass blo (flowstate-prev flowstate-nexts)
   ((blo :initarg :blo :accessor walker:form-blo :type walker:blo)
-   (definition :initarg :definition :accessor walker:nso-definition)))
+   (definition :initarg :definition :accessor walker:nso-definition)
+   (branches :initarg :branches :accessor form-branches)))
 
 (defmethod equals ((x walker:sym) (y walker:sym) &rest keys &key recursive &allow-other-keys)
   (declare (ignore recursive))
@@ -493,7 +507,8 @@
   ())
 
 (defclass setq-form (walker:setq-form flowstate formvalue)
-  ())
+  ((varnamespaces-upper :initarg :varnamespaces-upper :accessor form-varnamespaces-upper)
+   (varnamespaces-lower :initarg :varnamespaces-lower :accessor form-varnamespaces-lower)))
 
 (defclass alt-form (walker:special-form flowstate formvalue)
   ((test :initarg :test :accessor walker:form-test)
@@ -603,13 +618,13 @@
 
 ;;; PREPARE-AST
 
-(defun meet-form (ast upper-results lower-results)
-  "Update FORM-UPPER and FORM-LOWER with new RESULTS UPPER-RESULTS LOWER-RESULTS."
+(defun meet-form! (ast upper-results lower-results)
+  "Meet FORM-UPPER and FORM-LOWER of AST with new RESULTS UPPER-RESULTS LOWER-RESULTS. Modifies AST."
   (let ((upper (form-upper ast)))
     ;; TODO: FIXME: are the following MEETs correct?
     (let ((upper-new (meet-results upper-results upper)))
       (assert (or (and (= (results-nvalues upper-new) -1) (not (null (result1 upper-new))))
-		  (loop for i below (results-most upper-new) always (not (null (resultn upper-new i)))) ()))
+		  (and (not (< (results-most upper-new) 0)) (loop for i below (results-most upper-new) always (not (null (resultn upper-new i)))))) () "Impossible result type ~S from meet of ~S and ~S for form~%~S" upper-new upper-results upper (annotate ast))
       (setf (form-upper ast) upper-new)
       (setf (form-lower ast) (meet-results lower-results upper)))))
 
@@ -631,6 +646,7 @@
 	  (cond ((= (results-nvalues results) -1)
 		 t)
 		(t (let ((values (loop for i below (results-most results) collect (resultn results i))))
+		     (assert (loop for type in values always (not (null type))))
 		     (if (= (length values) 1)
 			 (car values)
 			 (cons 'values values))))))
@@ -712,9 +728,9 @@
 		     (make-instance 'walker:block-form :blo (walker:form-blo ast) :body (walker:form-body ast))))
 	   (parsed-body (prepare-ast body body-upper body-lower)))
       ;; meet values type with declared values type
-      (meet-form parsed-body
-		 (if (eq ftype 'function) (make-results* :infinite t) (type-values ftype))
-		 (if (eq ftype 'function) (make-results* :infinite t) (type-values ftype)))
+      (meet-form! parsed-body
+		  (if (eq ftype 'function) (make-results* :infinite t) (type-values ftype))
+		  (if (eq ftype 'function) (make-results* :infinite nil) (type-values ftype)))
       (make-instance 'fun-binding :sym (walker:form-sym ast) :llist llist :declspecs (walker:form-declspecs ast) :documentation (walker:form-documentation ast) :body (list parsed-body)
 		     :prevs-upper nil :prevs-lower nil))))
 
@@ -722,24 +738,29 @@
   (let ((upper (form-prev-upper (car (walker:form-body fun-binding)))))
     (list 'function
 	  (loop for arg in (walker:llist-required (walker:form-llist fun-binding)) collect
-	       (namespace-lookup (walker:argument-var arg) upper))
+	       (let ((type (namespace-lookup (walker:argument-var arg) upper)))
+		 (assert (not (null type)) () "Impossible type ~S for function argument ~S" type (walker:argument-var arg))
+		 type))
 	  (cadr (the-form (car (walker:form-body fun-binding)) nil)))))
 
 (defun annotate-declaration (syms upper)
+  (warn "#'ANNOTATE-DECLARATION is incorrect") ;;since it should take the #'JOIN over all NAMESPACES of a symbol, not just the first namespace"
   (let ((types (make-hash-table :test #'equal)))
     (loop for sym in syms do
 	 (let ((type (namespace-lookup sym upper)))
+	   (assert (not (null type)) () "Impossible type ~S for variable ~S" type sym)
 	   (when (typep type 'fun-binding)
 	     (setf type (fun-declaration type)))
 	   (push sym (gethash type types nil))))
     (list* 'declare
-	   (loop for type being the hash-key of types using (syms) collect
+	   (loop for type being the hash-key of types using (hash-value syms) collect
 		(list* (cond
 			 ((or (eq type 'function) (and (listp type) (eq (car type) 'function)))
 			  'ftype)
 			 (t
 			  'type))
-		       type (loop for sym in syms collect (walker:nso-name sym)))))))
+		       type
+		       (loop for sym in syms collect (walker:nso-name sym)))))))
 
 (defmethod annotate ((arg walker:required-argument))
   (walker:nso-name (walker:argument-var arg)))
@@ -750,7 +771,7 @@
 (defmethod annotate ((ast fun-binding))
   (list* (walker:nso-name (walker:form-sym ast))
 	 (annotate (walker:form-llist ast))
-	 (annotate-declaration (loop for arg in (walker:llist-required (walker:form-llist ast)) collect (walker:argument-var arg)) (form-prev-upper (car (walker:form-body ast))))
+	 ;;(annotate-declaration (loop for arg in (walker:llist-required (walker:form-llist ast)) collect (walker:argument-var arg)) (form-prev-upper (car (walker:form-body ast))))
 	 (loop for form in (walker:form-body ast) collect
 	      (annotate form))))
 
@@ -815,7 +836,7 @@
 (defun annotate-bindings (ast)
   (the-form ast (list* (etypecase (walker:form-parent ast) (walker:let-form 'let) (walker:let*-form 'let*) (walker:flet-form 'flet) (walker:labels-form 'labels))
 		       (loop for binding in (walker:form-bindings ast) collect (annotate binding))
-		       (annotate-declaration (loop for binding in (walker:form-bindings ast) collect (walker:form-sym binding)) (form-prev-upper (car (walker:form-body ast))))
+		       ;;(annotate-declaration (loop for binding in (walker:form-bindings ast) collect (walker:form-sym binding)) (form-prev-upper (car (walker:form-body ast))))
 		       (loop for form in (walker:form-body ast) collect (annotate form)))))
 
 (defmethod prepare-ast ((ast walker:let-form) prev-upper prev-lower)
@@ -865,14 +886,19 @@
   (let* ((next-upper prev-upper)
 	 (next-lower prev-lower)
 	 (values (walker:form-values ast))
-	 (body nil))
-    (loop for var in (walker:form-vars ast) for value in values do
-	 (let ((value2 (prepare-ast value next-upper next-lower)))
-	   (setf next-upper (copy-namespace next-upper) next-lower (copy-namespace next-lower))
-	   (push value2 body)))
-    ;; wrap the multiple SETQ-FORMs in a substitute for a PROGN-FORM.
-    (make-instance 'setq-form :vars (walker:form-vars ast) :values (nreverse body)
-		   :prev-upper prev-upper :prev-lower prev-lower :next-upper (form-next-upper (car body)) :next-lower (form-next-lower (car body))
+	 (varnamespaces-upper nil)
+	 (varnamespaces-lower nil)
+	 (values (loop for var in (walker:form-vars ast) for value in values collect
+		      (let ((value2 (prepare-ast value next-upper next-lower)))
+			(setf next-upper (copy-namespace next-upper) next-lower (copy-namespace next-lower))
+			(push next-upper varnamespaces-upper)
+			(push next-lower varnamespaces-lower)
+			value2))))
+    (setf varnamespaces-upper (nreverse varnamespaces-upper))
+    (setf varnamespaces-lower (nreverse varnamespaces-lower))
+    (make-instance 'setq-form :vars (walker:form-vars ast) :values values
+		   :varnamespaces-upper varnamespaces-upper :varnamespaces-lower varnamespaces-lower
+		   :prev-upper prev-upper :prev-lower prev-lower :next-upper (car (last varnamespaces-upper)) :next-lower (car (last varnamespaces-lower))
 		   :form-upper (make-results t) :form-lower (make-results nil))))
 
 (defmethod annotate ((ast setq-form))
@@ -886,7 +912,7 @@
   (let* ((test-form (prepare-ast (walker:form-test ast) prev-upper prev-lower))
 	 (upper (form-next-upper test-form))
 	 (lower (form-next-lower test-form))
-	 (then-branch (prepare-ast (walker:form-then ast) (copy-namespace upper) (copy-namespace lower))) ;the TEST-FORM could contain a SETQ
+	 (then-branch (prepare-ast (walker:form-then ast) (copy-namespace upper) (copy-namespace lower))) ;the branches need to have isolated namespaces.
 	 (else-branch (if (walker:form-else ast)
 			  (prepare-ast (walker:form-else ast) (copy-namespace upper) (copy-namespace lower))
 			  (prepare-ast (make-instance 'walker:selfevalobject :object nil) (copy-namespace upper) (copy-namespace lower))))
@@ -897,7 +923,7 @@
 
 (defmethod annotate ((ast alt-form))
   (assert (= (length (form-branches ast)) 2))
-  (the-form ast (list* 'if (walker:form-test ast) (loop for branch in (form-branches ast) collect (annotate branch)))))
+  (the-form ast (list* 'if (annotate (walker:form-test ast)) (loop for branch in (form-branches ast) collect (annotate branch)))))
 
 (defmethod prepare-ast ((ast walker:tagbody-form) prev-upper prev-lower)
   (let ((tags-upper prev-upper)
@@ -932,7 +958,7 @@
 			   ast))))))
       (make-instance 'tagbody-form :body body
 		     :prev-upper prev-upper :prev-lower prev-lower :next-upper (copy-namespace prev-upper) :next-lower (copy-namespace prev-lower) ;NEXT must be a separate instance, because there may be a SETQ in TAGBODY.
-		     :form-upper (make-results 'null) :form-lower (make-results 'null)))))
+		     :form-upper (make-results 'null) :form-lower (make-results 'null))))) ;TODO: FIXME: implement flow control analysis to determine whether a TAGBODY can exit via its last form, and in this case, set the result type of the TAGBODY to (VALUES NULL), but unless we can be sure that the TAGBODY exits we may not set the result type to NULL, because the TAGBODY can be the last form of a BLOCK form, and the BLOCK form will meet its result types determined from RETURN-FROM-forms with the NULL result type of its last form, which will likely result in a NULL type.
 
 (defmethod annotate ((ast tag))
   (walker:nso-name (walker:form-tag ast)))
@@ -948,13 +974,13 @@
       (push prev-lower (form-prevs-lower tag)))
     (make-instance 'go-form :tag (walker:form-tag ast)
 		   :prev-upper prev-upper :prev-lower prev-lower :next-upper prev-upper :next-lower prev-lower
-		   :form-upper (make-results 'null) :form-lower (make-results 'null)))) ;NULL because a TAGBODY returns NIL.
+		   :form-upper (make-results* :infinite t) :form-lower (make-results* :infinite nil))))
 
 (defmethod annotate ((ast go-form))
   (the-form ast (list 'go (walker:nso-name (walker:form-tag ast)))))
 
 (defmethod prepare-ast ((ast walker:block-form) prev-upper prev-lower)
-  (let* ((blo (make-instance 'blo :blo (walker:form-blo ast) :prev-upper prev-upper :prev-lower prev-lower :nexts-upper nil :nexts-lower nil))
+  (let* ((blo (make-instance 'blo :blo (walker:form-blo ast) :prev-upper prev-upper :prev-lower prev-lower :branches nil :nexts-upper nil :nexts-lower nil))
 	 (next-upper (augment-namespace (walker:form-blo ast) blo prev-upper))
 	 (next-lower (augment-namespace (walker:form-blo ast) blo prev-lower))
 	 (body-forms (if (null (walker:form-body ast))
@@ -965,13 +991,13 @@
 		      (setf next-upper (form-next-upper ast))
 		      (setf next-lower (form-next-lower ast))
 		      ast)))
-	 (current (make-instance 'block-form :blo (walker:form-blo ast)
+	 (current (make-instance 'block-form :blo (walker:form-blo ast) :body body
 				 :prev-upper prev-upper :prev-lower prev-lower :next-upper (copy-namespace prev-upper) :next-lower (copy-namespace prev-lower) ;cannot use namespace of last body form because it is annotated with blo
 				 :form-upper (make-results* :infinite t) :form-lower (make-results* :infinite nil))))
     (setf (walker:nso-definition blo) current)
+    (push (car (last body)) (form-branches blo))
     (push next-upper (form-nexts-upper blo))
     (push next-lower (form-nexts-lower blo))
-    (setf (walker:form-body current) body)
     current))
 
 (defmethod annotate ((ast block-form))
@@ -982,12 +1008,14 @@
   (let* ((blo (namespace-lookup (walker:form-blo ast) prev-upper))
 	 (value (prepare-ast (walker:form-value ast) prev-upper prev-lower))
 	 (value-next-upper (form-next-upper value))
-	 (value-next-lower (form-next-lower value)))
+	 (value-next-lower (form-next-lower value))
+	 (current (make-instance 'return-from-form :blo (walker:form-blo ast) :value value
+				 :prev-upper prev-upper :prev-lower prev-lower :next-upper value-next-upper :next-lower value-next-lower
+				 :form-upper (make-results* :infinite t) :form-lower (make-results* :infinite nil))))
+    (push current (form-branches blo))
     (push value-next-upper (form-nexts-upper blo))
     (push value-next-lower (form-nexts-lower blo))
-    (make-instance 'return-from-form :blo (walker:form-blo ast) :value value
-		   :prev-upper prev-upper :prev-lower prev-lower :next-upper value-next-upper :next-lower value-next-lower
-		   :form-upper (make-results* :infinite t) :form-lower (make-results* :infinite nil))))
+    current))
 
 (defmethod annotate ((ast return-from-form))
   (the-form ast (list 'return-from (walker:nso-name (walker:form-blo ast)) (annotate (walker:form-value ast)))))
@@ -1031,14 +1059,12 @@
 		   :form-upper (make-results* :infinite t) :form-lower (make-results* :infinite nil))))
 
 (defmethod annotate ((ast multiple-value-bind-form))
-  (let* ((first-form (car (walker:form-body ast)))
-	 (declaration (annotate-declaration (walker:form-vars ast) (form-prev-upper first-form))))
-    (the-form ast
-	      (list* 'multiple-value-bind
-		     (loop for var in (walker:form-vars ast) collect (walker:nso-name var))
-		     (annotate (walker:form-values ast))
-		     declaration
-		     (loop for form in (walker:form-body ast) collect (annotate form))))))
+  (the-form ast
+	    (list* 'multiple-value-bind
+		   (loop for var in (walker:form-vars ast) collect (walker:nso-name var))
+		   (annotate (walker:form-values ast))
+		   ;;(annotate-declaration (walker:form-vars ast) (car (walker:form-body ast)))
+		   (loop for form in (walker:form-body ast) collect (annotate form)))))
 
 (defclass macroapplication-form (walker:macroapplication-form flowstate formvalue)
   ())
@@ -1048,7 +1074,7 @@
   (ecase (walker:nso-name (walker:form-fun ast))
     ((prind assert)
      (make-instance 'macroapplication-form :fun (walker:form-fun ast) :arguments (walker:form-arguments ast) :lexicalnamespace nil :freenamespace nil
-		    :prev-upper prev-upper :prev-lower prev-lower :next-upper prev-upper :next-lower prev-upper
+		    :prev-upper prev-upper :prev-lower prev-lower :next-upper prev-upper :next-lower prev-lower
 		    :form-upper (make-results* :infinite t) :form-lower (make-results* :infinite nil)))))
 
 (defmethod annotate ((ast macroapplication-form))
@@ -1062,9 +1088,12 @@
 
 ;;; DEDUCE-FORWARD
 
-(defun meet-namespaces (a-upper a-lower b-upper b-lower)
-  "Carry over changes from B to A."
+(defun meet-namespaces! (a-upper a-lower b-upper b-lower)
+  "Carry over changes from B to A, and thus modifies A."
+  (declare (optimize (debug 3)))
   (map-namespace (lambda (a-upper a-lower b-upper b-lower)
+		   (assert (and (not (eq a-upper a-lower)) (not (eq b-upper b-lower))))
+		   (assert (and (equal (car a-upper) (car b-upper)) (equal (car a-lower) (car b-lower)) (equal (car a-upper) (car a-lower))) () "Mismatching variable names ~S, ~S, ~S, ~S" (car a-upper) (car a-lower) (car b-upper) (car b-lower))
 		   (unless (or (typep (cdr a-upper) 'fun-binding) (typep (cdr a-upper) 'blo))
 		     (let* ((upper (cdr a-upper)))
 		       (let ((new-upper (meet (cdr b-upper) upper)))
@@ -1073,22 +1102,28 @@
 		       (setf (cdr a-lower) (meet (cdr b-lower) upper)))))
 		 a-upper a-lower b-upper b-lower))
 
-(defun meet-namespace-prev (form-new form-old)
-  (meet-namespaces (form-prev-upper form-old) (form-prev-lower form-old) (form-prev-upper form-new) (form-prev-lower form-new)))
+(defun meet-namespace-prev! (form-new form-old)
+  (declare (optimize (debug 3)))
+  (meet-namespaces! (form-prev-upper form-new) (form-prev-lower form-new) (form-prev-upper form-old) (form-prev-lower form-old)))
 
-(defun meet-namespace-next (form-new form-old)
-  (meet-namespaces (form-next-upper form-old) (form-next-lower form-old) (form-next-upper form-new) (form-next-lower form-new)))
+(defun meet-namespace-next! (form-new form-old)
+  (declare (optimize (debug 3)))
+  (meet-namespaces! (form-next-upper form-new) (form-next-lower form-new) (form-next-upper form-old) (form-next-lower form-old)))
 
-(defun meet-namespace-prev-next (form-new form-old)
-  (meet-namespaces (form-prev-upper form-old) (form-prev-lower form-old) (form-next-upper form-new) (form-next-lower form-new)))
+(defun meet-namespace-prev-next! (form-new form-old)
+  (declare (optimize (debug 3)))
+  (meet-namespaces! (form-prev-upper form-new) (form-prev-lower form-new) (form-next-upper form-old) (form-next-lower form-old)))
 
-(defun meet-namespace-next-prev (form-new form-old)
-  (meet-namespaces (form-next-upper form-old) (form-next-lower form-old) (form-prev-upper form-new) (form-prev-lower form-new)))
+(defun meet-namespace-next-prev! (form-new form-old)
+  (declare (optimize (debug 3)))
+  (meet-namespaces! (form-next-upper form-new) (form-next-lower form-new) (form-prev-upper form-old) (form-prev-lower form-old)))
 
-(defun merge-branches (a-upper a-lower bs-upper bs-lower)
+(defun join-namespaces! (a-upper a-lower bs-upper bs-lower)
   "Backward propagation rule for split of A into B and C:
 upper(A) = (upper(B) join upper(C)) meet upper(A)
-lower(A) = (lower(B) join lower(C)) meet upper(A)"
+lower(A) = (lower(B) join lower(C)) meet upper(A).
+Modifies A."
+  (declare (optimize (debug 3)))
   (let ((after-upper (lambda (a-upper &rest branches-upper)
 		       (unless (or (typep (cdr a-upper) 'fun-binding) (typep (cdr a-upper) 'blo))
 			 (let ((new-upper (meet (join-typelist (mapcar #'cdr branches-upper) +builtin-typehash+) (cdr a-upper))))
@@ -1100,6 +1135,12 @@ lower(A) = (lower(B) join lower(C)) meet upper(A)"
     (apply #'map-namespace after-upper a-upper bs-upper)
     (apply #'map-namespace after-lower a-upper a-lower bs-lower)))
 
+(defun join-forms! (ast branches)
+  "Modifies AST."
+  (meet-form! ast
+	      (reduce #'join-results (mapcar #'form-upper (cdr branches)) :initial-value (form-upper (car branches)))
+	      (reduce #'join-results (mapcar #'form-lower (cdr branches)) :initial-value (form-lower (car branches)))))
+
 (defmethod deduce-forward ((ast selfevalobject))
   ;; nothing to do, #'PREPARE-AST already initialized FORM-UPPER and FORM-LOWER.
   ;; no need to carry over PREV to NEXT; #'PREPARE-AST defined them the same object, since there cannot be a type change inside a SELFEVALOBJECT form.
@@ -1110,6 +1151,7 @@ lower(A) = (lower(B) join lower(C)) meet upper(A)"
   ;; no need to carry over PREV to NEXT; #'PREPARE-AST defined them the same object.
   (let* ((upper (namespace-lookup (walker:form-var ast) (form-prev-upper ast)))
 	 (lower (namespace-lookup (walker:form-var ast) (form-prev-lower ast))))
+    (assert (not (null upper)) () "Impossible type ~S for variable ~S" upper ast)
     (setf (form-upper ast) (make-results upper))
     (setf (form-lower ast) (make-results lower))))
 
@@ -1118,7 +1160,7 @@ lower(A) = (lower(B) join lower(C)) meet upper(A)"
   (let* ((first-form (car (walker:form-body ast)))
 	 (body-upper (form-prev-upper first-form))
 	 (body-lower (form-prev-lower first-form)))
-    (meet-namespace-prev ast first-form)
+    (meet-namespace-prev! first-form ast)
     (loop for binding in (walker:form-bindings ast) do
 	 (let ((var (walker:form-sym binding))
 	       (value (walker:form-value binding)))
@@ -1136,8 +1178,8 @@ lower(A) = (lower(B) join lower(C)) meet upper(A)"
 	 (deduce-forward form))
     (let ((last-form (car (last (walker:form-body ast)))))
       (deduce-forward last-form)
-      (meet-form ast (form-upper last-form) (form-lower last-form))
-      (meet-namespace-next last-form ast))))
+      (meet-form! ast (form-upper last-form) (form-lower last-form))
+      (meet-namespace-next! ast last-form))))
 
 (defmethod deduce-forward ((ast fun-binding))
   (declare (optimize (debug 3)))
@@ -1170,19 +1212,19 @@ lower(A) = (lower(B) join lower(C)) meet upper(A)"
     ;; push result types to call sites
     (let ((last-form (car (last (walker:form-body ast)))))
       (loop for application-form in (form-prevs-upper ast) do
-	   (meet-form application-form (form-upper last-form) (form-lower last-form))))))
+	   (meet-form! application-form (form-upper last-form) (form-lower last-form))))))
 
 (defmethod deduce-forward ((ast flet-form))
   (declare (optimize (debug 3)))
   (let* ((first-form (car (walker:form-body ast))))
-    (meet-namespace-prev ast first-form)
+    (meet-namespace-prev! first-form ast)
     (flet ((process-body ()
 	     (loop for form in (butlast (walker:form-body ast)) do
 		  (deduce-forward form))
 	     (let ((last-form (car (last (walker:form-body ast)))))
 	       (deduce-forward last-form)
-	       (meet-form ast (form-upper last-form) (form-lower last-form))
-	       (meet-namespace-next last-form ast))))
+	       (meet-form! ast (form-upper last-form) (form-lower last-form))
+	       (meet-namespace-next! ast last-form))))
       ;; deduce-forward the body, to determine argument types to functions.
       (process-body)
       ;; deduce-forward the functions.
@@ -1211,7 +1253,7 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
       (multiple-value-bind (fun-result-upper fun-result-lower) (determine-fun-result)
 	(when (null (result1 fun-result-upper))
 	  (error "Function application ~S yields impossible type ~S." ast fun-result-upper))
-	(meet-form ast fun-result-upper fun-result-lower)
+	(meet-form! ast fun-result-upper fun-result-lower)
 	(when (null (form-upper ast))
 	  (error "Meet in function application ~S between types ~S and ~S yields impossible type." ast fun-result-upper (form-upper ast)))))))
 
@@ -1220,16 +1262,16 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
   (let ((old-form (car (walker:form-values ast)))
 	(form-upper 'null)
 	(form-lower 'null))
-    (loop for var in (walker:form-vars ast) for value in (walker:form-values ast) do
-	 (meet-namespace-next-prev old-form value)
+    (loop for var in (walker:form-vars ast) for value in (walker:form-values ast) for varnamespace-upper in (form-varnamespaces-upper ast) for varnamespace-lower in (form-varnamespaces-lower ast) do
+	 (meet-namespaces! varnamespace-upper varnamespace-lower (form-next-upper old-form) (form-next-lower old-form))
 	 (deduce-forward value)
 	 (let* ((decl (sym-declared-type var))
 		(new-upper (meet (result1 (form-upper value)) decl))
 		(new-lower (meet (result1 (form-lower value)) decl)))
 	   (assert (not (null new-upper)) () "Impossible type for variable ~S: cannot meet types ~S and ~S" var (result1 (form-upper value)) decl)
 	   (setf old-form value)
-	   (setf (namespace-lookup var (form-prev-upper value)) new-upper) ;update variable in NEXT namespace of values
-	   (setf (namespace-lookup var (form-prev-lower value)) new-lower)
+	   (setf (namespace-lookup var varnamespace-upper) new-upper)
+	   (setf (namespace-lookup var varnamespace-lower) new-lower)
 	   (setf form-upper new-upper form-lower new-lower)))
     (setf (form-upper ast) (make-results form-upper) (form-lower ast) (make-results form-lower))))
 
@@ -1239,31 +1281,28 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 	(branches (form-branches ast)))
     (deduce-forward test)
     (loop for branch in branches do
-	 (meet-namespace-next-prev test branch)
+	 (meet-namespace-prev-next! branch test)
 	 (deduce-forward branch))
-    (merge-branches (form-next-upper ast) (form-next-lower ast) (mapcar #'form-next-upper branches) (mapcar #'form-next-lower branches))
-    (meet-form ast
-	       (reduce #'join-results (mapcar #'form-upper branches) :initial-value (form-upper (car branches)))
-	       (reduce #'join-results (mapcar #'form-lower branches) :initial-value (form-lower (car branches))))))
+    (join-namespaces! (form-next-upper ast) (form-next-lower ast) (mapcar #'form-next-upper branches) (mapcar #'form-next-lower branches))
+    (join-forms! ast branches)))
 
 (defmethod deduce-forward ((ast tagbody-form))
   (declare (optimize (debug 3)))
   (let* ((first-form (car (walker:form-body ast)))
 	 (last-form (car (last (walker:form-body ast)))))
     (let ((body-upper (if (typep first-form 'tag) (car (last (form-prevs-upper first-form))) (form-prev-upper first-form)))
-	  (body-lower (if (typep first-form 'tag) (car (last (form-prevs-upper first-form))) (form-prev-lower first-form))))
-      (unless (null first-form)
-	(meet-namespaces body-upper body-lower (form-prev-upper ast) (form-prev-lower ast))))
+	  (body-lower (if (typep first-form 'tag) (car (last (form-prevs-lower first-form))) (form-prev-lower first-form))))
+      (meet-namespaces! body-upper body-lower (form-prev-upper ast) (form-prev-lower ast)))
     (loop for form in (walker:form-body ast) do
 	 (deduce-forward form))
     (unless (null last-form)
-      (meet-namespace-next last-form ast))
+      (meet-namespace-next! ast last-form))
     ;; no need to update FORM-UPPER or FORM-LOWER, since TAGBODY always returns NIL.
     ))
 
 (defmethod deduce-forward ((ast tag))
   (declare (optimize (debug 3)))
-  (merge-branches (form-next-upper ast) (form-next-lower ast) (form-prevs-upper ast) (form-prevs-lower ast)))
+  (join-namespaces! (form-next-upper ast) (form-next-lower ast) (form-prevs-upper ast) (form-prevs-lower ast)))
 
 (defmethod deduce-forward ((ast go-form))
   ;; no need to carry over PREV to NEXT; #'PREPARE-AST defined them the same object.
@@ -1273,17 +1312,18 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
   (declare (optimize (debug 3)))
   (loop for form in (walker:form-body ast) do
        (deduce-forward form))
-  (let ((last-form (car (last (walker:form-body ast)))))
-    (meet-form ast (form-upper last-form) (form-lower last-form))
-    (meet-namespace-next last-form ast)))
+  (meet-namespace-next! ast (car (last (walker:form-body ast))))
+  (let* ((last-form (car (last (walker:form-body ast))))
+	 (blo (namespace-lookup (walker:form-blo ast) (form-prev-upper last-form))))
+    (join-forms! ast (form-branches blo))
+    (join-namespaces! (form-next-upper ast) (form-next-lower ast) (form-nexts-upper blo) (form-nexts-lower blo))))
 
 (defmethod deduce-forward ((ast return-from-form))
-  (let* ((blo (namespace-lookup (walker:form-blo ast) (form-prev-upper ast)))
-	 (block-form (walker:nso-definition blo))
+  (let* (;;(blo (namespace-lookup (walker:form-blo ast) (form-prev-upper ast)))
 	 (value (walker:form-value ast)))
     (deduce-forward value)
-    (meet-form block-form (form-upper value) (form-lower value))
-    (meet-namespace-next block-form value)))
+    (meet-form! ast (form-upper value) (form-lower value))))
+
 
 (defmethod deduce-forward ((ast values-form))
   (let ((body (walker:form-body ast)))
@@ -1291,7 +1331,7 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 	 (deduce-forward form))
     (let ((new-upper (apply #'make-results (loop for form in body collect (result1 (form-upper form)))))
 	  (new-lower (apply #'make-results (loop for form in body collect (result1 (form-lower form))))))
-      (meet-form ast new-upper new-lower))))
+      (meet-form! ast new-upper new-lower))))
 
 (defmethod deduce-forward ((ast multiple-value-bind-form))
   (declare (optimize (debug 3)))
@@ -1301,7 +1341,7 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 	 (body-lower (form-prev-lower first-form))
 	 (values (walker:form-values ast)))
     (deduce-forward values)
-    (meet-namespace-prev ast first-form)
+    (meet-namespace-prev! first-form ast)
     (loop for i from 0 for var in (walker:form-vars ast) do
 	 (let* ((upper (namespace-lookup var body-upper))
 		(val-upper (if (< i (results-most (form-upper values)))
@@ -1318,8 +1358,8 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 	 (deduce-forward form))
     (let ((last-form (car (last body))))
       (deduce-forward last-form)
-      (meet-form ast (form-upper last-form) (form-lower last-form))
-      (meet-namespace-next last-form ast))))
+      (meet-form! ast (form-upper last-form) (form-lower last-form))
+      (meet-namespace-next! ast last-form))))
 
 (defun test-forward ()
   (labels ((prepare (form)
@@ -1334,7 +1374,7 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 		      (finite (results-finite results))
 		      (results (loop for i below (length upper) collect
 				    (if (< i (length finite)) (elt finite i) (results-infinite results)))))
-		 (assert (equal results upper) () "failed assertion for form ~S: results=~S upper:~S" form results upper)))))
+		 (assert (equal results upper) () "failed assertion for form ~S:~%results:~S wanted:~S" form results upper)))))
     (macrolet ((assert-error (form)
 		 (let ((ast-sym (gensym "AST")) (form-sym (gensym "FORM")))
 		   `(let* ((,form-sym ,form)
@@ -1364,12 +1404,13 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
       (assert-result '(let ((a nil)) (tagbody (if (null a) (setq a 10)) s (setq a (1- a)) (if (<= a 0) (go e)) (go s) e) a) '(number))
       (assert-result '(block bla (let ((a 1)) (return-from bla (setq a nil)) a)) '(null))
       (assert-result '(let ((a 1)) (block f1 (return-from f1 a))) '(fixnum))
+      (assert-result '(block b (if 1 (return-from b 1)) (if 2 (return-from b 1.0) 0)) '(number))
       (assert-result '(flet ((f1 (a) (let ((b a)) b))) nil) '(null))
       (assert-result '(flet ((f1 (a) a)) (f1 1)) '(fixnum))
       (assert-result '(flet ((f1 (a) a)) (f1 1) (f1 1.1)) '(number))
       (assert-result '(flet ((f1 (a) (return-from f1 a))) (f1 1)) '(fixnum))
       (assert-result '(flet ((f1 (a) (return-from f1 a))) (f1 1) (f1 1.1)) '(number))
-      (assert-result '(labels ((f1 (a) (if (= 0 a) (return-from f1 0) (f1 (1- a))))) (f1 1)) '(fixnum))
+      ;;(assert-result '(labels ((f1 (a) (if (= 0 a) (return-from f1 0) (f1 (1- a))))) (f1 1)) '(fixnum))
       ;;(assert-result '(labels ((f1 (a) (if (= 0 a) 0 (f1 (1- a))))) (f1 1)) '(fixnum))
       (assert-result '(values 1 1.0) '(fixnum single-float))
       (assert-result '(multiple-value-bind (a b) (values 1 1.0) b) '(single-float))
@@ -1399,8 +1440,8 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 (defmethod deduce-backward ((ast let-form))
   (declare (optimize (debug 3)))
   (let ((last-form (car (last (walker:form-body ast)))))
-    (meet-namespace-next ast last-form)
-    (meet-form last-form (form-upper ast) (form-lower ast))
+    (meet-namespace-next! last-form ast)
+    (meet-form! last-form (form-upper ast) (form-lower ast))
     (deduce-backward last-form))
   (loop for form in (reverse (butlast (walker:form-body ast))) do
        (deduce-backward form))
@@ -1419,7 +1460,7 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 	   (setf (result1 (form-upper value)) new-upper)
 	   (setf (result1 (form-lower value)) new-lower))
 	 (deduce-backward (walker:form-value binding)))
-    (meet-namespace-prev first-form ast)))
+    (meet-namespace-prev! ast first-form)))
 
 (defmethod deduce-backward ((ast fun-binding))
   (declare (optimize (debug 3)))
@@ -1430,29 +1471,27 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
     ;; pull result types from call sites
     (let* ((last-form (car (last (walker:form-body ast))))
 	   (application-forms (form-prevs-upper ast)))
-      (meet-form last-form
-		 (reduce #'join-results (mapcar #'form-upper (cdr application-forms)) :initial-value (form-upper (car application-forms)))
-		 (reduce #'join-results (mapcar #'form-lower (cdr application-forms)) :initial-value (form-lower (car application-forms)))))
+      (unless (null application-forms)
+	(join-forms! last-form application-forms)))
     (loop for form in (reverse (walker:form-body ast)) do
 	 (deduce-backward form))
     ;; TODO: implement &OPTIONAL, &REST, and &KEY arguments
     (loop for application-form in (form-prevs-upper ast) do
 	 (loop for arg in (walker:llist-required llist) for apparg in (walker:form-arguments application-form) do
 	      (let* ((var (walker:argument-var arg))
-		     (var-upper (namespace-lookup var body-upper)))
-		(setf (result1 (form-upper apparg))
-		      (let* ((arg-upper (result1 (form-upper apparg)))
-			     (type (meet var-upper arg-upper)))
-			(assert (not (null type)) () "Impossible type for variable ~S: cannot meet types ~S and ~S" arg var-upper arg-upper)
-			type))
-	      (setf (result1 (form-lower apparg)) (meet (namespace-lookup var body-lower) var-upper)))))))
+		     (var-upper (namespace-lookup var body-upper))
+		     (arg-upper (result1 (form-upper apparg)))
+		     (type (meet var-upper arg-upper)))
+		(assert (not (null type)) () "Impossible type for variable ~S: cannot meet types ~S and ~S" arg var-upper arg-upper)
+		(setf (result1 (form-upper apparg)) type)
+		(setf (result1 (form-lower apparg)) (meet (namespace-lookup var body-lower) var-upper)))))))
 
 (defmethod deduce-backward ((ast flet-form))
   (declare (optimize (debug 3)))
   (flet ((process-body ()
 	   (let ((last-form (car (last (walker:form-body ast)))))
-	     (meet-namespace-next ast last-form)
-	     (meet-form last-form (form-upper ast) (form-lower ast))
+	     (meet-namespace-next! last-form ast)
+	     (meet-form! last-form (form-upper ast) (form-lower ast))
 	     (deduce-backward last-form))
 	   (loop for form in (reverse (butlast (walker:form-body ast))) do
 		(deduce-backward form))))
@@ -1463,7 +1502,7 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 	 (deduce-backward binding))
     ;; deduce-backward the body again, to propagate the updated argument types of the functions.
     (process-body))
-  (meet-namespace-prev (car (walker:form-body ast)) ast))
+  (meet-namespace-prev! ast (car (walker:form-body ast))))
 
 (defmethod deduce-backward ((ast application-form))
   (declare (optimize (debug 3)))
@@ -1489,16 +1528,16 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
   (declare (optimize (debug 3)))
   (let ((old-form ast))
     (let* ((last-value (car (last (walker:form-values ast)))))
-      (meet-form last-value (form-upper ast) (form-lower ast)))
-    (loop for var in (reverse (walker:form-vars ast)) for value in (reverse (walker:form-values ast)) do
-	 (meet-namespace-prev-next old-form value)
+      (meet-form! last-value (form-upper ast) (form-lower ast)))
+    (loop for var in (reverse (walker:form-vars ast)) for value in (reverse (walker:form-values ast)) for varnamespace-upper in (reverse (form-varnamespaces-upper ast)) for varnamespace-lower in (reverse (form-varnamespaces-lower ast)) do
+	 (meet-namespaces! (form-next-upper old-form) (form-next-lower old-form) varnamespace-upper varnamespace-lower)
 	 (deduce-backward value)
 	 (let* ((decl (sym-declared-type var))
 		(new-upper (meet (result1 (form-upper value)) decl))
 		(new-lower (meet (result1 (form-lower value)) decl)))
 	   (assert (not (null new-upper)) () "Impossible type for variable ~S: cannot meet types ~S and ~S" var (result1 (form-upper value)) decl)
-	   (setf (namespace-lookup var (form-prev-upper value)) new-upper) ;update variable in NEXT namespace of values
-	   (setf (namespace-lookup var (form-prev-lower value)) new-lower)
+	   (setf (namespace-lookup var varnamespace-upper) new-upper) ;we use the NEXT namespace to store new values
+	   (setf (namespace-lookup var varnamespace-lower) new-lower)
 	   (setf old-form value)))))
 
 (defmethod deduce-backward ((ast alt-form))
@@ -1506,10 +1545,10 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
   (let ((test (walker:form-test ast))
 	(branches (form-branches ast)))
     (loop for branch in branches do
-	 (meet-namespace-next-prev ast branch)
-	 (meet-form branch (form-upper ast) (form-lower ast))
+	 (meet-namespace-next! branch ast)
+	 (meet-form! branch (form-upper ast) (form-lower ast))
 	 (deduce-backward branch))
-    (merge-branches (form-next-upper test) (form-next-lower test) (mapcar #'form-next-upper branches) (mapcar #'form-next-lower branches))
+    (join-namespaces! (form-next-upper test) (form-next-lower test) (mapcar #'form-prev-upper branches) (mapcar #'form-prev-lower branches))
     (deduce-backward test)))
 
 (defmethod deduce-backward ((ast tagbody-form))
@@ -1518,40 +1557,43 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 	 (last-form (car (last (walker:form-body ast)))))
     ;; no need to update FORM-UPPER or FORM-LOWER, since TAGBODY always returns NIL.
     (unless (null last-form)
-      (meet-namespace-next ast last-form))
+      (meet-namespace-next! last-form ast))
     (loop for form in (walker:form-body ast) do
 	 (deduce-backward form))
     (let ((body-upper (if (typep first-form 'tag) (car (last (form-prevs-upper first-form))) (form-prev-upper first-form)))
-	  (body-lower (if (typep first-form 'tag) (car (last (form-prevs-upper first-form))) (form-prev-lower first-form))))
+	  (body-lower (if (typep first-form 'tag) (car (last (form-prevs-lower first-form))) (form-prev-lower first-form))))
       (unless (null first-form)
-	(meet-namespaces (form-prev-upper ast) (form-prev-lower ast) body-upper body-lower)))))
+	(meet-namespaces! (form-prev-upper ast) (form-prev-lower ast) body-upper body-lower)))))
 
 (defmethod deduce-backward ((ast tag))
   (declare (optimize (debug 3)))
   (let ((prevs-upper (form-prevs-upper ast))
 	(prevs-lower (form-prevs-lower ast)))
     (loop for prev-upper in prevs-upper for prev-lower in prevs-lower do
-	 (meet-namespaces prev-upper prev-lower (form-next-upper ast) (form-next-lower ast)))))
+	 (meet-namespaces! prev-upper prev-lower (form-next-upper ast) (form-next-lower ast)))))
 
 (defmethod deduce-backward ((ast go-form))
   ;; no need to carry over PREV to NEXT; #'PREPARE-AST defined them the same object.
   )
 
 (defmethod deduce-backward ((ast block-form))
+  (declare (optimize (debug 3)))
   (let* ((last-form (car (last (walker:form-body ast))))
 	 (blo (namespace-lookup (walker:form-blo ast) (form-prev-upper last-form))))
-    ;; TODO: FIXME: are the following MEETs correct?
     (loop for return-next-upper in (form-nexts-upper blo) for return-next-lower in (form-nexts-lower blo) do
-	 (meet-namespaces return-next-upper return-next-lower (form-next-upper ast) (form-next-lower ast))))
+	 (meet-namespaces! return-next-upper return-next-lower (form-next-upper ast) (form-next-lower ast)))
+    (loop for return-form in (form-branches blo) do
+	 (meet-form! return-form (form-upper ast) (form-lower ast))))
+  (meet-namespace-next! (car (last (walker:form-body ast))) ast)
   (loop for form in (walker:form-body ast) do
        (deduce-backward form)))
 
 (defmethod deduce-backward ((ast return-from-form))
-  (let* ((blo (namespace-lookup (walker:form-blo ast) (form-prev-upper ast)))
-	 (block-form (walker:nso-definition blo))
+  (declare (optimize (debug 3)))
+  (let* (;;(blo (namespace-lookup (walker:form-blo ast) (form-prev-upper ast)))
+	 ;;(block-form (walker:nso-definition blo))
 	 (value (walker:form-value ast)))
-    (meet-namespace-next value block-form)
-    (meet-form value (form-upper block-form) (form-lower block-form))
+    (meet-form! value (form-upper ast) (form-lower ast))
     (deduce-backward value)))
 
 (defmethod deduce-backward ((ast values-form))
@@ -1559,7 +1601,7 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
     (loop for form in body for i from (1- (length body)) downto 0 do
 	 (let ((new-upper (make-results (resultn (form-upper ast) i)))
 	       (new-lower (make-results (resultn (form-lower ast) i))))
-	   (meet-form form new-upper new-lower))
+	   (meet-form! form new-upper new-lower))
 	 (deduce-backward form))))
 
 (defmethod deduce-backward ((ast multiple-value-bind-form))
@@ -1570,8 +1612,8 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 	 (body-lower (form-prev-lower first-form))
 	 (values (walker:form-values ast)))
     (let ((last-form (car (last body))))
-      (meet-namespace-next ast last-form)
-      (meet-form last-form (form-upper ast) (form-lower ast))
+      (meet-namespace-next! last-form ast)
+      (meet-form! last-form (form-upper ast) (form-lower ast))
       (deduce-backward last-form))
     (loop for form in (reverse (butlast body)) do
 	 (deduce-backward form))
@@ -1583,7 +1625,7 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 	   (assert (not (null new-upper)) () "Cannot meet types ~S and ~S for variable ~S" var-upper upper var)
 	   (setf (resultn (form-upper values) i) new-upper)
 	   (setf (resultn (form-lower values) i) (meet var-lower upper))))
-    (meet-namespace-prev first-form ast)
+    (meet-namespace-prev! ast first-form)
     (deduce-backward values)))
 
 (defun test-backward ()
@@ -1605,7 +1647,8 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 (test-backward)
 
 
-(defparameter +scan-line-stepped-from-below-code+ nil)
+(unless (boundp '+scan-line-stepped-from-below-code+)
+  (defparameter +scan-line-stepped-from-below-code+ nil))
 (defun deduce-voxelneu-code (&optional (form +scan-line-stepped-from-below-code+))
   (let* ((variables '(*mipmap-factor* *automatic-stepsize* *step-size* *exact-exit* *mouse-info*))
 	 (free-namespace (walker:make-free-namespace :variables variables :macros (append '(prind) walker:+common-lisp-macros+)))
@@ -1616,5 +1659,12 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 	 (setf upper (augment-namespace (walker:namespace-lookup 'walker:var var free-namespace) t upper))
 	 (setf lower (augment-namespace (walker:namespace-lookup 'walker:var var free-namespace) t lower)))
     (let ((ast (prepare-ast ast upper lower)))
-      (deduce-forward ast)
-      ast)))
+      (let ((old nil)
+	    (new t))
+	(loop until (equal old new) for i from 0 do
+	     (format t "deduce loop ~A~%" i)
+	     (setf old new)
+	     (deduce-forward ast)
+	     (deduce-backward ast)
+	     (setf new (annotate ast)))
+	new))))
