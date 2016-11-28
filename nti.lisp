@@ -156,7 +156,7 @@
 
 (defun namespace-lookup (sym namespace)
   (let* ((cons (assoc sym namespace :test #'equals)))
-    (assert (not (null cons)) () "SYM ~A not bound in ~S" sym namespace)
+    (assert (not (null cons)) () "SYM ~A not bound in~%namespace ~S" sym namespace)
     (cdr cons)))
 
 (defmacro debug-namespace (sym namespace)
@@ -652,7 +652,8 @@
 			 (cons 'values values))))))
 	form))
 	  
-(defmethod annotate ((ast selfevalobject))
+(defmethod annotate ((ast selfevalobject) &key visit)
+  (when visit (funcall visit ast))
   (the-form ast (walker:selfevalobject-object ast)))
 
 (defmethod prepare-ast ((ast walker:var) prev-upper prev-lower)
@@ -660,7 +661,8 @@
 		 :prev-upper prev-upper :prev-lower prev-lower :next-upper prev-upper :next-lower prev-lower
 		 :form-upper (make-results (sym-declared-type ast)) :form-lower (make-results nil)))
 
-(defmethod annotate ((ast var))
+(defmethod annotate ((ast var) &key visit)
+  (when visit (funcall visit ast))
   (the-form ast (walker:nso-name (walker:form-var ast))))
 
 (defmethod prepare-ast ((ast walker:fun) prev-upper prev-lower)
@@ -674,8 +676,9 @@
 		   (prepare-ast (walker:form-value ast) prev-upper prev-lower))))
     (make-instance 'var-binding :sym (walker:form-sym ast) :value value)))
 
-(defmethod annotate ((ast var-binding))
-  (list (walker:nso-name (walker:form-sym ast)) (annotate (walker:form-value ast))))
+(defmethod annotate ((ast var-binding) &key visit)
+  (when visit (funcall visit ast))
+  (list (walker:nso-name (walker:form-sym ast)) (annotate (walker:form-value ast) :visit visit)))
 
 (defmethod prepare-ast ((ast walker:fun-binding) prev-upper prev-lower)
   ;; augment namespaces with the parameters of the ORDINARY-LLIST.
@@ -734,23 +737,13 @@
       (make-instance 'fun-binding :sym (walker:form-sym ast) :llist llist :declspecs (walker:form-declspecs ast) :documentation (walker:form-documentation ast) :body (list parsed-body)
 		     :prevs-upper nil :prevs-lower nil))))
 
-(defun fun-declaration (fun-binding)
-  (let ((upper (form-prev-upper (car (walker:form-body fun-binding)))))
-    (list 'function
-	  (loop for arg in (walker:llist-required (walker:form-llist fun-binding)) collect
-	       (let ((type (namespace-lookup (walker:argument-var arg) upper)))
-		 (assert (not (null type)) () "Impossible type ~S for function argument ~S" type (walker:argument-var arg))
-		 type))
-	  (cadr (the-form (car (walker:form-body fun-binding)) nil)))))
-
-(defun annotate-declaration (syms upper)
-  (warn "#'ANNOTATE-DECLARATION is incorrect") ;;since it should take the #'JOIN over all NAMESPACES of a symbol, not just the first namespace"
+(defun annotate-declaration (syms sym-type-alist)
+  "Return a declaration denoting the types of SYMS in SYM-TYPE-ALIST."
+  (declare (optimize (debug 3)))
   (let ((types (make-hash-table :test #'equal)))
     (loop for sym in syms do
-	 (let ((type (namespace-lookup sym upper)))
+	 (let ((type (namespace-lookup sym sym-type-alist))) ;i'm using NAMESPACE-LOOKUP here, because it already warns on missing SYM.
 	   (assert (not (null type)) () "Impossible type ~S for variable ~S" type sym)
-	   (when (typep type 'fun-binding)
-	     (setf type (fun-declaration type)))
 	   (push sym (gethash type types nil))))
     (list* 'declare
 	   (loop for type being the hash-key of types using (hash-value syms) collect
@@ -762,18 +755,15 @@
 		       type
 		       (loop for sym in syms collect (walker:nso-name sym)))))))
 
-(defmethod annotate ((arg walker:required-argument))
-  (walker:nso-name (walker:argument-var arg)))
-
-(defmethod annotate ((llist walker:ordinary-llist))
-  (loop for arg in (walker:llist-required llist) collect (annotate arg)))
-
-(defmethod annotate ((ast fun-binding))
-  (list* (walker:nso-name (walker:form-sym ast))
-	 (annotate (walker:form-llist ast))
-	 ;;(annotate-declaration (loop for arg in (walker:llist-required (walker:form-llist ast)) collect (walker:argument-var arg)) (form-prev-upper (car (walker:form-body ast))))
-	 (loop for form in (walker:form-body ast) collect
-	      (annotate form))))
+(defmethod annotate ((ast fun-binding) &key visit)
+  (when visit (funcall visit ast))
+  (labels ((collect-llist (llist)
+	     (loop for arg in (walker:llist-required llist) collect (walker:nso-name (walker:argument-var arg)))))
+    (list* (walker:nso-name (walker:form-sym ast))
+	   (collect-llist (walker:form-llist ast))
+	   (annotate-declaration (loop for arg in (walker:llist-required (walker:form-llist ast)) collect (walker:argument-var arg)) (form-prev-upper (car (walker:form-body ast))))
+	   (loop for form in (walker:form-body ast) collect
+		(annotate form :visit visit)))))
 
 (defun prepare-bindings-ast (ast prev-upper prev-lower)
   (declare (optimize (debug 3)))
@@ -833,11 +823,46 @@
 		       :prev-upper prev-upper :prev-lower prev-lower :next-upper (copy-namespace prev-upper) :next-lower (copy-namespace prev-lower)
 		       :form-upper (make-results* :infinite t) :form-lower (make-results* :infinite nil))))))
 
-(defun annotate-bindings (ast)
+(defun annotate-declaration-in-ast (syms ast)
+  (declare (optimize (debug 3)))
+  (let ((namespace (loop for sym in syms collect (cons sym nil))))
+    (labels ((fun-declaration (fun-binding)
+	       (let ((upper (form-prev-upper (car (walker:form-body fun-binding)))))
+		 (list 'function
+		       (loop for arg in (walker:llist-required (walker:form-llist fun-binding)) collect
+			    (let ((type (namespace-lookup (walker:argument-var arg) upper)))
+			      (assert (not (null type)) () "Impossible type ~S for function argument ~S" type (walker:argument-var arg))
+			      type))
+		       (cadr (the-form (car (walker:form-body fun-binding)) nil)))))
+	     (visit-namespace (ast)
+	       (when (or (typep ast 'var-binding) (typep ast 'fun-binding) (typep ast 'tag)) ;these don't have FORM-PREV-UPPER
+		 (return-from visit-namespace))
+	       (loop for cons in namespace do
+		    (let ((types (list (namespace-lookup (car cons) (form-prev-upper ast))
+				       (namespace-lookup (car cons) (form-next-upper ast)))))
+		      (unless (null (cdr cons))
+			(push (cdr cons) types))
+		      (setf (cdr cons) (join-typelist types +builtin-typehash+))))))
+      (etypecase ast
+	(let-form
+	 (loop for form in (walker:form-body ast) do
+	      (annotate form :visit #'visit-namespace)))
+	(multiple-value-bind-form
+	 (loop for form in (walker:form-body ast) do
+	      (annotate form :visit #'visit-namespace)))
+	(flet-form
+	 ;; special handling of function bindings, since they are stored differently in the FORM-{PREV,NEXT}-{UPPER,LOWER} namespaces.
+	 (loop for cons in namespace do
+	      (let ((binding (find-if (lambda (x) (eq (car cons) (walker:form-sym x))) (walker:form-bindings ast))))
+		(setf (cdr cons) (fun-declaration binding)))))))
+    (annotate-declaration (mapcar #'car namespace) namespace)))
+
+(defun annotate-bindings (ast &key visit)
+  (when visit (funcall visit ast))
   (the-form ast (list* (etypecase (walker:form-parent ast) (walker:let-form 'let) (walker:let*-form 'let*) (walker:flet-form 'flet) (walker:labels-form 'labels))
-		       (loop for binding in (walker:form-bindings ast) collect (annotate binding))
-		       ;;(annotate-declaration (loop for binding in (walker:form-bindings ast) collect (walker:form-sym binding)) (form-prev-upper (car (walker:form-body ast))))
-		       (loop for form in (walker:form-body ast) collect (annotate form)))))
+		       (loop for binding in (walker:form-bindings ast) collect (annotate binding :visit visit))
+		       (annotate-declaration-in-ast (loop for binding in (walker:form-bindings ast) collect (walker:form-sym binding)) ast)
+		       (loop for form in (walker:form-body ast) collect (annotate form :visit visit)))))
 
 (defmethod prepare-ast ((ast walker:let-form) prev-upper prev-lower)
   (prepare-bindings-ast ast prev-upper prev-lower))
@@ -845,8 +870,9 @@
 (defmethod prepare-ast ((ast walker:let*-form) prev-upper prev-lower)
   (prepare-bindings-ast ast prev-upper prev-lower))
 
-(defmethod annotate ((ast let-form))
-  (annotate-bindings ast))
+(defmethod annotate ((ast let-form) &key visit)
+  (when visit (funcall visit ast))
+  (annotate-bindings ast :visit visit))
 
 (defmethod prepare-ast ((ast walker:flet-form) prev-upper prev-lower)
   (prepare-bindings-ast ast prev-upper prev-lower))
@@ -854,8 +880,9 @@
 (defmethod prepare-ast ((ast walker:labels-form) prev-upper prev-lower)
   (prepare-bindings-ast ast prev-upper prev-lower))
 
-(defmethod annotate ((ast flet-form))
-  (annotate-bindings ast))
+(defmethod annotate ((ast flet-form) &key visit)
+  (when visit (funcall visit ast))
+  (annotate-bindings ast :visit visit))
 
 (defmethod prepare-ast ((ast walker:application-form) prev-upper prev-lower)
   (declare (optimize (debug 3)))
@@ -876,10 +903,11 @@
 	(push form (form-prevs-upper binding))))
     form))
 
-(defmethod annotate ((ast application-form))
+(defmethod annotate ((ast application-form) &key visit)
+  (when visit (funcall visit ast))
   (the-form ast (list* (walker:nso-name (walker:form-fun ast))
 		       (loop for arg in (walker:form-arguments ast) collect
-			    (annotate arg)))))
+			    (annotate arg :visit visit)))))
 
 (defmethod prepare-ast ((ast walker:setq-form) prev-upper prev-lower)
   ;; translate the SETQ having multiple variable-value pairs into a sequence of SETQ-forms with a single variable-value pair.
@@ -901,11 +929,12 @@
 		   :prev-upper prev-upper :prev-lower prev-lower :next-upper (car (last varnamespaces-upper)) :next-lower (car (last varnamespaces-lower))
 		   :form-upper (make-results t) :form-lower (make-results nil))))
 
-(defmethod annotate ((ast setq-form))
+(defmethod annotate ((ast setq-form) &key visit)
+  (when visit (funcall visit ast))
   (let ((l nil))
     (loop for var in (walker:form-vars ast) for value in (walker:form-values ast) do
 	 (push (walker:nso-name var) l)
-	 (push (annotate value) l))
+	 (push (annotate value :visit visit) l))
     (the-form ast (cons 'setq (nreverse l)))))
 
 (defmethod prepare-ast ((ast walker:if-form) prev-upper prev-lower)
@@ -921,9 +950,12 @@
 		   :prev-upper upper :prev-lower lower :next-upper (copy-namespace upper) :next-lower (copy-namespace lower) ;variables local to a branch are not visible after the IF, but the branches could contain a SETQ, whose change we need to carry.
 		   :form-upper (make-results* :infinite t) :form-lower (make-results* :infinite nil))))
 
-(defmethod annotate ((ast alt-form))
+(defmethod annotate ((ast alt-form) &key visit)
+  (when visit (funcall visit ast))
   (assert (= (length (form-branches ast)) 2))
-  (the-form ast (list* 'if (annotate (walker:form-test ast)) (loop for branch in (form-branches ast) collect (annotate branch)))))
+  (the-form ast (list* 'if
+		       (annotate (walker:form-test ast) :visit visit)
+		       (loop for branch in (form-branches ast) collect (annotate branch :visit visit)))))
 
 (defmethod prepare-ast ((ast walker:tagbody-form) prev-upper prev-lower)
   (let ((tags-upper prev-upper)
@@ -960,12 +992,14 @@
 		     :prev-upper prev-upper :prev-lower prev-lower :next-upper (copy-namespace prev-upper) :next-lower (copy-namespace prev-lower) ;NEXT must be a separate instance, because there may be a SETQ in TAGBODY.
 		     :form-upper (make-results 'null) :form-lower (make-results 'null))))) ;TODO: FIXME: implement flow control analysis to determine whether a TAGBODY can exit via its last form, and in this case, set the result type of the TAGBODY to (VALUES NULL), but unless we can be sure that the TAGBODY exits we may not set the result type to NULL, because the TAGBODY can be the last form of a BLOCK form, and the BLOCK form will meet its result types determined from RETURN-FROM-forms with the NULL result type of its last form, which will likely result in a NULL type.
 
-(defmethod annotate ((ast tag))
+(defmethod annotate ((ast tag) &key visit)
+  (when visit (funcall visit ast))
   (walker:nso-name (walker:form-tag ast)))
 
-(defmethod annotate ((ast tagbody-form))
+(defmethod annotate ((ast tagbody-form) &key visit)
+  (when visit (funcall visit ast))
   (the-form ast (list* 'tagbody
-		       (loop for form in (walker:form-body ast) collect (annotate form)))))
+		       (loop for form in (walker:form-body ast) collect (annotate form :visit visit)))))
 
 (defmethod prepare-ast ((ast walker:go-form) prev-upper prev-lower)
   (let ((tag (namespace-lookup (walker:form-tag ast) prev-upper)))
@@ -976,7 +1010,8 @@
 		   :prev-upper prev-upper :prev-lower prev-lower :next-upper prev-upper :next-lower prev-lower
 		   :form-upper (make-results* :infinite t) :form-lower (make-results* :infinite nil))))
 
-(defmethod annotate ((ast go-form))
+(defmethod annotate ((ast go-form) &key visit)
+  (when visit (funcall visit ast))
   (the-form ast (list 'go (walker:nso-name (walker:form-tag ast)))))
 
 (defmethod prepare-ast ((ast walker:block-form) prev-upper prev-lower)
@@ -1000,9 +1035,10 @@
     (push next-lower (form-nexts-lower blo))
     current))
 
-(defmethod annotate ((ast block-form))
+(defmethod annotate ((ast block-form) &key visit)
+  (when visit (funcall visit ast))
   (the-form ast (list* 'block (walker:nso-name (walker:form-blo ast))
-		       (loop for form in (walker:form-body ast) collect (annotate form)))))
+		       (loop for form in (walker:form-body ast) collect (annotate form :visit visit)))))
 
 (defmethod prepare-ast ((ast walker:return-from-form) prev-upper prev-lower)
   (let* ((blo (namespace-lookup (walker:form-blo ast) prev-upper))
@@ -1017,8 +1053,9 @@
     (push value-next-lower (form-nexts-lower blo))
     current))
 
-(defmethod annotate ((ast return-from-form))
-  (the-form ast (list 'return-from (walker:nso-name (walker:form-blo ast)) (annotate (walker:form-value ast)))))
+(defmethod annotate ((ast return-from-form) &key visit)
+  (when visit (funcall visit ast))
+  (the-form ast (list 'return-from (walker:nso-name (walker:form-blo ast)) (annotate (walker:form-value ast) :visit visit))))
 
 (defmethod prepare-ast ((ast walker-plus:values-form) prev-upper prev-lower)
   (let* ((body (walker:form-body ast))
@@ -1033,9 +1070,10 @@
 		   :prev-upper prev-upper :prev-lower prev-lower :next-upper next-upper :next-lower next-lower
 		   :form-upper (apply #'make-results (loop repeat (length body) collect t)) :form-lower (apply #'make-results (loop repeat (length body) collect nil)))))
 
-(defmethod annotate ((ast values-form))
+(defmethod annotate ((ast values-form) &key visit)
+  (when visit (funcall visit ast))
   (the-form ast (list* 'values
-		       (loop for value in (walker:form-body ast) collect (annotate value)))))
+		       (loop for value in (walker:form-body ast) collect (annotate value :visit visit)))))
 
 (defmethod prepare-ast ((ast walker-plus:multiple-value-bind-form) prev-upper prev-lower)
   (let* ((next-upper prev-upper)
@@ -1058,13 +1096,14 @@
 		   :prev-upper prev-upper :prev-lower prev-lower :next-upper (copy-namespace prev-upper) :next-lower (copy-namespace next-lower)
 		   :form-upper (make-results* :infinite t) :form-lower (make-results* :infinite nil))))
 
-(defmethod annotate ((ast multiple-value-bind-form))
+(defmethod annotate ((ast multiple-value-bind-form) &key visit)
+  (when visit (funcall visit ast))
   (the-form ast
 	    (list* 'multiple-value-bind
 		   (loop for var in (walker:form-vars ast) collect (walker:nso-name var))
-		   (annotate (walker:form-values ast))
-		   ;;(annotate-declaration (walker:form-vars ast) (car (walker:form-body ast)))
-		   (loop for form in (walker:form-body ast) collect (annotate form)))))
+		   (annotate (walker:form-values ast) :visit visit)
+		   (annotate-declaration-in-ast (walker:form-vars ast) ast)
+		   (loop for form in (walker:form-body ast) collect (annotate form :visit visit)))))
 
 (defclass macroapplication-form (walker:macroapplication-form flowstate formvalue)
   ())
@@ -1077,7 +1116,8 @@
 		    :prev-upper prev-upper :prev-lower prev-lower :next-upper prev-upper :next-lower prev-lower
 		    :form-upper (make-results* :infinite t) :form-lower (make-results* :infinite nil)))))
 
-(defmethod annotate ((ast macroapplication-form))
+(defmethod annotate ((ast macroapplication-form) &key visit)
+  (when visit (funcall visit ast))
   (list* (walker:nso-name (walker:form-fun ast)) (walker:form-arguments ast)))
 
 (defmethod deduce-forward ((ast macroapplication-form))
