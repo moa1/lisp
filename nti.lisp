@@ -177,15 +177,14 @@
 (defun copy-namespace (namespace)
   (copy-tree namespace))
 
-(defun map-namespace (function &rest namespaces)
-  "Note that one can assign to the CAR or CONS of the CELLS."
-  (declare (type (function (&rest list) t) function))
-  (apply #'mapc
-	 (lambda (&rest cells)
-	   (assert (let ((var (caar cells))) (loop for cell in (cdr cells) always (equals (car cell) var))) () "Variable names are not equal: ~S" (mapcar #'car cells))
-	   (unless (typep (caar cells) 'walker:tag)
-	     (apply function cells)))
-	 (mapcar #'reverse namespaces)))
+(defun namespace-replace-var (namespace var)
+  "Return a copy of NAMESPACE with the cons cell of VAR replaced by a new cons cell."
+  (let ((new nil))
+    (loop for cons in namespace do
+	 (if (eq (car cons) var)
+	     (push (cons var (cdr cons)) new)
+	     (push cons new)))
+    (nreverse new)))
 
 (defun namespace-vars (namespace)
   "For debugging."
@@ -621,13 +620,23 @@
 
 ;;; PREPARE-AST
 
+(defun map-namespace (function &rest namespaces)
+  "Note that one can assign to the CAR or CONS of the CELLS."
+  (declare (optimize (debug 3)) (type (function (&rest list) t) function))
+  (apply #'mapc
+	 (lambda (&rest cells)
+	   (assert (let ((var (caar cells))) (loop for cell in (cdr cells) always (equals (car cell) var))) () "Variable names are not equal: ~S" (mapcar #'car cells))
+	   (unless (or (typep (caar cells) 'walker:tag) (typep (cdar cells) 'fun-binding) (typep (cdar cells) 'blo))
+	     (apply function cells)))
+	 (mapcar #'reverse namespaces)))
+
 (defun meet-form-results! (ast upper-results lower-results)
   "Meet FORM-UPPER and FORM-LOWER of AST with new RESULTS UPPER-RESULTS LOWER-RESULTS. Modifies AST."
   (let ((upper (form-upper ast)))
     ;; TODO: FIXME: are the following MEETs correct?
     (let ((upper-new (meet-results upper-results upper)))
       (assert (or (and (= (results-nvalues upper-new) -1) (not (null (result1 upper-new))))
-		  (and (not (< (results-most upper-new) 0)) (loop for i below (results-most upper-new) always (not (null (resultn upper-new i)))))) () "Impossible result type ~S from meet of ~S and ~S for form~%~S" upper-new upper-results upper (annotate ast))
+		  (and (not (< (results-most upper-new) 0)) (loop for i below (results-most upper-new) always (not (null (resultn upper-new i)))))) () "Impossible result type ~S from meet of ~S and ~S" upper-new upper-results upper)
       (setf (form-upper ast) upper-new)
       (setf (form-lower ast) (meet-results lower-results upper)))))
 
@@ -942,7 +951,8 @@
 	 (varnamespaces-lower nil)
 	 (values (loop for var in (walker:form-vars ast) for value in values collect
 		      (let ((value2 (prepare-ast value next-upper next-lower)))
-			(setf next-upper (copy-namespace next-upper) next-lower (copy-namespace next-lower))
+			(setf next-upper (namespace-replace-var (form-next-upper value2) var))
+			(setf next-lower (namespace-replace-var (form-next-lower value2) var))
 			(push next-upper varnamespaces-upper)
 			(push next-lower varnamespaces-lower)
 			value2))))
@@ -965,10 +975,10 @@
   (let* ((test-form (prepare-ast (walker:form-test ast) prev-upper prev-lower))
 	 (upper (form-next-upper test-form))
 	 (lower (form-next-lower test-form))
-	 (then-branch (prepare-ast (walker:form-then ast) (copy-namespace upper) (copy-namespace lower))) ;the branches need to have isolated namespaces.
+	 (then-branch (prepare-ast (walker:form-then ast) upper lower)) ;the branches need to have isolated namespaces.
 	 (else-branch (if (walker:form-else ast)
-			  (prepare-ast (walker:form-else ast) (copy-namespace upper) (copy-namespace lower))
-			  (prepare-ast (make-instance 'walker:selfevalobject :object nil) (copy-namespace upper) (copy-namespace lower))))
+			  (prepare-ast (walker:form-else ast) upper lower)
+			  (prepare-ast (make-instance 'walker:selfevalobject :object nil) upper lower)))
 	 (branches (list then-branch else-branch)))
     (make-instance 'alt-form :branches branches :test test-form
 		   :prev-upper upper :prev-lower lower :next-upper (copy-namespace upper) :next-lower (copy-namespace lower) ;variables local to a branch are not visible after the IF, but the branches could contain a SETQ, whose change we need to carry.
@@ -1157,12 +1167,11 @@
   (map-namespace (lambda (a-upper a-lower b-upper b-lower)
 		   (assert (and (not (eq a-upper a-lower)) (not (eq b-upper b-lower))))
 		   (assert (and (equal (car a-upper) (car b-upper)) (equal (car a-lower) (car b-lower)) (equal (car a-upper) (car a-lower))) () "Mismatching variable names ~S, ~S, ~S, ~S" (car a-upper) (car a-lower) (car b-upper) (car b-lower))
-		   (unless (or (typep (cdr a-upper) 'fun-binding) (typep (cdr a-upper) 'blo))
-		     (let* ((upper (cdr a-upper)))
-		       (let ((new-upper (meet (cdr b-upper) upper)))
-			 (assert (not (null new-upper)) () "Cannot meet types ~S and ~S for variable ~S" (cdr b-upper) upper (car a-upper))
-			 (setf (cdr a-upper) new-upper))
-		       (setf (cdr a-lower) (meet (cdr b-lower) upper)))))
+		   (let* ((upper (cdr a-upper)))
+		     (let ((new-upper (meet (cdr b-upper) upper)))
+		       (assert (not (null new-upper)) () "Cannot meet types ~S and ~S for variable ~S" (cdr b-upper) upper (car a-upper))
+		       (setf (cdr a-upper) new-upper))
+		     (setf (cdr a-lower) (meet (cdr b-lower) upper))))
 		 a-upper a-lower b-upper b-lower))
 
 (defun meet-namespace-prev! (form-new form-old)
@@ -1188,13 +1197,11 @@ lower(A) = (lower(B) join lower(C)) meet upper(A).
 Modifies A."
   (declare (optimize (debug 3)))
   (let ((after-upper (lambda (a-upper &rest branches-upper)
-		       (unless (or (typep (cdr a-upper) 'fun-binding) (typep (cdr a-upper) 'blo))
-			 (let ((new-upper (meet (join-typelist (mapcar #'cdr branches-upper) +builtin-typehash+) (cdr a-upper))))
-			   (assert (not (null new-upper)) () "Cannot meet types from branches ~S and ~S for variable ~S" (mapcar #'cdr branches-upper) (cdr a-upper) (car a-upper))
-			   (setf (cdr a-upper) new-upper)))))
+		       (let ((new-upper (meet (join-typelist (mapcar #'cdr branches-upper) +builtin-typehash+) (cdr a-upper))))
+			 (assert (not (null new-upper)) () "Cannot meet types from branches ~S and ~S for variable ~S" (mapcar #'cdr branches-upper) (cdr a-upper) (car a-upper))
+			 (setf (cdr a-upper) new-upper))))
 	(after-lower (lambda (a-upper a-lower &rest branches-lower)
-		       (unless (or (typep (cdr a-lower) 'fun-binding) (typep (cdr a-upper) 'blo))
-			 (setf (cdr a-lower) (meet (join-typelist (mapcar #'cdr branches-lower) +builtin-typehash+) (cdr a-upper)))))))
+		       (setf (cdr a-lower) (meet (join-typelist (mapcar #'cdr branches-lower) +builtin-typehash+) (cdr a-upper))))))
     (apply #'map-namespace after-upper a-upper bs-upper)
     (apply #'map-namespace after-lower a-upper a-lower bs-lower)))
 
@@ -1332,7 +1339,6 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 	(form-upper 'null)
 	(form-lower 'null))
     (loop for var in (walker:form-vars ast) for value in (walker:form-values ast) for varnamespace-upper in (form-varnamespaces-upper ast) for varnamespace-lower in (form-varnamespaces-lower ast) do
-	 (meet-namespaces! varnamespace-upper varnamespace-lower (form-next-upper old-form) (form-next-lower old-form))
 	 (deduce-forward value)
 	 (let* ((decl (sym-declared-type var))
 		(new-upper (meet (result1 (form-upper value)) decl))
@@ -1605,7 +1611,6 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
     (let* ((last-value (car (last (walker:form-values ast)))))
       (meet-form! last-value ast))
     (loop for var in (reverse (walker:form-vars ast)) for value in (reverse (walker:form-values ast)) for varnamespace-upper in (reverse (form-varnamespaces-upper ast)) for varnamespace-lower in (reverse (form-varnamespaces-lower ast)) do
-	 (meet-namespaces! (form-next-upper old-form) (form-next-lower old-form) varnamespace-upper varnamespace-lower)
 	 (deduce-backward value)
 	 (let* ((decl (sym-declared-type var))
 		(new-upper (meet (result1 (form-upper value)) decl))
@@ -1719,13 +1724,12 @@ lower(z) = t-function(f,0,lower(x),lower(y)) meet upper(z))"
 	 (ast (prepare-ast ast nil nil)))
     (deduce-backward ast)
     (assert (eq 'number (result1 (form-upper (car (walker:form-body (car (walker:form-bindings ast)))))))))
-  ;; TODO: FIXME:
-#|  (let* ((form '(flet ((f1 (a) (if a (1+ a) 1)))))
+  (let* ((form '(flet ((f1 (a) (if a (1+ a) 1)))))
 	 (ast (walker:parse-with-namespace form :free-namespace (walker:make-free-namespace)))
 	 (ast (prepare-ast ast nil nil)))
     (deduce-backward ast)
+    (deduce-forward ast)
     (assert (eq 'number (result1 (form-upper (car (walker:form-body (car (walker:form-bindings ast)))))))))
-|#
   )
 (test-backward)
 
