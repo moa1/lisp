@@ -56,12 +56,12 @@
 (defun walker-parse (form parent &key lexical-namespace free-namespace)
   (let ((lexical-namespace (if lexical-namespace lexical-namespace (walker:make-empty-lexical-namespace)))
 	(free-namespace (if free-namespace free-namespace (walker:make-free-namespace)))
-	(parser (walker:make-parser (list (cons #'walker-plus:parse-p #'walker-plus:parse) (cons #'walker:parse-p #'walker:parse))))
-	(declspec-parser (walker:make-parser (list (cons #'walker:parse-p-declspec #'walker:parse-declspec)))))
+	(parser (walker:make-parser (list #'walker-plus:parse-p #'walker:parse-p)))
+	(declspec-parser (walker:make-parser (list #'walker:parse-p-declspec))))
     (walker:parse form lexical-namespace free-namespace parent :parser parser :declspec-parser declspec-parser)))
 
-(defun walker-deparse (ast parent)
-  (walker-plus:deparse ast parent))
+(defun walker-deparse (ast)
+  (walker:deparse ast :deparser (walker:make-deparser (list #'walker-plus:deparse-p #'walker:deparse-p))))
 
 ;; Types
 
@@ -217,9 +217,9 @@ Return the augmented NAMESPACE."
 					       (walker:selfevalobject (convert-type-from-lisp-to-cffi (type-of (walker:selfevalobject-object arg))))
 					       (walker:the-form (convert-type-from-lisp-to-cffi (walker:form-type arg)))
 					       (t (error "Cannot determine type of argument ~A in a call to:~%~A"
-							 (walker-deparse arg nil)
-							 (cons (walker-deparse lisp-fun nil)
-							       (loop for arg in lisp-arguments collect (walker-deparse arg nil))))))))
+							 (walker-deparse arg)
+							 (cons (walker-deparse lisp-fun)
+							       (loop for arg in lisp-arguments collect (walker-deparse arg))))))))
 		   (possible-by-name-and-types (remove-if (lambda (x) (not (equal lisp-argument-types (cadr (nso-type (cdr x)))))) possible-by-name)))
 	      ;;(prind lisp-argument-types) (prind possible-by-name) (prind possible-by-name-and-types)
 	      (assert (not (null possible-by-name-and-types)) () "Lisp function ~A was augmented to C-namespace,~%but argument types do not match requested types ~A" lisp-fun lisp-argument-types)
@@ -462,7 +462,7 @@ Return the augmented NAMESPACE."
 	   (walker:augment-free-namespace (make-instance 'walker:fun :name macro :freep t :declspecs nil :macrop t) free-namespace))
       (loop for (lisp-sym c-name type) in global-variables do
 	   (let ((walker-sym (walker:namespace-lookup/create 'walker:var lisp-sym (walker:make-empty-lexical-namespace) free-namespace)))
-	     (walker:parse-declspecs `((type ,type ,lisp-sym)) (walker:make-empty-lexical-namespace) free-namespace nil :declspec-parser (walker:make-parser (list (cons #'walker:parse-p-declspec #'walker:parse-declspec))))
+	     (walker:parse-declspecs `((type ,type ,lisp-sym)) (walker:make-empty-lexical-namespace) free-namespace nil :declspec-parser (walker:make-parser (list #'walker:parse-p-declspec)))
 	     (setf namespace (augment-nso namespace (make-var c-name (convert-type-from-lisp-to-cffi type)) :lispsym walker-sym :insist-on-name t))))
       (let* ((ast (walker-parse form nil :free-namespace free-namespace))
 	     (c-lines (emitc ast namespace values))
@@ -609,7 +609,7 @@ Return the augmented NAMESPACE."
 
 (defun emitc-function-application-funcall (ast namespace values)
   (declare (optimize (debug 3)))
-  (prind (walker-deparse ast nil))
+  (prind (walker-deparse ast))
   (let* ((fun (etypecase ast (walker:application-form (walker:form-fun ast)) (walker-plus:funcall-form (walker:form-var ast))))
 	 (arguments (walker:form-arguments ast))
 	 (c-fun (etypecase ast (walker:application-form (find-fun-for-lisp-fun namespace fun arguments)) (walker-plus:funcall-form (find-var-for-lisp-var namespace fun))))
@@ -635,7 +635,7 @@ Return the augmented NAMESPACE."
 				(setf arguments-namespace (augment-nso arguments-namespace pvalue-sym))
 				(list value-sym pvalue-sym))))))
     (loop for value in values for value-type in fun-values-type do
-	 (assert (eq (cadr (nso-type value)) value-type) () "Wrong type for ~S, expected (:POINTER ~S), in application form:~%~S" value value-type (walker-deparse ast nil)))
+	 (assert (eq (cadr (nso-type value)) value-type) () "Wrong type for ~S, expected (:POINTER ~S), in application form:~%~S" value value-type (walker-deparse ast)))
     (c-code (c-scope (loop for (arg-sym parg-sym) in arguments-syms collect
 			  (c-code
 			   (c-declaration arg-sym)
@@ -786,7 +786,7 @@ Return the augmented NAMESPACE."
 (defmethod emitc ((ast walker:macroapplication-form) (namespace namespace) values)
   "This method rewrites some macro-applications to known special forms and calls #'EMITC on them."
   (declare (optimize (debug 3)))
-  (prind (walker-deparse ast nil))
+  (prind (walker-deparse ast))
   (let* ((function-symbol (walker:nso-name (walker:form-fun ast)))
 	 (arguments (walker:form-arguments ast))
 	 (lexical-namespace (walker:form-lexicalnamespace ast))
