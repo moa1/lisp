@@ -1,3 +1,17 @@
+;; (defsystem :geometry
+;;   :description "geometry utils"
+;;   :version "0.0.1"
+;;   ;; :author
+;;   ;; :license
+;;   :depends-on (:alexandria :utils)
+;;   :components ((:file "geometry")))
+
+(load "~/quicklisp/setup.lisp")
+(ql:quickload :alexandria)
+(use-package :alexandria)
+(ql:quickload :utils)
+(use-package :utils)
+
 ;;(asdf:oos 'asdf:load-op 'utils)
 ;;(use-package 'alexandria)
 ;; in slime: (load ".../geometry.lisp") avoids the undefined function

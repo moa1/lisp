@@ -1,5 +1,10 @@
-(asdf:oos 'asdf:load-op :lispbuilder-sdl)
-(asdf:oos 'asdf:load-op :geometry)
+(defpackage 3dsdl
+  (:use common-lisp))
+(in-package :3dsdl)
+
+(load "~/quicklisp/setup.lisp")
+(ql:quickload :lispbuilder-sdl)
+(load "~/lisp/geometry.lisp")
 
 (defstruct camera
   ;; camera direction vectors: the width (dir[0]) and height (dir[1]) of the projection screen as vectors and the vector to the middle of the projection screen (dir[2]). all in world coordinates   
@@ -126,7 +131,7 @@
   (let* ((projector (camera-projector :camera (display-camera display)))
 	 (from-point (funcall projector from))
 	 (to-point (funcall projector to)))
-    ;;(prind "projected" from-point to-point)
+    (prind "projected" from-point to-point)
     (cond
       ((and (<= 0 (vector3d-z from-point)) (> 0 (vector3d-z to-point)))
        (let ((factor (/ (- (vector3d-z to-point))
