@@ -1,3 +1,5 @@
+;; TODO: use editdistance.lisp to implement when selecting an organism, all other organisms should be colored according to the edit-distance to that organisms' genes using a color ramp.
+
 ;; I should let the organisms play games against each other. The games could be created randomly. A game has state (a fixed number of variables), and rules when and in what format it accepts inputs from the players, and what state these inputs change (input=function call). It also has a rule that describes what state the game has to be in so that player 1 wins, player 2 wins, etc. (or maybe an ordering of the players). The game should be fair, i.e. the game should work the same way if the order of players is permuted. There even could be games that have only one player, like puzzle-games (but how to generate them automatically?) A game could be implemented as a finite state machine.
 
 (defvar *default-random-state* (make-random-state nil)) ;save default random state using DEFVAR, this way it will only be evaluated once. Then, when we want to reset the state, we can copy *DEFAULT-RANDOM-STATE* and use it as the new state.
@@ -123,8 +125,21 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 (defvar *display-world* t)
 (defvar *orgap-min-wait* 200)
 
+(defun world-set-barriers! (world num-barriers-horizontal barrier-width-horizontal num-barriers-vertical barrier-width-vertical)
+  (let ((w (array-dimension world 0))
+	(h (array-dimension world 1)))
+    (loop for i below num-barriers-horizontal do
+	 (let ((y (random h)) (x (random w)))
+	   (loop for i below barrier-width-horizontal do
+		(setf (aref world (mod (+ x i) w) y) -1))))
+    (loop for i below num-barriers-vertical do
+	 (let ((y (random h)) (x (random w)))
+	   (loop for i below barrier-width-vertical do
+		(setf (aref world x (mod (+ y i) h)) -1))))))
+
 (defun make-world (w h energy)
-  (make-array (list w h) :initial-element energy))
+  (let ((world (make-array (list w h) :initial-element energy)))
+    world))
 (defstruct world-cloud
   x y xvel yvel edge drop-num drop-amount timeleft)
 (defun make-clouds (rain-per-coordinate num-clouds fraction-covered drop-amount world-w world-h velocity)
@@ -164,8 +179,9 @@ DROP-AMOUNT is the energy per drop."
 		       (let* ((rx (mod (+ (floor x) (random edge)) world-w))
 			      (ry (mod (+ (floor y) (random edge)) world-h))
 			      (e (aref *world* rx ry)))
-			 (let ((new-e (min *world-max-energy* (+ e drop-amount))))
-			   (setf (aref *world* rx ry) new-e))))
+			 (when (>= e 0)
+			   (let ((new-e (min *world-max-energy* (+ e drop-amount))))
+			     (setf (aref *world* rx ry) new-e)))))
 		  (setf x (mod (+ x xvel) (array-dimension *world* 0)))
 		  (setf y (mod (+ y yvel) (array-dimension *world* 1))))
 	     (setf timeleft (- time (* steps cloud-time))))))))
@@ -198,7 +214,8 @@ DROP-AMOUNT is the energy per drop."
        (orgs-add-org org)))
 
 (defun make-default-orgs (num energy &optional
-				       (genes '(set-bs-nil eat in-energy-left-an in-energy-right-bn sub-from-an-bn mrk0 read-as read-next write-as cmp-as-bs jne0 set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-x-an walk-y-an goto0))
+				       ;;(genes '(mrk0 set-bs-nil eat in-energy-left-an in-energy-right-bn sub-from-an-bn mrk1 read-as read-next write-as cmp-as-bs jne1 set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-an set-an-1 turn-cw-an set-as-nil set-bs-random cmp-as-bs jne0 jne0 jne0))
+				       (genes '(mrk0 set-bs-nil eat in-energy-left-an in-energy-right-bn sub-from-an-bn    mrk1 read-as read-bs cmp-as-bs jne1 read-next write-bs set-as-nil cmp-as-bs jne1    set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-an set-an-1 turn-cw-an set-as-nil set-bs-random cmp-as-bs jne0 jne0 jne0))
 				       )
   (loop for i below num collect
        (let* ((orgap (make-orgap genes (random (array-dimension *world* 0)) (random (array-dimension *world* 1)) energy))
@@ -207,13 +224,15 @@ DROP-AMOUNT is the energy per drop."
 	   (error "Organism ~A has code length 0" orgap))
 	 orgcont)))
 
-(defun set-default-world (&key (w 200) (h 100) (world-energy 50) (orgs 50) (org-energy 500) (reset-random-state t) (world-max-energy 4000) (rain-per-coordinate .03) (fraction-covered .25))
+(defun set-default-world (&key (w 200) (h 100) (world-energy 50) (orgs 50) (org-energy 500) (reset-random-state t) (world-max-energy 4000) (rain-per-coordinate .03) (fraction-covered .25) (num-barriers-horizontal 0) (barrier-width-horizontal 50) (num-barriers-vertical 5) (barrier-width-vertical 20))
+;;(defun set-default-world (&key (w 200) (h 100) (world-energy 50) (orgs 50) (org-energy 500) (reset-random-state t) (world-max-energy 4000) (rain-per-coordinate .03) (fraction-covered .25) (num-barriers-horizontal 30) (barrier-width-horizontal 50) (num-barriers-vertical 10) (barrier-width-vertical 20))
   (when reset-random-state
     (reset-random-state))
   (setf *id* 0)
   (setf *world-tick* 0)
   (setf *world-max-energy* world-max-energy)
   (setf *world* (make-world w h world-energy))
+  (world-set-barriers! *world* num-barriers-horizontal barrier-width-horizontal num-barriers-vertical barrier-width-vertical)
   (setf *world-clouds* (make-clouds rain-per-coordinate 3 fraction-covered 30 (array-dimension *world* 0) (array-dimension *world* 1) .1))
   (let ((orgs (make-default-orgs orgs org-energy)))
     (setf *orgs* (make-hash-table))
@@ -234,32 +253,76 @@ DROP-AMOUNT is the energy per drop."
 (defun print-orgcont (orgcont)
   (with-slots (orgap id age totage noffspring) orgcont
     (format t "genes:~A~%" (orgap-genes orgap))
-    (format t "org id:~5A wait:~4A energy:~4A age:~3A/~A x:~3A y:~3A ip:~3A/~3A tage/off(~2A):~4A~%"
-	    id (orgap-wait orgap) (orgap-energy orgap) age totage (orgap-x orgap) (orgap-y orgap) (orgap-ip orgap) (orgap-code-length orgap)
+    (format t "org id:~5A wait:~4A energy:~4A age:~3A/~A x:~3A y:~3A angle:~4A ip:~3A/~3A tage/off(~2A):~4A~%"
+	    id (orgap-wait orgap) (orgap-energy orgap) age totage (orgap-x orgap) (orgap-y orgap) (orgap-angle orgap) (orgap-ip orgap) (orgap-code-length orgap)
 	    noffspring (orgcont-tage/noff orgcont))))
 
-(defun print-org-stats (iters orgs)
-  (flet ((extremum (last-extremum value &key sort-function)
-	   (if (null last-extremum)
-	       value
-	       (if (null value)
-		   last-extremum
-		   (funcall sort-function last-extremum value)))))
-    (let ((max-org-energy 0)
-	  (avg-org-energy 0)
-	  (min-org-tage/noff nil)
-	  (length-orgs (hash-table-count orgs)))
-      (loop for org being the hash-values in orgs do
-	   (let* ((orgap (orgcont-orgap org))
-		  (e (orgap-energy orgap)))
-	     (setf max-org-energy (max max-org-energy e))
-	     (incf avg-org-energy e)
-	   (setf min-org-tage/noff (extremum min-org-tage/noff (orgcont-tage/noff org) :sort-function #'min))))
-      (setf avg-org-energy (when (> length-orgs 0) (float (/ avg-org-energy length-orgs))))
-      (format t "~A+~A (org num:~5A energy avg:~5A max:~5A tage/noff min:~4F)~%"
-	      *world-tick* iters length-orgs (round avg-org-energy) max-org-energy min-org-tage/noff))))
+(load "edit-distance.lisp")
+
+(defun compute-edit-distance (org1-genes org2-genes)
+  (declare (optimize (debug 3)))
+  (let* ((score-fn (make-edit-distance-match-score-fn 1 -1))
+	 (m (edit-distance-matrix org1-genes org2-genes score-fn -1))
+	 (score (edit-distance-score m))
+	 (length (let ((l1 (length org1-genes))
+		       (l2 (length org2-genes)))
+		   (if (or (= l1 0) (= l2 0))
+		       1.0
+				  (sqrt (* l1 l2)))))
+	 (debug1 (when (= length 0)
+		   (prind (length org1-genes) (length org2-genes))))
+	 (scaled-score (/ score length)))
+    scaled-score))
+
+(defun calculate-average-edit-distance (orgs)
+  (declare (optimize (debug 3)))
+  (let* ((orgs (let ((a (make-array (hash-table-count orgs))))
+		 (loop for v being the hash-value of orgs for i from 0 do (setf (aref a i) v))
+		 a))
+	 (n (length orgs))
+	 (score-sum 0.0))
+    (loop for i below n do
+	 ;;(loop for j from (1+ i) below n do
+	 (let* ((j (random n))
+		(org1-genes (orgap-genes (orgcont-orgap (aref orgs i))))
+		(org2-genes (orgap-genes (orgcont-orgap (aref orgs j))))
+		(scaled-score (compute-edit-distance org1-genes org2-genes)))
+	   (incf score-sum scaled-score)))
+    (/ score-sum n)
+    ))
+
+(let ((lastcall-time 0)
+      (lastcall-avgiters 0.0))
+  (defun print-org-stats (iters orgs)
+    (declare (optimize (debug 3)))
+    (flet ((extremum (last-extremum value &key sort-function)
+	     (if (null last-extremum)
+		 value
+		 (if (null value)
+		     last-extremum
+		     (funcall sort-function last-extremum value)))))
+      (let ((max-org-energy 0)
+	    (avg-org-energy 0)
+	    (min-org-tage/noff nil)
+	    (max-totage 0)
+	    (length-orgs (hash-table-count orgs)))
+	(loop for org being the hash-values in orgs do
+	     (let* ((orgap (orgcont-orgap org))
+		    (e (orgap-energy orgap)))
+	       (setf max-org-energy (max max-org-energy e))
+	       (incf avg-org-energy e)
+	       (setf min-org-tage/noff (extremum min-org-tage/noff (orgcont-tage/noff org) :sort-function #'min))
+	       (setf max-totage (max max-totage (orgcont-totage org)))))
+	(setf avg-org-energy (when (> length-orgs 0) (round (float (/ avg-org-energy length-orgs)))))
+	(let* ((now (get-internal-real-time))
+	       (iters/s (/ iters (max 0.0001 (/ (- now lastcall-time) internal-time-units-per-second)))))
+	  (setf lastcall-time now)
+	  (setf lastcall-avgiters (+ (* iters/s 0.1) (* lastcall-avgiters 0.9))))
+	(format t "iter ~A+~A ~9A/s*org (org num:~5A energy avg:~5A max:~5A tage/noff min:~6F totage max:~6A)~%"
+		*world-tick* iters (round (* lastcall-avgiters length-orgs)) length-orgs avg-org-energy max-org-energy min-org-tage/noff max-totage)))))
 
 (defmethod idleloop-event ((org orgcont))
+  (declare (optimize (debug 3)))
   (let* ((orgap (orgcont-orgap org))
 	 (lasttick (orgcont-lasttick org))
 	 (nexttick (orgcont-nexttick org))
@@ -299,7 +362,12 @@ DROP-AMOUNT is the energy per drop."
 	 (idleloop-event org)))
   (world-rain ticks)
   (print-org-stats ticks *orgs*)
-  (incf *world-tick* ticks))
+  (incf *world-tick* ticks)
+#|
+  (when (= 0 (mod (floor (/ *world-tick* ticks)) 10))
+    (format t "(statistics ed:~F)~%" (calculate-average-edit-distance *orgs*)))
+|#
+  )
 
 (defun nearest-orgap (x y orgs)
   "Return the organism in ORGS which is nearest to coordinate (X, Y)."
@@ -315,6 +383,12 @@ DROP-AMOUNT is the energy per drop."
 	   (when (or (null min-dist) (< dist min-dist))
 	     (setf min-dist dist min-org org))))
     min-org))
+
+(load "mru-cacher.lisp")
+
+(defun make-edit-distance-cacher ()
+  (declare (optimize (debug 3)))
+  (mru-function-cacher (lambda (org1 org2) (compute-edit-distance (orgap-genes (orgcont-orgap org1)) (orgap-genes (orgcont-orgap org2)))) 100000 :make-hash-table-fn #'make-sxhash-equal-hash-table))
 
 (defun software-render-texture (&key (frames -1) (win-x 212) (win-y 0) (win-w 800) (win-h 400))
   "Software renderer example, drawing a texture on the screen.
@@ -342,7 +416,9 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	     (num-frames 0)
 	     (cursor nil)
 	     (display-random-state (make-random-state t))
-	     (ticks 3200))
+	     (ticks 3200)
+	     (display-mode :energy)
+	     (edit-distance-cacher (make-edit-distance-cacher )))
 	(declare (type fixnum num-frames))
 
 	(format t "Window renderer: ~A~%" wrend)
@@ -367,10 +443,16 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 		 ;;(mod-value (sdl2:mod-value keysym))
 		 )
 	     (cond
+	       ((sdl2:scancode= scancode :scancode-f1)
+		(setf display-mode :energy))
+	       ((sdl2:scancode= scancode :scancode-f2)
+		(setf display-mode :edit-distance))
 	       ((sdl2:scancode= scancode :scancode-o) ;overview
 		(setf cursor nil))
 	       ((sdl2:scancode= scancode :scancode-d) ;display world
 		(setf *display-world* (not *display-world*)))
+	       ((sdl2:scancode= scancode :scancode-s) ;statistics
+		(format t "(statistics ed:~F)~%" (calculate-average-edit-distance *orgs*)))
 	       ((sdl2:scancode= scancode :scancode-1)
 		(setf ticks 200))
 	       ((sdl2:scancode= scancode :scancode-2)
@@ -405,8 +487,9 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	     (cond
 	       ((= buttons 1)
 		;;(format t "Mouse motion abs(rel): ~a, ~a~%Mouse buttons: ~a~%" x y buttons)
-		(setf mouse-x (/ (* x tex-w) win-w) mouse-y (/ (* y tex-h) win-h))
-		(let* ((x (floor mouse-x)) (y (floor mouse-y))
+		(let* ((mouse-x (/ (* x tex-w) win-w))
+		       (mouse-y (/ (* y tex-h) win-h))
+		       (x (floor mouse-x)) (y (floor mouse-y))
 		       (org (nearest-orgap x y *orgs*)))
 		  (setf cursor org))))))
 
@@ -423,16 +506,38 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 		       (loop for y below h do
 			    (loop for x below w do
 				 (let* ((c (min 255 (ash (aref *world* x y) -2)))
-					(color (color-to-argb8888 255 c c c)))
+					(color (cond ((>= c 0) (color-to-argb8888 255 c c c))
+						     (t (color-to-argb8888 255 0 0 255)))))
 				   (set-pixel x y color))))
-		       (loop for org being the hash-values of *orgs* do
-			    (let* ((orgap (orgcont-orgap org))
-				   (x (orgap-x orgap))
-				   (y (orgap-y orgap))
-				   (e (min 255 (orgap-energy orgap))))
-			      (if (= (orgcont-age org) 0)
-				  (set-pixel x y (color-to-argb8888 255 255 0 0))
-				  (set-pixel x y (color-to-argb8888 255 0 e (max 128 e))))))))
+		       (let ((values nil))
+			 (loop for org being the hash-values of *orgs* do
+			      (let* ((orgap (orgcont-orgap org)))
+				(ecase display-mode
+				  ((:energy)
+				   (let ((e (orgap-energy orgap)))
+				     (push (if (= (orgcont-age org) 0) -1 e) values)))
+				  ((:edit-distance)
+				   (when cursor
+				     (let* ((scaled-score (funcall edit-distance-cacher cursor org)))
+				       (push scaled-score values)))))))
+			 (setf values (nreverse values))
+			 (let ((min-value (when values (apply #'min values)))
+			       (max-value (when values (apply #'max values))))
+			   (loop
+			      for org being the hash-values of *orgs*
+			      for value in values do
+				(let* ((orgap (orgcont-orgap org))
+				       (x (floor (orgap-x orgap)))
+				       (y (floor (orgap-y orgap))))
+				  (set-pixel x y 
+					     (ecase display-mode
+					       ((:energy)
+						(if (< value 0)
+						    (color-to-argb8888 255 255 0 0)
+						    (color-to-argb8888 255 0 (min value 255) (min 255 (max 128 value)))))
+					       ((:edit-distance)
+						(color-to-argb8888 255 (floor (* 255 (/ (- value min-value) (- max-value min-value)))) 0 0)))
+					     )))))))
 		   (sdl2:update-texture tex (plus-c:c-ref sur SDL2-FFI:SDL-SURFACE :pixels) :width (* 4 tex-w))
 		   ;;TODO: call SDL_RenderClear(sdlRenderer);
 		   (sdl2:render-copy wrend tex)
@@ -442,7 +547,7 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 		     ((and (orgcont-p cursor) (> (orgap-energy (orgcont-orgap cursor)) 0))
 		      (print-orgcont cursor)
 		      (let* ((orgap (orgcont-orgap cursor))
-			     (x (orgap-x orgap)) (y (orgap-y orgap))
+			     (x (floor (orgap-x orgap))) (y (floor (orgap-y orgap)))
 			     (x1 (min (1- win-w) (max 0 (* x (/ win-w tex-w)))))
 			     (y1 (min (1- win-h) (max 0 (* y (/ win-h tex-h)))))
 			     (x2 (min (1- win-w) (max 0 (* (1+ x) (/ win-w tex-w)))))
@@ -470,9 +575,10 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	(finish-output)
 	))))
 
-(defun without-graphics ()
+(defun without-graphics (&key (ticks 100000))
   (let ((*display-world* nil))
     (loop for frame from 0 do
-	 (idleloop nil 1000000))))
+	 (idleloop ticks))))
 
-;; this one is pretty good, it can sustain 1300 organisms. It was evolved in about 3-4 hours, the clouds were changed about 3 times: (genes '(IN-ENERGY-LEFT-AN SUB-FROM-BN-AN WALK-X-BN EAT MRK0 READ-AS READ-NEXT WRITE-AS CMP-AS-BS JNE0 SET-AN-1 SETF-BN-MAX-AN-BN WALK-Y-AN ADD-TO-AN-BN MUL-TO-AN-BN EAT MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-BN-AN MUL-TO-AN-BN WALK-Y-AN SPLIT-CELL-AN ADD-TO-BN-AN SETF-AS-AN-GT0 EAT GOTO0 SIGN-AN)), or is there a bug because the organism with the highest energy has about 14.8 million energy, and the average energy is 600000. when initializing the world with organisms having the original (hand-written) genes and simulating it until it has reached a stable population of about 300-700 organisms, and then adding 50 evolved organisms, they out-compete the stable population in a short time. Also see the organisms commented out in #'MAKE-DEFAULT-ORGS.
+;;(set-default-world :w 400 :h 200 :rain-per-coordinate 0.01 :fraction-covered 0.15 :num-barriers-horizontal 120 :orgs 100)
+;;(software-render-texture)
