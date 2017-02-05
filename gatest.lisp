@@ -124,6 +124,7 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 (defvar *world-tick* 0)
 (defvar *display-world* t)
 (defvar *orgap-min-wait* 200)
+(defparameter *cursor* nil)
 
 (defun world-set-barriers! (world num-barriers-horizontal barrier-width-horizontal num-barriers-vertical barrier-width-vertical)
   (let ((w (array-dimension world 0))
@@ -157,8 +158,8 @@ DROP-AMOUNT is the energy per drop."
 		(cloud (make-world-cloud
 			:x (random world-w)
 			:y (random world-h)
-			:xvel (- (random velocity) (/ velocity 2))
-			:yvel (- (random velocity) (/ velocity 2))
+			:xvel (- (* (max 0.3 (random 1.0)) velocity) (/ velocity 2))
+			:yvel (- (* (max 0.3 (random 1.0)) velocity) (/ velocity 2))
 			:drop-num (max drop-num 1)
 			:drop-amount drop-amount
 			:edge cloud-edge
@@ -167,6 +168,7 @@ DROP-AMOUNT is the energy per drop."
 	   cloud))))
 
 (defun world-rain (iters)
+  "Below clouds, rain upon the world."
   (let ((world-w (array-dimension *world* 0))
 	(world-h (array-dimension *world* 1)))
     (loop for cloud in *world-clouds* do
@@ -214,8 +216,11 @@ DROP-AMOUNT is the energy per drop."
        (orgs-add-org org)))
 
 (defun make-default-orgs (num energy &optional
-				       ;;(genes '(mrk0 set-bs-nil eat in-energy-left-an in-energy-right-bn sub-from-an-bn mrk1 read-as read-next write-as cmp-as-bs jne1 set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-an set-an-1 turn-cw-an set-as-nil set-bs-random cmp-as-bs jne0 jne0 jne0))
-				       (genes '(mrk0 set-bs-nil eat in-energy-left-an in-energy-right-bn sub-from-an-bn    mrk1 read-as read-bs cmp-as-bs jne1 read-next write-bs set-as-nil cmp-as-bs jne1    set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-an set-an-1 turn-cw-an set-as-nil set-bs-random cmp-as-bs jne0 jne0 jne0))
+				       ;;(genes '(mrk0 set-bs-nil eat in-energy-left-an in-energy-right-bn sub-from-an-bn mrk1 read-as read-next write-as cmp-as-as-bs jne1 set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-an set-an-1 turn-cw-an set-as-nil set-bs-random cmp-as-as-bs jne0 jne0 jne0))
+				       ;;(genes '(mrk0 set-bs-nil eat in-energy-left-an in-energy-right-bn sub-from-an-bn    mrk1 read-as read-bs cmp-as-as-bs jne1 read-next write-bs set-as-nil cmp-as-as-bs jne1    set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-an set-an-1 turn-cw-an set-as-nil set-bs-random cmp-as-as-bs jne0 jne0 jne0))
+				       ;;(genes '(MRK0 SUB-FROM-BN-AN SET-BS-RANDOM MRK1 READ-BS READ-NEXT WRITE-BS CMP-AS-AS-BS JNE1 SET-ANGLE-TO-BN SET-AN-1 IN-ENERGY-Y+BN TURN-CW-BN ATTACK-TARGET SET-BN-1 SIGN-AN ADD-TO-BN-AN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN CMP-BS-GT-BN-AN MUL-TO-AN-BN MUL-TO-AN-BN SPLIT-CELL-AN WALK-AN WALK-AN SET-TARGET-NEAR SET-AS-NIL ATTACK-TARGET EAT WALK-BN EAT JNE0))
+				       ;;(genes '(IN-ENERGY-LEFT-AN MRK0 SET-AS-NIL MRK1 READ-BS READ-NEXT WRITE-BS CMP-AS-AS-BS JNE1 MUL-TO-AN-BN SET-AN-1 IN-ENERGY-LEFT-BN JNE2 MRK0 SET-BN-1 ADD-TO-BN-AN SET-AN-TO-BN ADD-TO-AN-BN MUL-TO-AN-BN MRK3 MUL-TO-AN-BN MUL-TO-AN-BN TURN-CCW-AN SET-AS-RANDOM WALK-AN SET-AN-MAX-AN-BN WALK-AN MUL-TO-AN-BN MRK3 CMP-AS-AS-BS SUB-FROM-AN-BN WALK-AN EAT MUL-TO-AN-BN WALK-BN WALK-AN IN-ANGLE-AN MRK2 SPLIT-CELL-AN EAT JNE1 SET-AS-AN-GE0 SET-AN-1 SET-AN-1 JNE0 SET-BN-TO-ENERGY))
+				       (genes '(MRK1 READ-BS READ-NEXT WRITE-BS CMP-AS-AS-BS JNE1 CMP-BS-GT-BN-AN SET-AN-1 SET-BN-1 ADD-TO-BN-AN ADD-TO-AN-BN MUL-TO-AN-BN TURN-CCW-AN MUL-TO-AN-BN ADD-TO-AN-BN WALK-AN TURN-CCW-AN WALK-BN WALK-AN WALK-AN JNE0 SET-BN-MAX-AN-BN WALK-BN CMP-AS-AS-BS WALK-BN WALK-AN WALK-AN WALK-BN WALK-AN READ-BS SET-BN--1 MRK2 IN-ANGLE-AN SPLIT-CELL-AN EAT JNE1 JNE1 MRK0 SET-BN-TO-AN))
 				       )
   (loop for i below num collect
        (let* ((orgap (make-orgap genes (random (array-dimension *world* 0)) (random (array-dimension *world* 1)) energy))
@@ -224,7 +229,7 @@ DROP-AMOUNT is the energy per drop."
 	   (error "Organism ~A has code length 0" orgap))
 	 orgcont)))
 
-(defun set-default-world (&key (w 200) (h 100) (world-energy 50) (orgs 50) (org-energy 500) (reset-random-state t) (world-max-energy 4000) (rain-per-coordinate .03) (fraction-covered .25) (num-barriers-horizontal 0) (barrier-width-horizontal 50) (num-barriers-vertical 5) (barrier-width-vertical 20))
+(defun set-default-world (&key (w 400) (h 200) (world-energy 100) (orgs 50) (org-energy 10000) (reset-random-state t) (world-max-energy 4000) (rain-per-coordinate .0075) (fraction-covered .75) (num-barriers-horizontal 0) (barrier-width-horizontal 50) (num-barriers-vertical 5) (barrier-width-vertical 20))
 ;;(defun set-default-world (&key (w 200) (h 100) (world-energy 50) (orgs 50) (org-energy 500) (reset-random-state t) (world-max-energy 4000) (rain-per-coordinate .03) (fraction-covered .25) (num-barriers-horizontal 30) (barrier-width-horizontal 50) (num-barriers-vertical 10) (barrier-width-vertical 20))
   (when reset-random-state
     (reset-random-state))
@@ -233,7 +238,7 @@ DROP-AMOUNT is the energy per drop."
   (setf *world-max-energy* world-max-energy)
   (setf *world* (make-world w h world-energy))
   (world-set-barriers! *world* num-barriers-horizontal barrier-width-horizontal num-barriers-vertical barrier-width-vertical)
-  (setf *world-clouds* (make-clouds rain-per-coordinate 3 fraction-covered 30 (array-dimension *world* 0) (array-dimension *world* 1) .1))
+  (setf *world-clouds* (make-clouds rain-per-coordinate 8 fraction-covered 30 (array-dimension *world* 0) (array-dimension *world* 1) .1))
   (let ((orgs (make-default-orgs orgs org-energy)))
     (setf *orgs* (make-hash-table))
     (orgs-add-orgs orgs)
@@ -241,6 +246,7 @@ DROP-AMOUNT is the energy per drop."
 	  (let ((heap (make-instance 'cl-heap:fibonacci-heap :key #'orgcont-nexttick :sort-fun #'<)))
 	    (cl-heap:add-all-to-heap heap orgs)
 	    heap)))
+  (setf *cursor* nil)
   nil)
 (when (null *orgs*)
   (set-default-world))
@@ -264,14 +270,9 @@ DROP-AMOUNT is the energy per drop."
   (let* ((score-fn (make-edit-distance-match-score-fn 1 -1))
 	 (m (edit-distance-matrix org1-genes org2-genes score-fn -1))
 	 (score (edit-distance-score m))
-	 (length (let ((l1 (length org1-genes))
-		       (l2 (length org2-genes)))
-		   (if (or (= l1 0) (= l2 0))
-		       1.0
-				  (sqrt (* l1 l2)))))
-	 (debug1 (when (= length 0)
-		   (prind (length org1-genes) (length org2-genes))))
-	 (scaled-score (/ score length)))
+	 (length (length org1-genes))
+	 (scaled-score (expt 2 (* (- (float score) length) 0.125)))
+	 )
     scaled-score))
 
 (defun calculate-average-edit-distance (orgs)
@@ -318,7 +319,7 @@ DROP-AMOUNT is the energy per drop."
 	       (iters/s (/ iters (max 0.0001 (/ (- now lastcall-time) internal-time-units-per-second)))))
 	  (setf lastcall-time now)
 	  (setf lastcall-avgiters (+ (* iters/s 0.1) (* lastcall-avgiters 0.9))))
-	(format t "iter ~A+~A ~9A/s*org (org num:~5A energy avg:~5A max:~5A tage/noff min:~6F totage max:~6A)~%"
+	(format t "i ~A+~A ~9Ai*org/s (org num:~4A energy avg:~5A max:~5A tage/noff min:~6F totage max:~6A)~%"
 		*world-tick* iters (round (* lastcall-avgiters length-orgs)) length-orgs avg-org-energy max-org-energy min-org-tage/noff max-totage)))))
 
 (defmethod idleloop-event ((org orgcont))
@@ -331,7 +332,7 @@ DROP-AMOUNT is the energy per drop."
     (incf (orgcont-age org) iters)
     (incf (orgcont-totage org) iters)
     ;;(prind (orgcont-id org) lasttick iters (orgap-energy orgap))
-    (multiple-value-bind (status offspring) (eval-orgap iters orgap)
+    (multiple-value-bind (status offspring) (eval-orgap iters orgap org)
       (when offspring
 	(incf (orgcont-noffspring org) (length offspring))
 	(setf (orgcont-age org) 0)
@@ -346,7 +347,7 @@ DROP-AMOUNT is the energy per drop."
       (setf (orgcont-nexttick org) (+ nexttick (orgap-wait (orgcont-orgap org)) *orgap-min-wait*))
       ;;(prind "nexttick" (orgcont-lasttick org) (orgcont-nexttick org))
       (cond
-	((and (eq status :survive) (< (orgcont-age org) 200000))
+	((eq status :survive)
 	 (cl-heap:add-to-heap *event-heap* org)
 	 (orgs-add-org org))
 	(t
@@ -369,20 +370,35 @@ DROP-AMOUNT is the energy per drop."
 |#
   )
 
-(defun nearest-orgap (x y orgs)
-  "Return the organism in ORGS which is nearest to coordinate (X, Y)."
-  (let ((min-dist nil)
-	(min-org))
+(defun nearest-orgap-genes (genes orgs &key (exclude-orgs nil))
+  "Return the organism in ORGS which has the most similar genes to GENES."
+  (let ((best-score nil)
+	(best-org))
     (loop for org being the hash-values of orgs do
-	 (let* ((orgap (orgcont-orgap org))
-		(org-x (orgap-x orgap))
-		(org-y (orgap-y orgap))
-		(diff-x (- x org-x))
-		(diff-y (- y org-y))
-		(dist (+ (* diff-x diff-x) (* diff-y diff-y))))
-	   (when (or (null min-dist) (< dist min-dist))
-	     (setf min-dist dist min-org org))))
-    min-org))
+	 (unless (find org exclude-orgs)
+	   (let* ((orgap (orgcont-orgap org))
+		  (org-genes (orgap-genes orgap))
+		  (score (compute-edit-distance genes org-genes)))
+	     (when (or (null best-score) (> score best-score))
+	       (setf best-score score best-org org)
+	       (when (= best-score 1)
+		 (return))))))
+    best-org))
+(defun nearest-orgap (x y orgs &key (exclude-orgs nil))
+  "Return the organism in ORGS which is nearest to coordinate (X, Y)."
+  (let ((best-dist nil)
+	(best-org))
+    (loop for org being the hash-values of orgs do
+	 (unless (find org exclude-orgs)
+	   (let* ((orgap (orgcont-orgap org))
+		  (org-x (orgap-x orgap))
+		  (org-y (orgap-y orgap))
+		  (diff-x (- x org-x))
+		  (diff-y (- y org-y))
+		  (dist (+ (* diff-x diff-x) (* diff-y diff-y))))
+	     (when (or (null best-dist) (< dist best-dist))
+	       (setf best-dist dist best-org org)))))
+    best-org))
 
 (load "mru-cacher.lisp")
 
@@ -414,7 +430,6 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	     ;; see .../cl-autowrap-20141217-git/cl-plus-c.md: "We may access the various fields as follows:"
 	     (first-frame-time (get-internal-real-time))
 	     (num-frames 0)
-	     (cursor nil)
 	     (display-random-state (make-random-state t))
 	     (ticks 3200)
 	     (display-mode :energy)
@@ -448,7 +463,7 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	       ((sdl2:scancode= scancode :scancode-f2)
 		(setf display-mode :edit-distance))
 	       ((sdl2:scancode= scancode :scancode-o) ;overview
-		(setf cursor nil))
+		(setf *cursor* nil))
 	       ((sdl2:scancode= scancode :scancode-d) ;display world
 		(setf *display-world* (not *display-world*)))
 	       ((sdl2:scancode= scancode :scancode-s) ;statistics
@@ -491,7 +506,7 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 		       (mouse-y (/ (* y tex-h) win-h))
 		       (x (floor mouse-x)) (y (floor mouse-y))
 		       (org (nearest-orgap x y *orgs*)))
-		  (setf cursor org))))))
+		  (setf *cursor* org))))))
 
 	  (:idle
 	   ()
@@ -517,8 +532,8 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 				   (let ((e (orgap-energy orgap)))
 				     (push (if (= (orgcont-age org) 0) -1 e) values)))
 				  ((:edit-distance)
-				   (when cursor
-				     (let* ((scaled-score (funcall edit-distance-cacher cursor org)))
+				   (when *cursor*
+				     (let* ((scaled-score (funcall edit-distance-cacher *cursor* org)))
 				       (push scaled-score values)))))))
 			 (setf values (nreverse values))
 			 (let ((min-value (when values (apply #'min values)))
@@ -544,9 +559,9 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 		   (let ((*random-state* display-random-state))
 		     (sdl2-ffi.functions::sdl-set-render-draw-color wrend 255 (random 256) (random 256) 255))
 		   (cond
-		     ((and (orgcont-p cursor) (> (orgap-energy (orgcont-orgap cursor)) 0))
-		      (print-orgcont cursor)
-		      (let* ((orgap (orgcont-orgap cursor))
+		     ((and (not (null *cursor*)) (> (orgap-energy (orgcont-orgap *cursor*)) 0))
+		      (print-orgcont *cursor*)
+		      (let* ((orgap (orgcont-orgap *cursor*))
 			     (x (floor (orgap-x orgap))) (y (floor (orgap-y orgap)))
 			     (x1 (min (1- win-w) (max 0 (* x (/ win-w tex-w)))))
 			     (y1 (min (1- win-h) (max 0 (* y (/ win-h tex-h)))))
@@ -560,7 +575,8 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 			(sdl2-ffi.functions::sdl-render-draw-line wrend (1+ x2) (1- y1) (1+ x2) (1+ y2))
 			(sdl2-ffi.functions::sdl-render-draw-line wrend (1+ x2) (1+ y2) (1- x1) (1+ y2))
 			(sdl2-ffi.functions::sdl-render-draw-line wrend (1- x1) (1+ y2) (1- x1) (1- y1))))
-		     (t (setf cursor nil)))
+		     ((not (null *cursor*))
+		      (setf *cursor* (nearest-orgap-genes (orgap-genes (orgcont-orgap *cursor*)) *orgs* :exclude-orgs (list *cursor*)))))
 		   (sdl2:render-present wrend))
 		 (incf num-frames)))
 	   )
