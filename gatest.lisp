@@ -189,10 +189,11 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 (defvar *event-heap* nil)
 (defvar *world* nil)
 (defvar *world-clouds* nil)
-(defvar *world-max-energy* 4000)
-(defvar *world-tick* 0)
+(defvar *world-max-energy* 4000 "The energy at a coordinate in the world is truncated to this value")
+(defvar *world-tick* 0 "The number of elapsed world ticks")
 (defvar *display-world* t)
-(defvar *orgap-min-wait* 200)
+(defvar *orgap-min-wait* 200 "The minimum number of ticks between an organism's events")
+(defvar *cloud-drop-wait* 200 "The number of ticks between cloud events")
 (defparameter *cursor* nil)
 
 (defun world-set-barriers! (world num-barriers-horizontal barrier-width-horizontal num-barriers-vertical barrier-width-vertical)
@@ -211,29 +212,28 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
   (let ((world (make-array (list w h) :initial-element energy)))
     world))
 (defstruct world-cloud
-  x y xvel yvel edge drop-num drop-amount nexttick)
-(defun make-clouds (rain-per-coordinate num-clouds fraction-covered drop-amount world-w world-h velocity)
-  "RAIN-PER-COORDINATE is the average rain per world coordinate per iteration.
+  x y xvel yvel edge drop-wait drop-amount (nexttick 0))
+(defun make-clouds (energy-per-coordinate-per-tick num-clouds fraction-covered world-w world-h velocity)
+  "ENERGY-PER-COORDINATE-PER-TICK is the average energy dropped per world coordinate per tick.
 FRACTION-COVERED is the fraction of the whole world covered with clouds.
-DROP-AMOUNT is the energy per drop."
+VELOCITY is the speed, i.e. position change per tick."
   (let* ((cloud-edge (round (sqrt (/ (* world-w world-h fraction-covered) num-clouds))))
-	 (total-rain (* world-w world-h rain-per-coordinate))
-	 (rain-size (round total-rain num-clouds))
-	 (rains0 (loop for i below num-clouds collect (random rain-size)))
-	 (rains (let ((sum (apply #'+ rains0))) (loop for r in rains0 collect (round (* r (/ total-rain sum)))))))
-    (format t "~&rains:~A~%" rains)
-    (loop for r in rains collect
-	 (let* ((drop-num (round (/ r drop-amount)))
+	 (energy-per-tick (* world-w world-h energy-per-coordinate-per-tick))
+	 (rain-per-cloud-per-tick (/ energy-per-tick num-clouds))
+	 (drop-wait *CLOUD-DROP-WAIT*))
+    (loop repeat num-clouds collect
+	 (let* ((random-xvel (- (random 1.0) .5))
+		(random-yvel (- (random 1.0) .5))
+		(random-vel-norm (sqrt (+ (expt random-xvel 2) (expt random-yvel 2))))
 		(cloud (make-world-cloud
 			:x (random world-w)
 			:y (random world-h)
-			:xvel (- (* (max 0.3 (random 1.0)) velocity) (/ velocity 2))
-			:yvel (- (* (max 0.3 (random 1.0)) velocity) (/ velocity 2))
-			:drop-num (max drop-num 1)
-			:drop-amount drop-amount
-			:edge cloud-edge
-			:nexttick 0)))
-	   (prind r cloud)
+			:drop-wait drop-wait
+			:drop-amount (round (* rain-per-cloud-per-tick drop-wait))
+			:xvel (* velocity drop-wait (/ random-xvel random-vel-norm))
+			:yvel (* velocity drop-wait (/ random-yvel random-vel-norm))
+			:edge cloud-edge)))
+	   (prind cloud)
 	   cloud))))
 
 (defstruct orgcont ;organism container
@@ -283,7 +283,7 @@ DROP-AMOUNT is the energy per drop."
 (defmethod eventsource-nexttick ((cloud world-cloud))
   (world-cloud-nexttick cloud))
 
-(defun set-default-world (&key (w 400) (h 200) (world-energy 0) (orgs 1000) (org-energy 4000) (reset-random-state t) (world-max-energy 4000) (num-clouds 1) (rain-per-coordinate .002) (fraction-covered .01) (velocity .01) (num-barriers-horizontal 5) (barrier-width-horizontal 40) (num-barriers-vertical 5) (barrier-width-vertical 30))
+(defun set-default-world (&key (w 400) (h 200) (world-energy 0) (orgs 1000) (org-energy 4000) (reset-random-state t) (world-max-energy 4000) (rain-per-coordinate-per-tick .00001) (num-clouds 1) (fraction-covered .01) (velocity .00001) (num-barriers-horizontal 5) (barrier-width-horizontal 40) (num-barriers-vertical 5) (barrier-width-vertical 30))
   (when reset-random-state
     (reset-random-state))
   (setf *id* 0)
@@ -291,7 +291,7 @@ DROP-AMOUNT is the energy per drop."
   (setf *world-max-energy* world-max-energy)
   (setf *world* (make-world w h world-energy))
   (world-set-barriers! *world* num-barriers-horizontal barrier-width-horizontal num-barriers-vertical barrier-width-vertical)
-  (setf *world-clouds* (make-clouds rain-per-coordinate num-clouds fraction-covered 30 (array-dimension *world* 0) (array-dimension *world* 1) velocity))
+  (setf *world-clouds* (make-clouds rain-per-coordinate-per-tick num-clouds fraction-covered (array-dimension *world* 0) (array-dimension *world* 1) velocity))
   (let ((orgs (make-default-orgs orgs org-energy)))
     (setf *orgs* (make-hash-table))
     (orgs-add-orgs orgs)
@@ -419,17 +419,16 @@ DROP-AMOUNT is the energy per drop."
   (declare (optimize (debug 3)))
   (let ((world-w (array-dimension *world* 0))
 	(world-h (array-dimension *world* 1)))
-    (with-slots (x y xvel yvel edge drop-num drop-amount nexttick) cloud
-      (loop for i below drop-num do
-	   (let* ((rx (mod (+ (floor x) (floor (* edge (random-gaussian)))) world-w))
-		  (ry (mod (+ (floor y) (floor (* edge (random-gaussian)))) world-h))
-		  (e (aref *world* rx ry)))
-	     (when (>= e 0)
-	       (let ((new-e (min *world-max-energy* (+ e drop-amount))))
-		 (setf (aref *world* rx ry) new-e)))))
+    (with-slots (x y xvel yvel edge drop-wait drop-amount nexttick) cloud
+      (let* ((rx (mod (+ (floor x) (floor (* edge (random-gaussian)))) world-w))
+	     (ry (mod (+ (floor y) (floor (* edge (random-gaussian)))) world-h))
+	     (e (aref *world* rx ry)))
+	(when (>= e 0)
+	  (let ((new-e (min *world-max-energy* (+ e drop-amount))))
+	    (setf (aref *world* rx ry) new-e))))
       (setf x (mod (+ x xvel) (array-dimension *world* 0)))
       (setf y (mod (+ y yvel) (array-dimension *world* 1)))
-      (incf nexttick 200)
+      (incf nexttick drop-wait)
       (cl-heap:add-to-heap *event-heap* cloud))))
 
 (defun idleloop (ticks)
