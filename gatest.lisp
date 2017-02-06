@@ -24,6 +24,30 @@
 		       (princ " ")))))
        (format t "~%"))))
 
+(defun random-gaussian-2 ()
+  "Return two with mean 0 and standard deviation 1 normally distributed random v
+ariables."
+  (declare (optimize (speed 3) (compilation-speed 0) (debug 3) (safety 3) (space 0)))
+  (flet ((xinit ()
+           (the single-float (- (* 2.0 (random 1.0)) 1))))
+    (do* ((x1 (xinit) (xinit))
+          (x2 (xinit) (xinit))
+          (w (+ (* x1 x1) (* x2 x2)) (+ (* x1 x1) (* x2 x2))))
+         ((< w 1.0)
+          (let* ((wlog (the single-float (log (the (single-float 0.0 *) w))))
+                 (v (the single-float (sqrt (the (single-float 0.0 *) (/ (* -2.0 wlog) w))))))
+	    (declare (type single-float wlog))
+            (values (* x1 v) (* x2 v)))))))
+
+(let ((temp nil))
+  (defun random-gaussian ()
+    (if temp
+	(prog1 temp
+	  (setf temp nil))
+	(multiple-value-bind (a b) (random-gaussian-2)
+	  (setf temp b)
+	  a))))
+
 (defun sdl-lock-surface (surface)
   "Lock SURFACE for directly accessing the pixels."
   (plus-c:c-fun sdl2-ffi::sdl-lock-surface surface))
@@ -178,8 +202,8 @@ DROP-AMOUNT is the energy per drop."
 		  (steps (floor (/ time cloud-time))))
 	     (loop for step below steps do
 		  (loop for i below drop-num do
-		       (let* ((rx (mod (+ (floor x) (random edge)) world-w))
-			      (ry (mod (+ (floor y) (random edge)) world-h))
+		       (let* ((rx (mod (+ (floor x) (floor (* edge (random-gaussian)))) world-w))
+			      (ry (mod (+ (floor y) (floor (* edge (random-gaussian)))) world-h))
 			      (e (aref *world* rx ry)))
 			 (when (>= e 0)
 			   (let ((new-e (min *world-max-energy* (+ e drop-amount))))
@@ -216,11 +240,11 @@ DROP-AMOUNT is the energy per drop."
        (orgs-add-org org)))
 
 (defun make-default-orgs (num energy &optional
-				       ;;(genes '(mrk0 set-bs-nil eat in-energy-left-an in-energy-right-bn sub-from-an-bn mrk1 read-as read-next write-as cmp-as-as-bs jne1 set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-an set-an-1 turn-cw-an set-as-nil set-bs-random cmp-as-as-bs jne0 jne0 jne0))
-				       ;;(genes '(mrk0 set-bs-nil eat in-energy-left-an in-energy-right-bn sub-from-an-bn    mrk1 read-as read-bs cmp-as-as-bs jne1 read-next write-bs set-as-nil cmp-as-as-bs jne1    set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-an set-an-1 turn-cw-an set-as-nil set-bs-random cmp-as-as-bs jne0 jne0 jne0))
-				       ;;(genes '(MRK0 SUB-FROM-BN-AN SET-BS-RANDOM MRK1 READ-BS READ-NEXT WRITE-BS CMP-AS-AS-BS JNE1 SET-ANGLE-TO-BN SET-AN-1 IN-ENERGY-Y+BN TURN-CW-BN ATTACK-TARGET SET-BN-1 SIGN-AN ADD-TO-BN-AN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN CMP-BS-GT-BN-AN MUL-TO-AN-BN MUL-TO-AN-BN SPLIT-CELL-AN WALK-AN WALK-AN SET-TARGET-NEAR SET-AS-NIL ATTACK-TARGET EAT WALK-BN EAT JNE0))
-				       ;;(genes '(IN-ENERGY-LEFT-AN MRK0 SET-AS-NIL MRK1 READ-BS READ-NEXT WRITE-BS CMP-AS-AS-BS JNE1 MUL-TO-AN-BN SET-AN-1 IN-ENERGY-LEFT-BN JNE2 MRK0 SET-BN-1 ADD-TO-BN-AN SET-AN-TO-BN ADD-TO-AN-BN MUL-TO-AN-BN MRK3 MUL-TO-AN-BN MUL-TO-AN-BN TURN-CCW-AN SET-AS-RANDOM WALK-AN SET-AN-MAX-AN-BN WALK-AN MUL-TO-AN-BN MRK3 CMP-AS-AS-BS SUB-FROM-AN-BN WALK-AN EAT MUL-TO-AN-BN WALK-BN WALK-AN IN-ANGLE-AN MRK2 SPLIT-CELL-AN EAT JNE1 SET-AS-AN-GE0 SET-AN-1 SET-AN-1 JNE0 SET-BN-TO-ENERGY))
-				       (genes '(MRK1 READ-BS READ-NEXT WRITE-BS CMP-AS-AS-BS JNE1 CMP-BS-GT-BN-AN SET-AN-1 SET-BN-1 ADD-TO-BN-AN ADD-TO-AN-BN MUL-TO-AN-BN TURN-CCW-AN MUL-TO-AN-BN ADD-TO-AN-BN WALK-AN TURN-CCW-AN WALK-BN WALK-AN WALK-AN JNE0 SET-BN-MAX-AN-BN WALK-BN CMP-AS-AS-BS WALK-BN WALK-AN WALK-AN WALK-BN WALK-AN READ-BS SET-BN--1 MRK2 IN-ANGLE-AN SPLIT-CELL-AN EAT JNE1 JNE1 MRK0 SET-BN-TO-AN))
+				       ;;(genes '(mrk0 set-bs-nil eat in-an-energy-left in-bn-energy-right sub-from-an-bn mrk1 read-as read-next write-as cmp-as-as-bs jne1 set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-an set-an-1 turn-cw-an set-as-nil set-bs-random cmp-as-as-bs jne0 jne0 jne0))
+				       ;;(genes '(mrk0 set-bs-nil eat in-an-energy-left in-bn-energy-right sub-from-an-bn    mrk1 read-as read-bs cmp-as-as-bs jne1 read-next write-bs set-as-nil cmp-as-as-bs jne1    set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-an set-an-1 turn-cw-an set-as-nil set-bs-random cmp-as-as-bs jne0 jne0 jne0))
+				       ;;(genes '(MRK0 SUB-FROM-BN-AN SET-BS-RANDOM MRK1 READ-BS READ-NEXT WRITE-BS CMP-AS-AS-BS JNE1 SET-ANGLE-TO-BN SET-AN-1 IN-BN-ENERGY-Y+ TURN-CW-BN ATTACK-TARGET SET-BN-1 SIGN-AN ADD-TO-BN-AN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN CMP-BS-GT-BN-AN MUL-TO-AN-BN MUL-TO-AN-BN SPLIT-CELL-AN WALK-AN WALK-AN SET-TARGET-NEAR SET-AS-NIL ATTACK-TARGET EAT WALK-BN EAT JNE0))
+				       ;;(genes '(MRK1 READ-BS READ-NEXT WRITE-BS IN-BN-ENERGY-X+ CMP-AS-AS-BS IN-BN-ENERGY-Y- ADD-TO-AN-BN SET-AN-1 SET-BN-1 ADD-TO-BN-AN ADD-TO-AN-BN ADD-TO-AN-BN SET-BN-MAX-AN-BN ADD-TO-AN-BN WALK-BN WALK-BN EAT JNE1 MRK0 TURN-CCW-AN WALK-AN EAT WALK-AN IN-BN-ENERGY-Y- WALK-AN READ-AS WRITE-AS WALK-AN IN-ANGLE-AN SPLIT-CELL-AN MUL-TO-BN-AN IN-BN-ENERGY-LEFT SET-AN-MAX-AN-BN EAT IN-BN-ENERGY-X+ JNE1 CMP-AS-GT-AN-BN MRK3 WAIT-AN TURN-CCW-AN))
+				       (genes '(MRK1 READ-BS READ-NEXT WRITE-BS IN-BN-ENERGY-X+ CMP-AS-AS-BS EAT ADD-TO-AN-BN SET-AN-1 SET-BN-1 ADD-TO-BN-AN ADD-TO-AN-BN ADD-TO-AN-BN SET-BN-MAX-AN-BN ADD-TO-AN-BN WALK-AN WALK-BN WALK-BN EAT WALK-AN EAT JNE1 MRK0 TURN-CCW-AN CMP-AS-AS-BS EAT WALK-AN IN-BN-ENERGY-Y- WALK-AN WRITE-AS SET-ANGLE-TO-BN WALK-AN IN-ANGLE-AN IN-ANGLE-BN SPLIT-CELL-AN MUL-TO-BN-AN IN-BN-ENERGY-LEFT SET-AN-MAX-AN-BN EAT IN-BN-ENERGY-X+ JNE1 CMP-AS-GT-AN-BN MRK3 SET-ANGLE-DOWN))
 				       )
   (loop for i below num collect
        (let* ((orgap (make-orgap genes (random (array-dimension *world* 0)) (random (array-dimension *world* 1)) energy))
@@ -229,8 +253,7 @@ DROP-AMOUNT is the energy per drop."
 	   (error "Organism ~A has code length 0" orgap))
 	 orgcont)))
 
-(defun set-default-world (&key (w 400) (h 200) (world-energy 100) (orgs 50) (org-energy 10000) (reset-random-state t) (world-max-energy 4000) (rain-per-coordinate .0075) (fraction-covered .75) (num-barriers-horizontal 0) (barrier-width-horizontal 50) (num-barriers-vertical 5) (barrier-width-vertical 20))
-;;(defun set-default-world (&key (w 200) (h 100) (world-energy 50) (orgs 50) (org-energy 500) (reset-random-state t) (world-max-energy 4000) (rain-per-coordinate .03) (fraction-covered .25) (num-barriers-horizontal 30) (barrier-width-horizontal 50) (num-barriers-vertical 10) (barrier-width-vertical 20))
+(defun set-default-world (&key (w 400) (h 200) (world-energy 0) (orgs 1000) (org-energy 4000) (reset-random-state t) (world-max-energy 4000) (num-clouds 1) (rain-per-coordinate .002) (fraction-covered .01) (velocity .01) (num-barriers-horizontal 5) (barrier-width-horizontal 40) (num-barriers-vertical 5) (barrier-width-vertical 30))
   (when reset-random-state
     (reset-random-state))
   (setf *id* 0)
@@ -238,7 +261,7 @@ DROP-AMOUNT is the energy per drop."
   (setf *world-max-energy* world-max-energy)
   (setf *world* (make-world w h world-energy))
   (world-set-barriers! *world* num-barriers-horizontal barrier-width-horizontal num-barriers-vertical barrier-width-vertical)
-  (setf *world-clouds* (make-clouds rain-per-coordinate 8 fraction-covered 30 (array-dimension *world* 0) (array-dimension *world* 1) .1))
+  (setf *world-clouds* (make-clouds rain-per-coordinate num-clouds fraction-covered 30 (array-dimension *world* 0) (array-dimension *world* 1) velocity))
   (let ((orgs (make-default-orgs orgs org-energy)))
     (setf *orgs* (make-hash-table))
     (orgs-add-orgs orgs)
@@ -259,11 +282,24 @@ DROP-AMOUNT is the energy per drop."
 (defun print-orgcont (orgcont)
   (with-slots (orgap id age totage noffspring) orgcont
     (format t "genes:~A~%" (orgap-genes orgap))
-    (format t "org id:~5A wait:~4A energy:~4A age:~3A/~A x:~3A y:~3A angle:~4A ip:~3A/~3A tage/off(~2A):~4A~%"
+    (format t "org id:~5A wait:~4A energy:~4A age:~3A/~A x:~3,2F y:~3,2F angle:~4A ip:~3A/~3A tage/off(~2A):~4A~%"
 	    id (orgap-wait orgap) (orgap-energy orgap) age totage (orgap-x orgap) (orgap-y orgap) (orgap-angle orgap) (orgap-ip orgap) (orgap-code-length orgap)
 	    noffspring (orgcont-tage/noff orgcont))))
 
 (load "edit-distance.lisp")
+
+(defun compute-raw-edit-distance (org1-genes org2-genes)
+  (declare (optimize (debug 3)))
+  (let* ((score-fn (make-edit-distance-match-score-fn 0 -1))
+	 (m (edit-distance-matrix org1-genes org2-genes score-fn -1))
+	 (score (edit-distance-score m))
+	 (length (let ((l1 (length org1-genes))
+		       (l2 (length org2-genes)))
+		   (if (or (= l1 0) (= l2 0))
+		       1.0
+		       (sqrt (* l1 l2)))))
+	 (scaled-score (/ score length)))
+    scaled-score))
 
 (defun compute-edit-distance (org1-genes org2-genes)
   (declare (optimize (debug 3)))
@@ -287,7 +323,7 @@ DROP-AMOUNT is the energy per drop."
 	 (let* ((j (random n))
 		(org1-genes (orgap-genes (orgcont-orgap (aref orgs i))))
 		(org2-genes (orgap-genes (orgcont-orgap (aref orgs j))))
-		(scaled-score (compute-edit-distance org1-genes org2-genes)))
+		(scaled-score (compute-raw-edit-distance org1-genes org2-genes)))
 	   (incf score-sum scaled-score)))
     (/ score-sum n)
     ))
@@ -302,25 +338,19 @@ DROP-AMOUNT is the energy per drop."
 		 (if (null value)
 		     last-extremum
 		     (funcall sort-function last-extremum value)))))
-      (let ((max-org-energy 0)
-	    (avg-org-energy 0)
-	    (min-org-tage/noff nil)
-	    (max-totage 0)
-	    (length-orgs (hash-table-count orgs)))
-	(loop for org being the hash-values in orgs do
-	     (let* ((orgap (orgcont-orgap org))
-		    (e (orgap-energy orgap)))
-	       (setf max-org-energy (max max-org-energy e))
-	       (incf avg-org-energy e)
-	       (setf min-org-tage/noff (extremum min-org-tage/noff (orgcont-tage/noff org) :sort-function #'min))
-	       (setf max-totage (max max-totage (orgcont-totage org)))))
-	(setf avg-org-energy (when (> length-orgs 0) (round (float (/ avg-org-energy length-orgs)))))
+      (let ((length-orgs (hash-table-count orgs))
+	    (max-org-energy (max-hash-table orgs (lambda (org) (orgap-energy (orgcont-orgap org)))))
+	    (avg-org-energy (avg-hash-table orgs (lambda (org) (orgap-energy (orgcont-orgap org)))))
+	    (avg-org-tage/noff (avg-hash-table orgs (lambda (org) (let ((a (orgcont-tage/noff org))) (if a a (values nil t))))))
+	    (max-totage (max-hash-table orgs (lambda (org) (orgcont-totage org)))))
 	(let* ((now (get-internal-real-time))
 	       (iters/s (/ iters (max 0.0001 (/ (- now lastcall-time) internal-time-units-per-second)))))
 	  (setf lastcall-time now)
 	  (setf lastcall-avgiters (+ (* iters/s 0.1) (* lastcall-avgiters 0.9))))
-	(format t "i ~A+~A ~9Ai*org/s (org num:~4A energy avg:~5A max:~5A tage/noff min:~6F totage max:~6A)~%"
-		*world-tick* iters (round (* lastcall-avgiters length-orgs)) length-orgs avg-org-energy max-org-energy min-org-tage/noff max-totage)))))
+	(flet ((genome-length (org) (length (orgap-genes (orgcont-orgap org)))))
+	  (format t "genome min:~A avg:~F max:~A~%" (genome-length (argmin-hash-table orgs #'genome-length)) (avg-hash-table orgs #'genome-length) (genome-length (argmax-hash-table orgs #'genome-length))))
+	(format t "i ~A+~A ~9Ai*org/s (org num:~4A energy avg:~5A max:~5A tage/noff avg:~6F totage max:~6A)~%"
+		*world-tick* iters (round (* lastcall-avgiters length-orgs)) length-orgs (round avg-org-energy) max-org-energy avg-org-tage/noff max-totage)))))
 
 (defmethod idleloop-event ((org orgcont))
   (declare (optimize (debug 3)))
@@ -370,35 +400,71 @@ DROP-AMOUNT is the energy per drop."
 |#
   )
 
+(defun argmax-hash-table (hash-table function &key (exclude nil))
+  (let ((best-score nil)
+	(best-element nil))
+    (loop for element being the hash-values of hash-table do
+	 (unless (find element exclude)
+	   (multiple-value-bind (score exclude-p) (funcall function element)
+	     (unless exclude-p
+	       (when (or (null best-score) (> score best-score))
+		 (setf best-score score best-element element))))))
+    best-element))
+(defun max-hash-table (hash-table function &key (exclude nil))
+  (let ((argmax (argmax-hash-table hash-table function :exclude exclude)))
+    (when argmax
+      (funcall function argmax))))
+(defun argmin-hash-table (hash-table function &key (exclude nil))
+  (let ((best-score nil)
+	(best-element nil))
+    (loop for element being the hash-values of hash-table do
+	 (unless (find element exclude)
+	   (multiple-value-bind (score exclude-p) (funcall function element)
+	     (unless exclude-p
+	       (when (or (null best-score) (< score best-score))
+		 (setf best-score score best-element element))))))
+    best-element))
+(defun min-hash-table (hash-table function &key (exclude nil))
+  (let ((argmin (argmin-hash-table hash-table function :exclude exclude)))
+    (when argmin
+      (funcall function argmin))))
+(defun avg-hash-table (hash-table function &key (exclude nil))
+  (let ((score-sum 0)
+	(count-elements 0))
+    (loop for element being the hash-values of hash-table do
+	 (unless (find element exclude)
+	   (multiple-value-bind (score exclude-p) (funcall function element)
+	     (unless exclude-p
+	       (incf score-sum score)
+	       (incf count-elements)))))
+    (if (>= count-elements 1)
+	(/ score-sum count-elements)
+	nil)))
+
 (defun nearest-orgap-genes (genes orgs &key (exclude-orgs nil))
   "Return the organism in ORGS which has the most similar genes to GENES."
-  (let ((best-score nil)
-	(best-org))
-    (loop for org being the hash-values of orgs do
-	 (unless (find org exclude-orgs)
-	   (let* ((orgap (orgcont-orgap org))
-		  (org-genes (orgap-genes orgap))
-		  (score (compute-edit-distance genes org-genes)))
-	     (when (or (null best-score) (> score best-score))
-	       (setf best-score score best-org org)
-	       (when (= best-score 1)
-		 (return))))))
-    best-org))
+  (argmax-hash-table orgs
+		     (lambda (org)
+		       (let* ((orgap (orgcont-orgap org))
+			      (org-genes (orgap-genes orgap))
+			      (score (compute-edit-distance genes org-genes)))
+			 (if (= score 1)
+			     (return-from nearest-orgap-genes org)
+			     score)))
+		     :exclude exclude-orgs))
+
 (defun nearest-orgap (x y orgs &key (exclude-orgs nil))
   "Return the organism in ORGS which is nearest to coordinate (X, Y)."
-  (let ((best-dist nil)
-	(best-org))
-    (loop for org being the hash-values of orgs do
-	 (unless (find org exclude-orgs)
-	   (let* ((orgap (orgcont-orgap org))
-		  (org-x (orgap-x orgap))
-		  (org-y (orgap-y orgap))
-		  (diff-x (- x org-x))
-		  (diff-y (- y org-y))
-		  (dist (+ (* diff-x diff-x) (* diff-y diff-y))))
-	     (when (or (null best-dist) (< dist best-dist))
-	       (setf best-dist dist best-org org)))))
-    best-org))
+  (argmin-hash-table orgs
+		     (lambda (org)
+		       (let* ((orgap (orgcont-orgap org))
+			      (org-x (orgap-x orgap))
+			      (org-y (orgap-y orgap))
+			      (diff-x (- x org-x))
+			      (diff-y (- y org-y))
+			      (dist (+ (* diff-x diff-x) (* diff-y diff-y))))
+			 dist))
+		     :exclude exclude-orgs))
 
 (load "mru-cacher.lisp")
 
@@ -431,7 +497,7 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	     (first-frame-time (get-internal-real-time))
 	     (num-frames 0)
 	     (display-random-state (make-random-state t))
-	     (ticks 3200)
+	     (ticks 12800)
 	     (display-mode :energy)
 	     (edit-distance-cacher (make-edit-distance-cacher )))
 	(declare (type fixnum num-frames))
@@ -467,6 +533,12 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	       ((sdl2:scancode= scancode :scancode-d) ;display world
 		(setf *display-world* (not *display-world*)))
 	       ((sdl2:scancode= scancode :scancode-s) ;statistics
+		(flet ((genome-length (org) (length (orgap-genes (orgcont-orgap org)))))
+		  (format t "genome min:~A avg:~F max:~A~%" (min-hash-table *orgs* #'genome-length) (avg-hash-table *orgs* #'genome-length) (max-hash-table *orgs* #'genome-length)))
+		(flet ((speed (org) (let ((orgap (orgcont-orgap org))) (if (> (orgap-walk-count orgap) 0) (/ (orgap-walk-sum orgap) (orgap-walk-count orgap)) (values nil t)))))
+		  (format t "speed min:~A avg:~F max:~A~%" (min-hash-table *orgs* #'speed) (avg-hash-table *orgs* #'speed) (max-hash-table *orgs* #'speed)))
+		(flet ((kills (org) (orgap-kills (orgcont-orgap org))))
+		  (format t "kills min:~A avg:~F max:~A~%" (min-hash-table *orgs* #'kills) (avg-hash-table *orgs* #'kills) (max-hash-table *orgs* #'kills)))
 		(format t "(statistics ed:~F)~%" (calculate-average-edit-distance *orgs*)))
 	       ((sdl2:scancode= scancode :scancode-1)
 		(setf ticks 200))
@@ -574,7 +646,8 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 			(sdl2-ffi.functions::sdl-render-draw-line wrend (1- x1) (1- y1) (1+ x2) (1- y1))
 			(sdl2-ffi.functions::sdl-render-draw-line wrend (1+ x2) (1- y1) (1+ x2) (1+ y2))
 			(sdl2-ffi.functions::sdl-render-draw-line wrend (1+ x2) (1+ y2) (1- x1) (1+ y2))
-			(sdl2-ffi.functions::sdl-render-draw-line wrend (1- x1) (1+ y2) (1- x1) (1- y1))))
+			(sdl2-ffi.functions::sdl-render-draw-line wrend (1- x1) (1+ y2) (1- x1) (1- y1))
+			))
 		     ((not (null *cursor*))
 		      (setf *cursor* (nearest-orgap-genes (orgap-genes (orgcont-orgap *cursor*)) *orgs* :exclude-orgs (list *cursor*)))))
 		   (sdl2:render-present wrend))
@@ -591,7 +664,7 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	(finish-output)
 	))))
 
-(defun without-graphics (&key (ticks 100000))
+(defun without-graphics (&key (ticks 12800))
   (let ((*display-world* nil))
     (loop for frame from 0 do
 	 (idleloop ticks))))
