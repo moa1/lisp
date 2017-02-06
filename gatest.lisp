@@ -166,7 +166,7 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
   (let ((world (make-array (list w h) :initial-element energy)))
     world))
 (defstruct world-cloud
-  x y xvel yvel edge drop-num drop-amount timeleft)
+  x y xvel yvel edge drop-num drop-amount nexttick)
 (defun make-clouds (rain-per-coordinate num-clouds fraction-covered drop-amount world-w world-h velocity)
   "RAIN-PER-COORDINATE is the average rain per world coordinate per iteration.
 FRACTION-COVERED is the fraction of the whole world covered with clouds.
@@ -187,30 +187,9 @@ DROP-AMOUNT is the energy per drop."
 			:drop-num (max drop-num 1)
 			:drop-amount drop-amount
 			:edge cloud-edge
-			:timeleft 0)))
+			:nexttick 0)))
 	   (prind r cloud)
 	   cloud))))
-
-(defun world-rain (iters)
-  "Below clouds, rain upon the world."
-  (let ((world-w (array-dimension *world* 0))
-	(world-h (array-dimension *world* 1)))
-    (loop for cloud in *world-clouds* do
-	 (with-slots (x y xvel yvel edge drop-num drop-amount timeleft) cloud
-	   (let* ((time (+ iters timeleft))
-		  (cloud-time 200)
-		  (steps (floor (/ time cloud-time))))
-	     (loop for step below steps do
-		  (loop for i below drop-num do
-		       (let* ((rx (mod (+ (floor x) (floor (* edge (random-gaussian)))) world-w))
-			      (ry (mod (+ (floor y) (floor (* edge (random-gaussian)))) world-h))
-			      (e (aref *world* rx ry)))
-			 (when (>= e 0)
-			   (let ((new-e (min *world-max-energy* (+ e drop-amount))))
-			     (setf (aref *world* rx ry) new-e)))))
-		  (setf x (mod (+ x xvel) (array-dimension *world* 0)))
-		  (setf y (mod (+ y yvel) (array-dimension *world* 1))))
-	     (setf timeleft (- time (* steps cloud-time))))))))
 
 ;; load organism implementation
 (load "~/lisp/gatest-orgap-lisp.lisp")
@@ -253,6 +232,12 @@ DROP-AMOUNT is the energy per drop."
 	   (error "Organism ~A has code length 0" orgap))
 	 orgcont)))
 
+(defmethod eventsource-nexttick ((org orgcont))
+  (orgcont-nexttick org))
+
+(defmethod eventsource-nexttick ((cloud world-cloud))
+  (world-cloud-nexttick cloud))
+
 (defun set-default-world (&key (w 400) (h 200) (world-energy 0) (orgs 1000) (org-energy 4000) (reset-random-state t) (world-max-energy 4000) (num-clouds 1) (rain-per-coordinate .002) (fraction-covered .01) (velocity .01) (num-barriers-horizontal 5) (barrier-width-horizontal 40) (num-barriers-vertical 5) (barrier-width-vertical 30))
   (when reset-random-state
     (reset-random-state))
@@ -266,8 +251,9 @@ DROP-AMOUNT is the energy per drop."
     (setf *orgs* (make-hash-table))
     (orgs-add-orgs orgs)
     (setf *event-heap*
-	  (let ((heap (make-instance 'cl-heap:fibonacci-heap :key #'orgcont-nexttick :sort-fun #'<)))
+	  (let ((heap (make-instance 'cl-heap:fibonacci-heap :key #'eventsource-nexttick :sort-fun #'<)))
 	    (cl-heap:add-all-to-heap heap orgs)
+	    (cl-heap:add-all-to-heap heap *world-clouds*)
 	    heap)))
   (setf *cursor* nil)
   nil)
@@ -384,21 +370,32 @@ DROP-AMOUNT is the energy per drop."
 	 ;;(prind "kill" (orgcont-id org) status (orgcont-age org) (orgap-energy orgap))
 	 (orgs-del-org org))))))
 
+(defmethod idleloop-event ((cloud world-cloud))
+  (declare (optimize (debug 3)))
+  (let ((world-w (array-dimension *world* 0))
+	(world-h (array-dimension *world* 1)))
+    (with-slots (x y xvel yvel edge drop-num drop-amount nexttick) cloud
+      (loop for i below drop-num do
+	   (let* ((rx (mod (+ (floor x) (floor (* edge (random-gaussian)))) world-w))
+		  (ry (mod (+ (floor y) (floor (* edge (random-gaussian)))) world-h))
+		  (e (aref *world* rx ry)))
+	     (when (>= e 0)
+	       (let ((new-e (min *world-max-energy* (+ e drop-amount))))
+		 (setf (aref *world* rx ry) new-e)))))
+      (setf x (mod (+ x xvel) (array-dimension *world* 0)))
+      (setf y (mod (+ y yvel) (array-dimension *world* 1)))
+      (incf nexttick 200)
+      (cl-heap:add-to-heap *event-heap* cloud))))
+
 (defun idleloop (ticks)
   (declare (optimize (debug 3)))
-  ;; TODO: FIXME: Make clouds and organisms conceptually to be event sources so that they have a wait time (i.e. iterations until their next event must be computed). then rewrite the following loop so that always the event source with the least wait time is computed next. Maybe use a heap tree to keep track of the minimum.
-  (loop until (let* ((org (cl-heap:peep-at-heap *event-heap*))) (or (null org) (> (orgcont-nexttick org) (+ *world-tick* ticks)))) do
+  ;; clouds and organisms conceptually are event sources that have an #'EVENTSOURCE-NEXTTICK.
+  (loop until (let* ((org (cl-heap:peep-at-heap *event-heap*))) (or (null org) (> (eventsource-nexttick org) (+ *world-tick* ticks)))) do
        ;;(prind *world-tick* *orgs* *event-heap*)
        (let* ((org (cl-heap:pop-heap *event-heap*)))
 	 (idleloop-event org)))
-  (world-rain ticks)
   (print-org-stats ticks *orgs*)
-  (incf *world-tick* ticks)
-#|
-  (when (= 0 (mod (floor (/ *world-tick* ticks)) 10))
-    (format t "(statistics ed:~F)~%" (calculate-average-edit-distance *orgs*)))
-|#
-  )
+  (incf *world-tick* ticks))
 
 (defun argmax-hash-table (hash-table function &key (exclude nil))
   (let ((best-score nil)
