@@ -48,6 +48,51 @@ ariables."
 	  (setf temp b)
 	  a))))
 
+(defun argmax-hash-table (hash-table function &key (exclude nil))
+  (let ((best-score nil)
+	(best-element nil))
+    (loop for element being the hash-values of hash-table do
+	 (unless (find element exclude)
+	   (multiple-value-bind (score exclude-p) (funcall function element)
+	     (unless exclude-p
+	       (when (or (null best-score) (> score best-score))
+		 (setf best-score score best-element element))))))
+    best-element))
+
+(defun max-hash-table (hash-table function &key (exclude nil))
+  (let ((argmax (argmax-hash-table hash-table function :exclude exclude)))
+    (when argmax
+      (funcall function argmax))))
+
+(defun argmin-hash-table (hash-table function &key (exclude nil))
+  (let ((best-score nil)
+	(best-element nil))
+    (loop for element being the hash-values of hash-table do
+	 (unless (find element exclude)
+	   (multiple-value-bind (score exclude-p) (funcall function element)
+	     (unless exclude-p
+	       (when (or (null best-score) (< score best-score))
+		 (setf best-score score best-element element))))))
+    best-element))
+
+(defun min-hash-table (hash-table function &key (exclude nil))
+  (let ((argmin (argmin-hash-table hash-table function :exclude exclude)))
+    (when argmin
+      (funcall function argmin))))
+
+(defun avg-hash-table (hash-table function &key (exclude nil))
+  (let ((score-sum 0)
+	(count-elements 0))
+    (loop for element being the hash-values of hash-table do
+	 (unless (find element exclude)
+	   (multiple-value-bind (score exclude-p) (funcall function element)
+	     (unless exclude-p
+	       (incf score-sum score)
+	       (incf count-elements)))))
+    (if (>= count-elements 1)
+	(/ score-sum count-elements)
+	nil)))
+
 (defun sdl-lock-surface (surface)
   "Lock SURFACE for directly accessing the pixels."
   (plus-c:c-fun sdl2-ffi::sdl-lock-surface surface))
@@ -191,10 +236,6 @@ DROP-AMOUNT is the energy per drop."
 	   (prind r cloud)
 	   cloud))))
 
-;; load organism implementation
-(load "~/lisp/gatest-orgap-lisp.lisp")
-;;(load "~/lisp/gatest-orgap-lightning.lisp")
-
 (defstruct orgcont ;organism container
   orgap
   (id (incf *id*))
@@ -203,6 +244,10 @@ DROP-AMOUNT is the energy per drop."
   (noffspring 0)
   (lasttick 0)
   (nexttick 0))
+
+;; load organism implementation
+(load "~/lisp/gatest-orgap-lisp.lisp")
+;;(load "~/lisp/gatest-orgap-lightning.lisp")
 
 (defun orgcont-copy (orgcont)
   (with-slots (orgap id age totage noffspring lasttick) orgcont
@@ -396,47 +441,6 @@ DROP-AMOUNT is the energy per drop."
 	 (idleloop-event org)))
   (print-org-stats ticks *orgs*)
   (incf *world-tick* ticks))
-
-(defun argmax-hash-table (hash-table function &key (exclude nil))
-  (let ((best-score nil)
-	(best-element nil))
-    (loop for element being the hash-values of hash-table do
-	 (unless (find element exclude)
-	   (multiple-value-bind (score exclude-p) (funcall function element)
-	     (unless exclude-p
-	       (when (or (null best-score) (> score best-score))
-		 (setf best-score score best-element element))))))
-    best-element))
-(defun max-hash-table (hash-table function &key (exclude nil))
-  (let ((argmax (argmax-hash-table hash-table function :exclude exclude)))
-    (when argmax
-      (funcall function argmax))))
-(defun argmin-hash-table (hash-table function &key (exclude nil))
-  (let ((best-score nil)
-	(best-element nil))
-    (loop for element being the hash-values of hash-table do
-	 (unless (find element exclude)
-	   (multiple-value-bind (score exclude-p) (funcall function element)
-	     (unless exclude-p
-	       (when (or (null best-score) (< score best-score))
-		 (setf best-score score best-element element))))))
-    best-element))
-(defun min-hash-table (hash-table function &key (exclude nil))
-  (let ((argmin (argmin-hash-table hash-table function :exclude exclude)))
-    (when argmin
-      (funcall function argmin))))
-(defun avg-hash-table (hash-table function &key (exclude nil))
-  (let ((score-sum 0)
-	(count-elements 0))
-    (loop for element being the hash-values of hash-table do
-	 (unless (find element exclude)
-	   (multiple-value-bind (score exclude-p) (funcall function element)
-	     (unless exclude-p
-	       (incf score-sum score)
-	       (incf count-elements)))))
-    (if (>= count-elements 1)
-	(/ score-sum count-elements)
-	nil)))
 
 (defun nearest-orgap-genes (genes orgs &key (exclude-orgs nil))
   "Return the organism in ORGS which has the most similar genes to GENES."
