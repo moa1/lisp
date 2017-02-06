@@ -665,10 +665,26 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	(finish-output)
 	))))
 
-(defun without-graphics (&key (ticks 12800))
-  (let ((*display-world* nil))
-    (loop for frame from 0 do
-	 (idleloop ticks))))
+(defun without-graphics (&optional (total-ticks nil))
+  "Simulate the world for TOTAL-TICKS ticks, or until pressing CTRL-C, if TOTAL-TICKS is NIL."
+  (let ((quit-without-graphics nil)
+	(*display-world* nil))
+    (restart-bind ((quit-without-graphics (lambda (&optional v)
+					    (declare (ignore v))
+					    (setf quit-without-graphics t)
+					    (continue))
+		     :report-function
+		     (lambda (stream)
+		       (format stream "Quit #'WITHOUT-GRAPHICS after finishing the current loop."))))
+      (loop do
+	   (idleloop (if total-ticks total-ticks 1000000))
+	   (let ((random-org (random (hash-table-count *orgs*))))
+	     (loop for org being the hash-value of *orgs* for i from 0 do
+		  (when (= i random-org)
+		    (print-orgcont org)
+		    (return))))
+	   (when (or total-ticks quit-without-graphics)
+	     (return))))))
 
 ;;(set-default-world :w 400 :h 200 :rain-per-coordinate 0.01 :fraction-covered 0.15 :num-barriers-horizontal 120 :orgs 100)
 ;;(software-render-texture)
