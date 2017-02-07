@@ -191,9 +191,11 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 (defvar *world-clouds* nil)
 (defvar *world-max-energy* 4000 "The energy at a coordinate in the world is truncated to this value")
 (defvar *world-tick* 0 "The number of elapsed world ticks")
-(defvar *display-world* t)
 (defvar *orgap-min-wait* 200 "The minimum number of ticks between an organism's events")
 (defvar *cloud-drop-wait* 200 "The number of ticks between cloud events")
+;; display variables
+(defvar *display-world* t)
+(defvar *print-statistics* nil)
 (defparameter *cursor* nil)
 
 (defun world-set-barriers! (world num-barriers-horizontal barrier-width-horizontal num-barriers-vertical barrier-width-vertical)
@@ -211,47 +213,52 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 (defun make-world (w h energy)
   (let ((world (make-array (list w h) :initial-element energy)))
     world))
-(defstruct world-cloud
-  x y xvel yvel edge drop-wait drop-amount (nexttick 0))
-(defun make-clouds (energy-per-coordinate-per-tick num-clouds fraction-covered world-w world-h velocity)
+(defclass cloud ()
+  ((position-function :initarg :position-function :accessor cloud-position-function)
+   (edge :initarg :edge :accessor cloud-edge)
+   (drop-wait :initarg :drop-wait :accessor cloud-drop-wait)
+   (drop-amount :initarg :drop-amount :accessor cloud-drop-amount)
+   (nexttick :initform 0 :initarg :nexttick :accessor cloud-nexttick)))
+
+(defun make-cloud (energy-per-coordinate-per-tick fraction-covered world-w world-h position-function)
   "ENERGY-PER-COORDINATE-PER-TICK is the average energy dropped per world coordinate per tick.
 FRACTION-COVERED is the fraction of the whole world covered with clouds.
 VELOCITY is the speed, i.e. position change per tick."
-  (let* ((cloud-edge (round (sqrt (/ (* world-w world-h fraction-covered) num-clouds))))
+  (let* ((edge (round (sqrt (* world-w world-h fraction-covered))))
 	 (energy-per-tick (* world-w world-h energy-per-coordinate-per-tick))
-	 (rain-per-cloud-per-tick (/ energy-per-tick num-clouds))
-	 (drop-wait *CLOUD-DROP-WAIT*))
-    (loop repeat num-clouds collect
-	 (let* ((random-xvel (- (random 1.0) .5))
-		(random-yvel (- (random 1.0) .5))
-		(random-vel-norm (sqrt (+ (expt random-xvel 2) (expt random-yvel 2))))
-		(cloud (make-world-cloud
-			:x (random world-w)
-			:y (random world-h)
-			:drop-wait drop-wait
-			:drop-amount (round (* rain-per-cloud-per-tick drop-wait))
-			:xvel (* velocity drop-wait (/ random-xvel random-vel-norm))
-			:yvel (* velocity drop-wait (/ random-yvel random-vel-norm))
-			:edge cloud-edge)))
-	   (prind cloud)
-	   cloud))))
+	 (drop-wait *CLOUD-DROP-WAIT*)
+	 (drop-amount (round (* energy-per-tick drop-wait))))
+    (let* ((cloud (make-instance 'cloud
+				 :position-function position-function
+				 :edge edge
+				 :drop-wait drop-wait
+				 :drop-amount drop-amount)))
+      (prind position-function drop-wait drop-amount edge)
+      cloud)))
 
-(defstruct orgcont ;organism container
-  orgap
-  (id (incf *id*))
-  (age 0)
-  (totage 0)
-  (noffspring 0)
-  (lasttick 0)
-  (nexttick 0))
+(defclass orgcont () ;organism container
+  ((orgap :initarg :orgap :accessor orgcont-orgap)
+   (id :initform (incf *id*) :initarg :id :accessor orgcont-id)
+   (lasttick :initform 0 :initarg :lasttick :accessor orgcont-lasttick)
+   (nexttick :initform 0 :initarg :nexttick :accessor orgcont-nexttick)
+   ;;statistics
+   (age :initform 0 :initarg :age :accessor orgcont-age)
+   (totage :initform 0 :initarg :totage :accessor orgcont-totage)
+   (offspring-count :initform 0 :initarg :offspring-count :accessor orgcont-offspring-count)
+   (offspring-energy-sum :initform 0 :initarg :offspring-energy-sum :accessor orgcont-offspring-energy-sum)
+   (walk-sum :initform 0.0 :initarg :walk-sum :accessor orgcont-walk-sum)
+   (walk-count :initform 0 :initarg :walk-count :accessor orgcont-walk-count)
+   (kill-count :initform 0 :initarg :kill-count :accessor orgcont-kill-count)))
+(defun make-orgcont (&rest args)
+  (apply #'make-instance 'orgcont args))
 
 ;; load organism implementation
 (load "~/lisp/gatest-orgap-lisp.lisp")
 ;;(load "~/lisp/gatest-orgap-lightning.lisp")
 
 (defun orgcont-copy (orgcont)
-  (with-slots (orgap id age totage noffspring lasttick) orgcont
-    (make-orgcont :orgap (copy-orgap orgap) :id id :age age :totage totage :noffspring noffspring :lasttick lasttick)))
+  (with-slots (orgap id age totage offspring-count lasttick) orgcont
+    (make-orgcont :orgap (copy-orgap orgap) :id id :age age :totage totage :offspring-count offspring-count :lasttick lasttick)))
 
 (defun orgs-add-org (orgcont)
   (setf (gethash (orgcont-id orgcont) *orgs*) orgcont))
@@ -267,23 +274,35 @@ VELOCITY is the speed, i.e. position change per tick."
 				       ;;(genes '(mrk0 set-bs-nil eat in-an-energy-left in-bn-energy-right sub-from-an-bn mrk1 read-as read-next write-as cmp-as-as-bs jne1 set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-an set-an-1 turn-cw-an set-as-nil set-bs-random cmp-as-as-bs jne0 jne0 jne0))
 				       ;;(genes '(mrk0 set-bs-nil eat in-an-energy-left in-bn-energy-right sub-from-an-bn    mrk1 read-as read-bs cmp-as-as-bs jne1 read-next write-bs set-as-nil cmp-as-as-bs jne1    set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-an set-an-1 turn-cw-an set-as-nil set-bs-random cmp-as-as-bs jne0 jne0 jne0))
 				       ;;(genes '(MRK0 SUB-FROM-BN-AN SET-BS-RANDOM MRK1 READ-BS READ-NEXT WRITE-BS CMP-AS-AS-BS JNE1 SET-ANGLE-TO-BN SET-AN-1 IN-BN-ENERGY-Y+ TURN-CW-BN ATTACK-TARGET SET-BN-1 SIGN-AN ADD-TO-BN-AN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN CMP-BS-GT-BN-AN MUL-TO-AN-BN MUL-TO-AN-BN SPLIT-CELL-AN WALK-AN WALK-AN SET-TARGET-NEAR SET-AS-NIL ATTACK-TARGET EAT WALK-BN EAT JNE0))
-				       ;;(genes '(MRK1 READ-BS READ-NEXT WRITE-BS IN-BN-ENERGY-X+ CMP-AS-AS-BS IN-BN-ENERGY-Y- ADD-TO-AN-BN SET-AN-1 SET-BN-1 ADD-TO-BN-AN ADD-TO-AN-BN ADD-TO-AN-BN SET-BN-MAX-AN-BN ADD-TO-AN-BN WALK-BN WALK-BN EAT JNE1 MRK0 TURN-CCW-AN WALK-AN EAT WALK-AN IN-BN-ENERGY-Y- WALK-AN READ-AS WRITE-AS WALK-AN IN-ANGLE-AN SPLIT-CELL-AN MUL-TO-BN-AN IN-BN-ENERGY-LEFT SET-AN-MAX-AN-BN EAT IN-BN-ENERGY-X+ JNE1 CMP-AS-GT-AN-BN MRK3 WAIT-AN TURN-CCW-AN))
-				       (genes '(MRK1 READ-BS READ-NEXT WRITE-BS IN-BN-ENERGY-X+ CMP-AS-AS-BS EAT ADD-TO-AN-BN SET-AN-1 SET-BN-1 ADD-TO-BN-AN ADD-TO-AN-BN ADD-TO-AN-BN SET-BN-MAX-AN-BN ADD-TO-AN-BN WALK-AN WALK-BN WALK-BN EAT WALK-AN EAT JNE1 MRK0 TURN-CCW-AN CMP-AS-AS-BS EAT WALK-AN IN-BN-ENERGY-Y- WALK-AN WRITE-AS SET-ANGLE-TO-BN WALK-AN IN-ANGLE-AN IN-ANGLE-BN SPLIT-CELL-AN MUL-TO-BN-AN IN-BN-ENERGY-LEFT SET-AN-MAX-AN-BN EAT IN-BN-ENERGY-X+ JNE1 CMP-AS-GT-AN-BN MRK3 SET-ANGLE-DOWN))
+				       ;;(genes '(MRK1 READ-BS READ-NEXT WRITE-BS IN-BN-ENERGY-X+ CMP-AS-AS-BS IN-BN-ENERGY-Y- ADD-TO-AN-BN SET-AN-1 SET-BN-1 ADD-TO-BN-AN ADD-TO-AN-BN ADD-TO-AN-BN SET-BN-MAX-AN-BN ADD-TO-AN-BN WALK-BN WALK-BN EAT JNE1 MRK0 TURN-CCW-AN WALK-AN EAT WALK-AN IN-BN-ENERGY-Y- WALK-AN READ-AS WRITE-AS WALK-AN IN-AN-ANGLE SPLIT-CELL-AN MUL-TO-BN-AN IN-BN-ENERGY-LEFT SET-AN-MAX-AN-BN EAT IN-BN-ENERGY-X+ JNE1 CMP-AS-GT-AN-BN MRK3 WAIT-AN TURN-CCW-AN))
+				       ;;(genes '(MRK1 READ-BS READ-NEXT WRITE-BS IN-BN-ENERGY-X+ CMP-AS-AS-BS EAT ADD-TO-AN-BN SET-AN-1 SET-BN-1 ADD-TO-BN-AN ADD-TO-AN-BN ADD-TO-AN-BN SET-BN-MAX-AN-BN ADD-TO-AN-BN WALK-AN WALK-BN WALK-BN EAT WALK-AN EAT JNE1 MRK0 TURN-CCW-AN CMP-AS-AS-BS EAT WALK-AN IN-BN-ENERGY-Y- WALK-AN WRITE-AS SET-ANGLE-TO-BN WALK-AN IN-AN-ANGLE IN-BN-ANGLE SPLIT-CELL-AN MUL-TO-BN-AN IN-BN-ENERGY-LEFT SET-AN-MAX-AN-BN EAT IN-BN-ENERGY-X+ JNE1 CMP-AS-GT-AN-BN MRK3 SET-ANGLE-DOWN))
+				       (genes '(MRK1 READ-BS READ-NEXT WRITE-BS TURN-CCW-BN IN-BN-ENERGY-X+ CMP-AS-AS-BS EAT ADD-TO-AN-BN SET-AN-1 SET-BN-1 WRITE-AS ADD-TO-BN-AN ADD-TO-AN-BN ADD-TO-AN-BN SET-BN-MAX-AN-BN ADD-TO-AN-BN WALK-AN WALK-BN WALK-BN WALK-AN WALK-AN JNE1 MRK0 TURN-CCW-AN CMP-AS-AS-BS EAT WALK-AN IN-BN-ENERGY-Y- WALK-AN WRITE-AS SET-ANGLE-TO-BN WALK-AN IN-AN-ANGLE IN-BN-ANGLE SPLIT-CELL-AN MUL-TO-BN-AN IN-BN-ENERGY-LEFT SET-AN-MAX-AN-BN EAT IN-BN-ENERGY-X+ TURN-CW-AN JNE1 SET-AN-1 CMP-AS-GT-AN-BN MRK3 SET-ANGLE-DOWN TURN-CCW-AN IN-BN-ENERGY-LEFT))
 				       )
   (loop for i below num collect
-       (let* ((orgap (make-orgap genes (random (array-dimension *world* 0)) (random (array-dimension *world* 1)) energy))
-	      (orgcont (make-orgcont :orgap orgap :nexttick *orgap-min-wait*)))
-	 (when (= 0 (orgap-code-length orgap))
-	   (error "Organism ~A has code length 0" orgap))
-	 orgcont)))
+       (let ((x (random (array-dimension *world* 0)))
+	     (y (random (array-dimension *world* 1))))
+	 (loop until (>= (aref *world* x y) 0) do
+	      (setf x (random (array-dimension *world* 0))
+		    y (random (array-dimension *world* 1))))
+	 (let* ((orgap (make-orgap genes x y (random (ceiling (* 2 pi 128))) energy))
+		(orgcont (make-orgcont :orgap orgap :nexttick *orgap-min-wait*)))
+	   (when (= 0 (orgap-code-length orgap))
+	     (error "Organism ~A has code length 0" orgap))
+	   orgcont))))
 
 (defmethod eventsource-nexttick ((org orgcont))
   (orgcont-nexttick org))
 
-(defmethod eventsource-nexttick ((cloud world-cloud))
-  (world-cloud-nexttick cloud))
+(defmethod eventsource-nexttick ((cloud cloud))
+  (cloud-nexttick cloud))
 
-(defun set-default-world (&key (w 400) (h 200) (world-energy 0) (orgs 1000) (org-energy 4000) (reset-random-state t) (world-max-energy 4000) (rain-per-coordinate-per-tick .00001) (num-clouds 1) (fraction-covered .01) (velocity .00001) (num-barriers-horizontal 5) (barrier-width-horizontal 40) (num-barriers-vertical 5) (barrier-width-vertical 30))
+(defun cloud-position-line (tick)
+  (values (* tick .00001 .707) (* tick .00001 .707)))
+
+(defun cloud-position-circle (tick)
+  (values (+ (* 300 (cos (* tick .00000005)))) (+ (* 300 (sin (* tick .00000005))))))
+
+(defun set-default-world (&key (w 400) (h 200) (world-energy 0) (orgs 1000) (org-energy 4000) (reset-random-state t) (world-max-energy 4000) (rain-per-coordinate-per-tick .00001) (fraction-covered .01) (position-function #'cloud-position-circle) (num-barriers-horizontal 5) (barrier-width-horizontal 40) (num-barriers-vertical 5) (barrier-width-vertical 30))
   (when reset-random-state
     (reset-random-state))
   (setf *id* 0)
@@ -291,7 +310,7 @@ VELOCITY is the speed, i.e. position change per tick."
   (setf *world-max-energy* world-max-energy)
   (setf *world* (make-world w h world-energy))
   (world-set-barriers! *world* num-barriers-horizontal barrier-width-horizontal num-barriers-vertical barrier-width-vertical)
-  (setf *world-clouds* (make-clouds rain-per-coordinate-per-tick num-clouds fraction-covered (array-dimension *world* 0) (array-dimension *world* 1) velocity))
+  (setf *world-clouds* (list (make-cloud rain-per-coordinate-per-tick fraction-covered (array-dimension *world* 0) (array-dimension *world* 1) position-function)))
   (let ((orgs (make-default-orgs orgs org-energy)))
     (setf *orgs* (make-hash-table))
     (orgs-add-orgs orgs)
@@ -305,17 +324,22 @@ VELOCITY is the speed, i.e. position change per tick."
 (when (null *orgs*)
   (set-default-world))
 
-(defun orgcont-tage/noff (orgcont)
-  (let ((totage (orgcont-totage orgcont))
-	(noffspring (orgcont-noffspring orgcont)))
-    (when (> noffspring 0) (float (/ totage noffspring)))))
+(defun print-orgap (org)
+  (with-slots (ip genes off-genes as bs an bn memory) (orgcont-orgap org)
+    (format t "orgap ip:~3A/~3A as:~16A bs:~16A an:~A bn:~A~%"
+	    ip (length genes) as bs an bn)
+    (format t "orgap memory:~S~%"
+	    memory)
+    (format t "~A length:~S~%" genes (length genes))))
 
 (defun print-orgcont (orgcont)
-  (with-slots (orgap id age totage noffspring) orgcont
-    (format t "genes:~A~%" (orgap-genes orgap))
-    (format t "org id:~5A wait:~4A energy:~4A age:~3A/~A x:~3,2F y:~3,2F angle:~4A ip:~3A/~3A tage/off(~2A):~4A~%"
-	    id (orgap-wait orgap) (orgap-energy orgap) age totage (orgap-x orgap) (orgap-y orgap) (orgap-angle orgap) (orgap-ip orgap) (orgap-code-length orgap)
-	    noffspring (orgcont-tage/noff orgcont))))
+  (with-slots (orgap id age totage offspring-count offspring-energy-sum walk-sum walk-count kill-count) orgcont
+    (format t "org id:~5A wait:~4A energy:~4A age:~3A/~A tage/off(~2A):~6F off-energy avg:~4A~%"
+	    id (orgap-wait orgap) (orgap-energy orgap) age totage
+	    offspring-count (when (> offspring-count 0) (float (/ totage offspring-count))) (when (> offspring-count 0) (round offspring-energy-sum offspring-count)))
+    (format t "org x:~3,2F y:~3,2F angle:~4A speed avg:~1,3F kills:~3A~%"
+	    (orgap-x orgap) (orgap-y orgap) (orgap-angle orgap) (when (> walk-count 0) (/ walk-sum walk-count)) kill-count))
+  (print-orgap orgcont))
 
 (load "edit-distance.lisp")
 
@@ -359,29 +383,24 @@ VELOCITY is the speed, i.e. position change per tick."
     (/ score-sum n)
     ))
 
-(let ((lastcall-time 0)
-      (lastcall-avgiters 0.0))
-  (defun print-org-stats (iters orgs)
-    (declare (optimize (debug 3)))
-    (flet ((extremum (last-extremum value &key sort-function)
-	     (if (null last-extremum)
-		 value
-		 (if (null value)
-		     last-extremum
-		     (funcall sort-function last-extremum value)))))
-      (let ((length-orgs (hash-table-count orgs))
-	    (max-org-energy (max-hash-table orgs (lambda (org) (orgap-energy (orgcont-orgap org)))))
-	    (avg-org-energy (avg-hash-table orgs (lambda (org) (orgap-energy (orgcont-orgap org)))))
-	    (avg-org-tage/noff (avg-hash-table orgs (lambda (org) (let ((a (orgcont-tage/noff org))) (if a a (values nil t))))))
-	    (max-totage (max-hash-table orgs (lambda (org) (orgcont-totage org)))))
-	(let* ((now (get-internal-real-time))
-	       (iters/s (/ iters (max 0.0001 (/ (- now lastcall-time) internal-time-units-per-second)))))
-	  (setf lastcall-time now)
-	  (setf lastcall-avgiters (+ (* iters/s 0.1) (* lastcall-avgiters 0.9))))
-	(flet ((genome-length (org) (length (orgap-genes (orgcont-orgap org)))))
-	  (format t "genome min:~A avg:~F max:~A~%" (genome-length (argmin-hash-table orgs #'genome-length)) (avg-hash-table orgs #'genome-length) (genome-length (argmax-hash-table orgs #'genome-length))))
-	(format t "i ~A+~A ~9Ai*org/s (org num:~4A energy avg:~5A max:~5A tage/noff avg:~6F totage max:~6A)~%"
-		*world-tick* iters (round (* lastcall-avgiters length-orgs)) length-orgs (round avg-org-energy) max-org-energy avg-org-tage/noff max-totage)))))
+(defun print-statistics ()
+  (flet ((genome-length (org) (length (orgap-genes (orgcont-orgap org)))))
+    (format t "genome min:~3A avg:~3F max:~3A edit-distance-score avg:~F~%" (min-hash-table *orgs* #'genome-length) (avg-hash-table *orgs* #'genome-length) (max-hash-table *orgs* #'genome-length) (calculate-average-edit-distance *orgs*)))
+  (flet ((speed (org) (if (> (orgcont-walk-count org) 0) (/ (orgcont-walk-sum org) (orgcont-walk-count org)) (values nil t))))
+    (format t "speed min:~1,3F avg:~1,3F max:~1,3F~%" (min-hash-table *orgs* #'speed) (avg-hash-table *orgs* #'speed) (max-hash-table *orgs* #'speed)))
+  (flet ((kills (org) (orgcont-kill-count org)))
+    (format t "kills min:~3A avg:~3F max:~3A~%" (min-hash-table *orgs* #'kills) (avg-hash-table *orgs* #'kills) (max-hash-table *orgs* #'kills))))
+
+(defun print-org-stats (ticks loop-start-real-time total-ins-count orgs)
+  (declare (optimize (debug 3)))
+  (let ((length-orgs (hash-table-count orgs))
+	(max-org-energy (max-hash-table orgs (lambda (org) (orgap-energy (orgcont-orgap org)))))
+	(avg-org-energy (avg-hash-table orgs (lambda (org) (orgap-energy (orgcont-orgap org)))))
+	(avg-org-tage/noff (avg-hash-table orgs (lambda (org) (if (> (orgcont-offspring-count org) 0) (float (/ (orgcont-totage org) (orgcont-offspring-count org))) (values nil t)))))
+	(max-totage (max-hash-table orgs (lambda (org) (orgcont-totage org)))))
+    (let* ((ins/s (round total-ins-count (max 0.0001 (/ (- (get-internal-real-time) loop-start-real-time) internal-time-units-per-second)))))
+      (format t "i ~A+~A ~8Ains/s (org num:~4A energy avg:~5A max:~5A tage/noff avg:~6F totage max:~6A)~%"
+	      *world-tick* ticks ins/s length-orgs (round avg-org-energy) max-org-energy avg-org-tage/noff max-totage))))
 
 (defmethod idleloop-event ((org orgcont))
   (declare (optimize (debug 3)))
@@ -389,13 +408,12 @@ VELOCITY is the speed, i.e. position change per tick."
 	 (lasttick (orgcont-lasttick org))
 	 (nexttick (orgcont-nexttick org))
 	 (iters (- nexttick lasttick)))
-    (assert (>= nexttick *world-tick*))
     (incf (orgcont-age org) iters)
     (incf (orgcont-totage org) iters)
     ;;(prind (orgcont-id org) lasttick iters (orgap-energy orgap))
-    (multiple-value-bind (status offspring) (eval-orgap iters orgap org)
+    (multiple-value-bind (status offspring ins-count) (eval-orgap iters orgap org)
       (when offspring
-	(incf (orgcont-noffspring org) (length offspring))
+	(incf (orgcont-offspring-count org) (length offspring))
 	(setf (orgcont-age org) 0)
 	(loop for orgap in offspring do
 	     (let ((org (make-orgcont :orgap orgap)))
@@ -413,35 +431,42 @@ VELOCITY is the speed, i.e. position change per tick."
 	 (orgs-add-org org))
 	(t
 	 ;;(prind "kill" (orgcont-id org) status (orgcont-age org) (orgap-energy orgap))
-	 (orgs-del-org org))))))
+	 (orgs-del-org org)))
+      ins-count)))
 
-(defmethod idleloop-event ((cloud world-cloud))
+(defmethod idleloop-event ((cloud cloud))
   (declare (optimize (debug 3)))
   (let ((world-w (array-dimension *world* 0))
 	(world-h (array-dimension *world* 1)))
-    (with-slots (x y xvel yvel edge drop-wait drop-amount nexttick) cloud
-      (let* ((rx (mod (+ (floor x) (floor (* edge (random-gaussian)))) world-w))
-	     (ry (mod (+ (floor y) (floor (* edge (random-gaussian)))) world-h))
-	     (e (aref *world* rx ry)))
-	(when (>= e 0)
-	  (let ((new-e (min *world-max-energy* (+ e drop-amount))))
-	    (setf (aref *world* rx ry) new-e))))
-      (setf x (mod (+ x xvel) (array-dimension *world* 0)))
-      (setf y (mod (+ y yvel) (array-dimension *world* 1)))
+    (with-slots (position-function edge drop-wait drop-amount nexttick) cloud
+      (multiple-value-bind (x y) (funcall position-function nexttick)
+	(let* ((rx (mod (+ (floor x) (floor (* edge (random-gaussian)))) world-w))
+	       (ry (mod (+ (floor y) (floor (* edge (random-gaussian)))) world-h))
+	       (e (aref *world* rx ry)))
+	  (when (>= e 0)
+	    (let ((new-e (min *world-max-energy* (+ e drop-amount))))
+	      (setf (aref *world* rx ry) new-e)))))
       (incf nexttick drop-wait)
-      (cl-heap:add-to-heap *event-heap* cloud))))
+      (cl-heap:add-to-heap *event-heap* cloud)))
+  nil)
 
-(defun idleloop (ticks)
+(defun idleloop (lasttick)
   (declare (optimize (debug 3)))
-  ;; clouds and organisms conceptually are event sources that have an #'EVENTSOURCE-NEXTTICK.
-  (loop until (let* ((org (cl-heap:peep-at-heap *event-heap*))) (or (null org) (> (eventsource-nexttick org) (+ *world-tick* ticks)))) do
+  (let ((loop-start-real-time (get-internal-real-time))
+	(total-ins-count 0))
+    ;; clouds and organisms conceptually are event sources that have an #'EVENTSOURCE-NEXTTICK.
+    (loop until (let* ((org (cl-heap:peep-at-heap *event-heap*))) (or (null org) (> (eventsource-nexttick org) lasttick))) do
        ;;(prind *world-tick* *orgs* *event-heap*)
-       (let* ((org (cl-heap:pop-heap *event-heap*)))
-	 (idleloop-event org)))
-  (print-org-stats ticks *orgs*)
-  (incf *world-tick* ticks))
+	 (let* ((org (cl-heap:pop-heap *event-heap*)))
+	   (let ((ins-count (idleloop-event org)))
+	     (when (typep org 'orgcont)
+	       (incf total-ins-count ins-count)))))
+    (print-org-stats (- lasttick *world-tick*) loop-start-real-time total-ins-count *orgs*))
+  (when *print-statistics*
+    (print-statistics))
+  (setf *world-tick* lasttick))
 
-(defun nearest-orgap-genes (genes orgs &key (exclude-orgs nil))
+(defun nearest-org-genes (genes orgs &key (exclude-orgs nil))
   "Return the organism in ORGS which has the most similar genes to GENES."
   (argmax-hash-table orgs
 		     (lambda (org)
@@ -449,11 +474,11 @@ VELOCITY is the speed, i.e. position change per tick."
 			      (org-genes (orgap-genes orgap))
 			      (score (compute-edit-distance genes org-genes)))
 			 (if (= score 1)
-			     (return-from nearest-orgap-genes org)
+			     (return-from nearest-org-genes org)
 			     score)))
 		     :exclude exclude-orgs))
 
-(defun nearest-orgap (x y orgs &key (exclude-orgs nil))
+(defun nearest-org (x y orgs &key (exclude-orgs nil))
   "Return the organism in ORGS which is nearest to coordinate (X, Y)."
   (argmin-hash-table orgs
 		     (lambda (org)
@@ -533,13 +558,7 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	       ((sdl2:scancode= scancode :scancode-d) ;display world
 		(setf *display-world* (not *display-world*)))
 	       ((sdl2:scancode= scancode :scancode-s) ;statistics
-		(flet ((genome-length (org) (length (orgap-genes (orgcont-orgap org)))))
-		  (format t "genome min:~A avg:~F max:~A~%" (min-hash-table *orgs* #'genome-length) (avg-hash-table *orgs* #'genome-length) (max-hash-table *orgs* #'genome-length)))
-		(flet ((speed (org) (let ((orgap (orgcont-orgap org))) (if (> (orgap-walk-count orgap) 0) (/ (orgap-walk-sum orgap) (orgap-walk-count orgap)) (values nil t)))))
-		  (format t "speed min:~A avg:~F max:~A~%" (min-hash-table *orgs* #'speed) (avg-hash-table *orgs* #'speed) (max-hash-table *orgs* #'speed)))
-		(flet ((kills (org) (orgap-kills (orgcont-orgap org))))
-		  (format t "kills min:~A avg:~F max:~A~%" (min-hash-table *orgs* #'kills) (avg-hash-table *orgs* #'kills) (max-hash-table *orgs* #'kills)))
-		(format t "(statistics ed:~F)~%" (calculate-average-edit-distance *orgs*)))
+		(setf *print-statistics* (not *print-statistics*)))
 	       ((sdl2:scancode= scancode :scancode-1)
 		(setf ticks 200))
 	       ((sdl2:scancode= scancode :scancode-2)
@@ -577,7 +596,7 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 		(let* ((mouse-x (/ (* x tex-w) win-w))
 		       (mouse-y (/ (* y tex-h) win-h))
 		       (x (floor mouse-x)) (y (floor mouse-y))
-		       (org (nearest-orgap x y *orgs*)))
+		       (org (nearest-org x y *orgs*)))
 		  (setf *cursor* org))))))
 
 	  (:idle
@@ -585,7 +604,7 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	   (if (or (and (>= frames 0) (>= num-frames frames)) (= 0 (hash-table-count *orgs*)))
 	       (sdl2:push-quit-event)
 	       (progn
-		 (idleloop ticks)
+		 (idleloop (+ *world-tick* ticks))
 		 (when *display-world*
 		   (with-safe-pixel-access sur set-pixel
 		     (let* ((w (sdl-surface-get-w sur))
@@ -596,35 +615,32 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 					(color (cond ((>= c 0) (color-to-argb8888 255 c c c))
 						     (t (color-to-argb8888 255 0 0 255)))))
 				   (set-pixel x y color))))
-		       (let ((values nil))
-			 (loop for org being the hash-values of *orgs* do
-			      (let* ((orgap (orgcont-orgap org)))
-				(ecase display-mode
-				  ((:energy)
-				   (let ((e (orgap-energy orgap)))
-				     (push (if (= (orgcont-age org) 0) -1 e) values)))
-				  ((:edit-distance)
-				   (when *cursor*
-				     (let* ((scaled-score (funcall edit-distance-cacher *cursor* org)))
-				       (push scaled-score values)))))))
-			 (setf values (nreverse values))
-			 (let ((min-value (when values (apply #'min values)))
-			       (max-value (when values (apply #'max values))))
-			   (loop
-			      for org being the hash-values of *orgs*
-			      for value in values do
-				(let* ((orgap (orgcont-orgap org))
-				       (x (floor (orgap-x orgap)))
-				       (y (floor (orgap-y orgap))))
-				  (set-pixel x y 
-					     (ecase display-mode
-					       ((:energy)
-						(if (< value 0)
+		       (loop for cloud in *world-clouds* do
+			    (multiple-value-bind (x y) (funcall (cloud-position-function cloud) *world-tick*)
+			      (set-pixel (mod (round x) w) (mod (round y) h) (color-to-argb8888 255 255 255 0))
+			      (set-pixel (mod (round (1+ x)) w) (mod (round y) h) (color-to-argb8888 255 255 255 0))
+			      (set-pixel (mod (round x) w) (mod (round (1+ y)) h) (color-to-argb8888 255 255 255 0))
+			      (set-pixel (mod (round (1+ x)) w) (mod (round (1+ y)) h) (color-to-argb8888 255 255 255 0))))
+		       (loop for org being the hash-values of *orgs* do
+			    (let* ((orgap (orgcont-orgap org))
+				   (x (floor (orgap-x orgap)))
+				   (y (floor (orgap-y orgap))))
+			      (ecase display-mode
+				((:energy)
+				 (set-pixel x y
+					    (let* ((e (max 0 (orgap-energy orgap)))
+						   (c (min (ash e -1) 255)))
+					      (if (= (orgcont-age org) 0)
+						  (color-to-argb8888 255 255 0 0)
+						  (color-to-argb8888 255 0 c c)))))
+				((:edit-distance)
+				 (when *cursor*
+				   (set-pixel x y
+					      (let* ((ed (funcall edit-distance-cacher *cursor* org))
+						     (c (floor (* 255 ed))))
+						(if (= ed 1.0)
 						    (color-to-argb8888 255 255 0 0)
-						    (color-to-argb8888 255 0 (min value 255) (min 255 (max 128 value)))))
-					       ((:edit-distance)
-						(color-to-argb8888 255 (floor (* 255 (/ (- value min-value) (- max-value min-value)))) 0 0)))
-					     )))))))
+						    (color-to-argb8888 255 0 c c)))))))))))
 		   (sdl2:update-texture tex (plus-c:c-ref sur SDL2-FFI:SDL-SURFACE :pixels) :width (* 4 tex-w))
 		   ;;TODO: call SDL_RenderClear(sdlRenderer);
 		   (sdl2:render-copy wrend tex)
@@ -649,7 +665,7 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 			(sdl2-ffi.functions::sdl-render-draw-line wrend (1- x1) (1+ y2) (1- x1) (1- y1))
 			))
 		     ((not (null *cursor*))
-		      (setf *cursor* (nearest-orgap-genes (orgap-genes (orgcont-orgap *cursor*)) *orgs* :exclude-orgs (list *cursor*)))))
+		      (setf *cursor* (nearest-org-genes (orgap-genes (orgcont-orgap *cursor*)) *orgs* :exclude-orgs (list *cursor*)))))
 		   (sdl2:render-present wrend))
 		 (incf num-frames)))
 	   )
@@ -675,15 +691,16 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 		     :report-function
 		     (lambda (stream)
 		       (format stream "Quit #'WITHOUT-GRAPHICS after finishing the current loop."))))
-      (loop do
-	   (idleloop (if total-ticks total-ticks 1000000))
-	   (let ((random-org (random (hash-table-count *orgs*))))
-	     (loop for org being the hash-value of *orgs* for i from 0 do
-		  (when (= i random-org)
-		    (print-orgcont org)
-		    (return))))
-	   (when (or total-ticks quit-without-graphics)
-	     (return))))))
+      (let ((ticks (if total-ticks total-ticks 1000000)))
+	(loop do
+	     (idleloop (+ *world-tick* ticks))
+	     (let ((random-org (random (hash-table-count *orgs*))))
+	       (loop for org being the hash-value of *orgs* for i from 0 do
+		    (when (= i random-org)
+		      (print-orgcont org)
+		      (return))))
+	     (when (or total-ticks quit-without-graphics)
+	       (return)))))))
 
 ;;(set-default-world :w 400 :h 200 :rain-per-coordinate 0.01 :fraction-covered 0.15 :num-barriers-horizontal 120 :orgs 100)
 ;;(software-render-texture)
