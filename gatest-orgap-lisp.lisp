@@ -176,7 +176,7 @@
 				      (instructions-hash-table (make-hash-table :test 'eq))
 				      (keyform-sym (gensym)))
 				 (loop for ins in i-list do
-				      (assert (null (gethash ins instructions-hash-table)))
+				      (assert (null (gethash ins instructions-hash-table)) () "Instruction ~S defined more than once in MAKE-INSTRUCTION" ins)
 				      (setf (gethash ins instructions-hash-table) t))
 				 (let ((code
 					`(labels ((random-ins ()
@@ -377,10 +377,6 @@
 		     ((in-bn-energy-y-)
 		      (let ((y (mod (- y 3) world-h)))
 			(setf bn (aref *world* (floor x) (floor y)))))
-		     ((in-an-angle)
-		      (setf an (round (* 128 (mod angle (* pi 2))))))
-		     ((in-bn-angle)
-		      (setf bn (round (* 128 (mod angle (* pi 2))))))
 		     ((set-as-an-gt0)
 		      (setf as (> an 0)))
 		     ((set-as-an-ge0)
