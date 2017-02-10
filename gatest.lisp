@@ -341,11 +341,11 @@ VELOCITY is the speed, i.e. position change per tick."
   (set-default-world))
 
 (defun print-orgap (org)
-  (with-slots (ip genes off-genes as bs an bn memory) (orgcont-orgap org)
+  (with-slots (ip genes off-genes as bs an bn stack) (orgcont-orgap org)
     (format t "orgap ip:~3A/~3A as:~16A bs:~16A an:~A bn:~A~%"
 	    ip (length genes) as bs an bn)
-    (format t "orgap memory:~S~%"
-	    memory)
+    (format t "orgap stack:~S~%"
+	    stack)
     (format t "~A length:~S lsxhash:~S~%" genes (length genes) (lsxhash genes))))
 
 (defun compute-fitness (org &optional (fitness-function #'orgcont-energy-out-sum))
@@ -358,8 +358,8 @@ VELOCITY is the speed, i.e. position change per tick."
     (format t "org id:~5A wait:~5A energy:~4A(~5Ain,~5Aout) age:~3A/~A tage/off(~2A):~6F fitness(~3A,~3A):~A~%"
 	    id (orgap-wait orgap) (orgap-energy orgap) (orgcont-energy-in-sum orgcont) (orgcont-energy-out-sum orgcont) age totage
 	    offspring-count (when (> offspring-count 0) (float (/ totage offspring-count))) (compute-fitness orgcont (constantly 1)) (compute-fitness orgcont #'orgcont-offspring-count) (compute-fitness orgcont))
-    (format t "org x:~3,2F y:~3,2F angle:~4A speed avg:~1,3F kills:~3A off-energy avg:~4A~%"
-	    (orgap-x orgap) (orgap-y orgap) (orgap-angle orgap) (when (> walk-count 0) (/ walk-sum walk-count)) kill-count (when (> offspring-count 0) (round offspring-energy-sum offspring-count))))
+    (format t "org x:~3,2F y:~3,2F angle:~7,2E speed avg:~1,3F kills:~3A off-energy avg:~4A~%"
+	    (orgap-x orgap) (orgap-y orgap) (float (orgap-angle orgap)) (when (> walk-count 0) (/ walk-sum walk-count)) kill-count (when (> offspring-count 0) (round offspring-energy-sum offspring-count))))
   (print-orgap orgcont))
 
 (load "edit-distance.lisp")
@@ -431,8 +431,8 @@ VELOCITY is the speed, i.e. position change per tick."
 					(loop for i below (apply #'* (array-dimensions *world*)) sum (row-major-aref *world* i))))
 	   (clouds-energy-used-sum (- clouds-energy-drop-sum clouds-energy-unused-sum)))
       (let* ((ins/s (round total-ins-count (max 0.0001 (/ (- (get-internal-real-time) loop-start-real-time) internal-time-units-per-second)))))
-	(format t "i ~A+~A ~8Ains/s (org num:~4A energy avg:~5A used:~4,3FA(li~4,2F) max:~5A tage/noff avg:~6F totage max:~6A)~%"
-		*world-tick* ticks ins/s length-orgs (if avg-org-energy (round avg-org-energy) nil) (float (/ clouds-energy-used-sum clouds-energy-drop-sum)) (float (/ (- clouds-energy-used-sum last-clouds-energy-used-sum) (- clouds-energy-drop-sum last-clouds-energy-drop-sum))) max-org-energy avg-org-tage/noff max-totage))
+	(format t "i ~A+~A ~8Ains/s (org num:~4A energy avg:~5A max:~5A used:~4,3FA(li~4,2F) tage/noff avg:~6F totage max:~6A)~%"
+		*world-tick* ticks ins/s length-orgs (if avg-org-energy (round avg-org-energy) nil) max-org-energy (float (/ clouds-energy-used-sum clouds-energy-drop-sum)) (float (/ (- clouds-energy-used-sum last-clouds-energy-used-sum) (- clouds-energy-drop-sum last-clouds-energy-drop-sum))) avg-org-tage/noff max-totage))
       (setf last-clouds-energy-used-sum clouds-energy-used-sum)
       (setf last-clouds-energy-drop-sum clouds-energy-drop-sum))))
 
@@ -734,18 +734,9 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 		     (lambda (stream)
 		       (format stream "Quit #'WITHOUT-GRAPHICS after finishing the current loop."))))
       (let ((ticks (if total-ticks total-ticks 1000000)))
-	(loop do
+	(loop until (or total-ticks quit-without-graphics) do
 	     (idleloop (+ *world-tick* ticks))
-	     (print-orgcont (argmax-hash-table *orgs* #'compute-fitness))
-	     #|
-	     (let ((random-org (random (hash-table-count *orgs*))))
-	       (loop for org being the hash-value of *orgs* for i from 0 do
-		    (when (= i random-org)
-		      (print-orgcont org)
-		      (return))))
-	     |#
-	     (when (or total-ticks quit-without-graphics)
-	       (return)))))))
+	     (print-orgcont (argmax-hash-table *orgs* #'compute-fitness)))))))
 
 ;;(set-default-world :w 400 :h 200 :rain-per-coordinate 0.01 :fraction-covered 0.15 :num-barriers-horizontal 120 :orgs 100)
 ;;(software-render-texture)
