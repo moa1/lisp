@@ -2,7 +2,7 @@
 (ql:quickload :cl-custom-hash-table)
 (ql:quickload :dlist2)
 
-;;;; Implementation of a better sxhash for lists
+;;;; Implementation of a better sxhash for lists, which regards all elements of the list, not just the first couple of elements.
 ;; this is copied from SBCL
 ;; originally this was "(ftype (sfunction". what's an sfunction? 
 (declaim (ftype (function ((and fixnum unsigned-byte)
@@ -19,13 +19,12 @@
                     xy
                     (ash xy -5)))))
 
-;;(declaim (inline lsxhash))
+;; cannot make LSXHASH inline, since it is recursive.
 (defun lsxhash (x)
   "Return a hash value for value X.
 X, (car X), and (cdr X) may be a list, a symbol, or a number."
-  ;; FIXME: handle circular lists
   (declare (optimize (speed 3) (safety 0) (compilation-speed 0) (space 0)))
-  (declare (values (and fixnum unsigned-byte))) ;inferred automatically (see describe 'lsxhash)
+  (declare (values (and fixnum unsigned-byte))) ;inferred automatically (see (DESCRIBE 'LSXHASH))
   ;; in SBCL, etypecase takes 80% of the time of defmethod-ing on the different types of X: (let ((h (make-hash-table))) (timediff (lsxhash h) (mlsxhash h) :showtimes t))
   (etypecase x
     (single-float (sxhash x))
@@ -36,15 +35,18 @@ X, (car X), and (cdr X) may be a list, a symbol, or a number."
     ;;(number (sxhash x))
     (symbol (sxhash x))
     ;; here, X can't be nil since (symbolp nil) == T.
+    ;; FIXME: handle circular lists.
     (list (mix (lsxhash (car x)) (lsxhash (cdr x))))
+    ;; FIXME: handle circular hash-tables.
     (hash-table (let ((ret 448291823))
 		  (declare (type (and fixnum unsigned-byte) ret))
 		  (setf ret (mix (sxhash (hash-table-count x))
 				 (mix ret (sxhash (hash-table-test x)))))
 		  ;; use logxor for speed and so that the order of key/value pairs does not matter
-		  (maphash (lambda (k v) (setf ret (logxor ret (mix (lsxhash k) (lsxhash v)))))
-			   x)
+		  (loop for k being the hash-key of x using (hash-value v) do
+		       (setf ret (logxor ret (mix (lsxhash k) (lsxhash v)))))
 		  ret))
+    ;; FIXME: handle circular arrays.
     (simple-array (let* ((size (array-total-size x))
 			 (dim (array-dimensions x))
 			 (type (array-element-type x))
@@ -65,127 +67,201 @@ X, (car X), and (cdr X) may be a list, a symbol, or a number."
 		      )
 		    ret))))
 
+;; for caching mutable objects (including hash-tables) supported by LSXHASH.
+(cl-custom-hash-table:define-custom-hash-table-constructor make-lsxhash-equalp-hash-table
+    :test equalp :hash-function lsxhash)
+
+;; for caching mutable objects supported by LSXHASH.
 (cl-custom-hash-table:define-custom-hash-table-constructor make-lsxhash-equal-hash-table
-    ;; equalp required when hashing hash tables
     :test equal :hash-function lsxhash)
 
 (cl-custom-hash-table:define-custom-hash-table-constructor make-sxhash-equal-hash-table
-    ;; equalp required when hashing hash tables
     :test equal :hash-function sxhash)
 
-;;;; A deterministic function cacher (mru: most recently used)
+;; for quickly caching immutable objects.
+(cl-custom-hash-table:define-custom-hash-table-constructor make-sxhash-eq-hash-table
+    :test eq :hash-function sxhash)
+
+;;;; A MRU (most recently used) cache.
 
 (defclass mru-cache ()
   ((slots :initarg :slots :accessor mru-cache-slots :type (and fixnum unsigned-byte))
    (ht :initarg :ht :accessor mru-cache-ht :type hash-table)
-   (mru :initarg :mru :accessor mru-cache-mru :type dlist2))
+   (dlist :initarg :dlist :accessor mru-cache-dlist :type dlist2))
   (:documentation "A most-recently-used-cache class."))
 
 (defun make-mru-cache (slots &key (make-hash-table-fn #'make-lsxhash-equal-hash-table))
-  (declare (type (integer 1 #.most-positive-fixnum) slots))
-  (let* ((ht (funcall make-hash-table-fn))
-	 (mru (dlist2:dlist))
+  "Make a most-recently-used cache, being able to cache up to SLOTS items."
+  (declare (type unsigned-byte slots))
+  (let* ((ht (funcall make-hash-table-fn :size slots))
+	 (dlist (dlist2:dlist))
 	 (c (make-instance 'mru-cache
 			   :slots slots
 			   :ht ht
-			   :mru mru)))
+			   :dlist dlist)))
     c))
 
-(declaim (inline mru-cache-key-present-p))
+(defun mru-cache-used (mru)
+  "Return the number of key-value pairs stored in most-recently-used cache MRU."
+  (hash-table-count (mru-cache-ht mru)))
+
 (defun mru-cache-key-present-p (mru key)
-  "Return whether the key KEY is present in the mru-cache MRU."
+  "Return whether the key KEY is present in the most-recently-used-cache MRU.
+This does not modify the order of the key-value-pairs stored in MRU."
   (declare (type mru-cache mru))
   (cl-custom-hash-table:with-custom-hash-table
-    (multiple-value-bind (mru-dcons p) (gethash key (mru-cache-ht mru))
-      (declare (ignore mru-dcons))
-      p)))
+    (nth-value 1 (gethash key (mru-cache-ht mru)))))
 
 (declaim (inline mru-dlist-hit-mru-dcons))
-(defun mru-dlist-hit-mru-dcons (mru mru-dcons)
-  (declare (type dlist2:dlist mru)
+(defun mru-dlist-hit-mru-dcons (dlist mru-dcons)
+  (declare (type dlist2:dlist dlist)
 	   (type dlist2:dcons mru-dcons))
-  "Bring the dcons MRU-DCONS to the front of the dlist MRU."
-  ;;(print "mru hit") (describe-object mru t)
+  "Bring the dcons MRU-DCONS to the front of the dlist DLIST."
+  ;;(print "mru hit") (describe-object dlist t)
   ;; slice out mru-dcons from its current position.
   (dlist2:dcons-delete mru-dcons)
   ;; bring mru-dcons to the beginning of the dlist.
-  (let ((first (dlist2:dlist-first mru)))
+  (let ((first (dlist2:dlist-first dlist)))
     ;; need to re-use existing dcons mru-dcons, because the hash-table points to it.
     (dlist2:dcons-existing-insert-between first mru-dcons (dlist2:next first)))
   ;; updating the hash-table is not necessary, because its key still points to MRU-DCONS.
   )
 
-(declaim (inline mru-cache-get-value))
-(defun mru-cache-get-value (mru key &optional (default nil))
-  "If the key KEY is present in mru-cache MRU, return the values for key KEY and T as secondary value and bring KEY to the front of MRU.
-If key is not present return the value DEFAULT and as secondary value NIL."
+(defun mru-cache-get (mru key &optional (default nil))
+  "If the key KEY is present in mru-cache MRU, return the values for key KEY and as secondary value T, and bring KEY to the front of MRU.
+If KEY is not present return the value DEFAULT and NIL as secondary value."
   (let ((ht (mru-cache-ht mru))
-	(mru (mru-cache-mru mru)))
+	(dlist (mru-cache-dlist mru)))
     (cl-custom-hash-table:with-custom-hash-table
       (multiple-value-bind (mru-dcons p) (gethash key ht)
 	(if p
-	    ;; the function call is known, therefore bring it to front in mru.
-	    (destructuring-bind (key . value) (dlist2:data mru-dcons)
-	      (declare (ignore key))
-	      (mru-dlist-hit-mru-dcons mru mru-dcons)
-	      ;;(describe-object mru t)
-	      (values value t))
+	    (progn
+	      ;; an entry is present, therefore bring it to front in dlist.
+	      (mru-dlist-hit-mru-dcons dlist mru-dcons)
+	      ;;(describe-object dlist t)
+	      (values (cdr (dlist2:data mru-dcons)) t))
 	    (values default nil))))))
 
-(declaim (inline mru-cache-set))
+(defun mru-cache-get-nohit (mru key &optional (default nil))
+  "If the key KEY is present in mru-cache MRU, return the values for key KEY and as secondary value T, but do not bring KEY to the front of MRU.
+If KEY is not present return the value DEFAULT and NIL as secondary value.
+This function is like #'MRU-CACHE-GET, but does not bring KEY to the front of the list."
+  (let ((ht (mru-cache-ht mru)))
+    (cl-custom-hash-table:with-custom-hash-table
+      (multiple-value-bind (mru-dcons p) (gethash key ht)
+	(if p
+	    (values (cdr (dlist2:data mru-dcons)) t)
+	    (values default nil))))))
+
 (defun mru-cache-set (mru key value)
   "Set the value VALUE for the key KEY in mru-cache MRU, if KEY was not present yet.
-Bring the key-value-pair to the front of the mru-cache."
+Bring the KEY-VALUE-pair to the front of the mru-cache, possibly removing the least-recently-used pair."
   (declare (type mru-cache mru))
   (let* ((ht (mru-cache-ht mru))
 	 (slots (mru-cache-slots mru))
-	 (mru (mru-cache-mru mru)))
+	 (dlist (mru-cache-dlist mru)))
     (cl-custom-hash-table:with-custom-hash-table
       (multiple-value-bind (mru-dcons p) (gethash key ht)
 	(if p
-	    (mru-dlist-hit-mru-dcons mru mru-dcons)
-	    ;; push new cache entry to front of mru.
+	    (mru-dlist-hit-mru-dcons dlist mru-dcons)
+	    ;; push new cache entry to front of dlist.
 	    (let (front-dcons)
 	      (if (>= (hash-table-count ht) slots)
 		  (progn
 		    ;; the cache is already full. Remove the last element, and re-use its dcons for the new front element.
-		    (destructuring-bind (old-key . old-value) (dlist2:data (dlist2:prev (dlist2:dlist-last mru)))
+		    (destructuring-bind (old-key . old-value) (dlist2:data (dlist2:prev (dlist2:dlist-last dlist)))
 		      (declare (ignorable old-value))
-		      ;;(print "mru full") (describe-object mru t)
-		      (setf front-dcons (dlist2:dlist-pop-dcons mru :from-end t))
+		      ;;(print "mru full") (describe-object dlist t)
+		      (setf front-dcons (dlist2:dlist-pop-dcons dlist :from-end t))
 		      (remhash old-key ht))
 		    (setf (dlist2:data front-dcons) (cons key value))
-		    (let ((first (dlist2:dlist-first mru)))
+		    (let ((first (dlist2:dlist-first dlist)))
 		      ;; need to re-use existing dcons mru-dcons, because the hash-table points to it.
 		      (dlist2:dcons-existing-insert-between first front-dcons (dlist2:next first)))
-		    ;;(describe-object mru t)
+		    ;;(describe-object dlist t)
 		    )
-		  (setf front-dcons (dlist2:dlist-push-return-new-dcons (cons key value) mru)))
+		  (setf front-dcons (dlist2:dlist-push-return-new-dcons (cons key value) dlist)))
 	      ;; insert front-dcons into ht
 	      (setf (gethash key ht) front-dcons)
 	      ;;(print (list "hash-table-count" (hash-table-count ht) slots))
 	      value))))))
 
-;; TODO: implement a new function like mru-function-cacher that allows saving and recalling multiple values.
+(defun (setf mru-cache-get) (value mru key)
+  "Set the value VALUE for the key KEY in mru-cache MRU, if KEY was not present yet.
+Bring the key-value-pair to the front of the mru-cache, possibly removing the least-recently-used pair."
+  (mru-cache-set mru key value))
 
-(defun mru-function-cacher (fun slots &key (make-hash-table-fn #'make-lsxhash-equal-hash-table))
-  "Most-recently-used cache for determinitic and side-effect-free functions."
+(define-condition key-not-found (error)
+  ((mru-cache :initarg :mru-cache :reader key-not-found-mru-cache :documentation "The mru-cache that the key was not found in")
+   (key :initarg :key :reader key-not-found-key :documentation "The key that was not found"))
+  (:report (lambda (c stream) (format stream "Key ~A not found in most-recently-used cache ~A." (key-not-found-key c) (key-not-found-mru-cache c))))
+  (:documentation "Signals that KEY was not found in MRU"))
+
+(defun mru-cache-del (mru key)
+  "Remove KEY from mru-cache MRU.
+Signal a KEY-NOT-FOUND error if KEY is not present."
+  (declare (type mru-cache mru))
+  (let* ((ht (mru-cache-ht mru)))
+    (cl-custom-hash-table:with-custom-hash-table
+      (multiple-value-bind (mru-dcons p) (gethash key ht)
+	(unless p
+	  (error (make-condition 'key-not-found :mru-cache mru :key key)))
+	(dlist2:dcons-delete mru-dcons)
+	(remhash key ht)))))
+
+(defun mru-cache-iterate (mru fun &key from-end)
+  "Iterate over the key-value pairs stored in mru cache MRU, without changing their order.
+Calls function FUN with two values: the KEY and the VALUE. MRU may be modified in FUN, but the items prepended to the cache will not be iterated over if FROM-END=NIL."
+  (let ((dlist (mru-cache-dlist mru)))
+    (dlist2:dodcons-between (pair (dlist2:dlist-first dlist) (dlist2:dlist-last dlist) :from-end from-end)
+      (let ((data (dlist2:data pair)))
+	(funcall fun (car data) (cdr data))))))
+
+;; test
+(let ((mru (make-mru-cache 3)))
+  (flet ((to-list (mru)
+	   (let ((l nil))
+	     (mru-cache-iterate mru (lambda (k v) (push (cons k v) l)) :from-end t)
+	     l)))
+    (setf (mru-cache-get mru 1) 'one)
+    (setf (mru-cache-get mru 2) 'two)
+    (setf (mru-cache-get mru 3) 'three)
+    (assert (equal (to-list mru) '((3 . three) (2 . two) (1 . one))))
+    (assert (and (eq (mru-cache-get-nohit mru 1) 'one) (eq (mru-cache-get-nohit mru 2) 'two) (eq (mru-cache-get-nohit mru 3) 'three)))
+    (setf (mru-cache-get mru 4) 'four)
+    (assert (eq (mru-cache-get mru 4) 'four))
+    (assert (not (mru-cache-key-present-p mru 1)))
+    (assert (equal (to-list mru) '((4 . four) (3 . three) (2 . two))))
+    (mru-cache-del mru 3)
+    (assert (equal (to-list mru) '((4 . four) (2 . two))))
+    (assert (= (mru-cache-used mru) 2))
+    (mru-cache-del mru 4)
+    (mru-cache-del mru 2)
+    (assert (= (mru-cache-used mru) 0))
+    (assert (equal (to-list mru) nil))))
+
+;;;; Function cacher
+
+(defun make-mru-function-cacher (fun slots &key (make-hash-table-fn #'make-lsxhash-equal-hash-table))
+  "Make and return a function that has the same arguments as function FUN, but caches the SLOTS most-recently passed arguments and values.
+The cached version returns values from the cache if FUN was already evaluated with those arguments. If FUN returns multiple values, the cached function version will do so as well.
+FUN must be determinitic and side-effect-free."
   (let* ((mru (make-mru-cache slots :make-hash-table-fn make-hash-table-fn)))
     (lambda (&rest rest)
-      ;;(print (list "mru-function-cacher ht" (let (l) (maphash (lambda (key value) (push (list key value) l)) (mru-cache-ht mru)) l) "mru" (mru-cache-mru mru)))
+      ;;(print (list "make-mru-function-cacher ht" (let (l) (maphash (lambda (key value) (push (list key value) l)) (mru-cache-ht mru)) l) "mru" (mru-cache-dlist mru)))
       (if (mru-cache-key-present-p mru rest)
-	  (nth-value 0 (mru-cache-get-value mru rest))
+	  (apply #'values (mru-cache-get mru rest))
 	  ;; the function call is unkown
-	  (let* ((value (apply fun rest)))
-	    (mru-cache-set mru rest value)
-	    value)))))
+	  (let* ((values (multiple-value-list (apply fun rest))))
+	    (mru-cache-set mru rest values)
+	    (apply #'values values))))))
 
 (let ((last nil))
   (flet ((add (a b)
 	   ;;(print (list "add" a b))
 	   (setf last (list a b))
 	   (+ a b)))
-    (let ((cadd (mru-function-cacher #'add 2)))
+    (let ((cadd (make-mru-function-cacher #'add 2)))
       (setf last nil)
       (assert (= (funcall cadd 1 2) 3))
       (assert (equal last '(1 2)))
@@ -214,7 +290,7 @@ Bring the key-value-pair to the front of the mru-cache."
 (ql:quickload :utils)
 (flet ((add (a b)
 	 (+ a b)))
-  (let ((cadd (mru-function-cacher #'add 2)))
+  (let ((cadd (make-mru-function-cacher #'add 2)))
     (defun time-mru ()
       (time
        (utils:timesec (lambda ()

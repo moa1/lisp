@@ -538,7 +538,7 @@ VELOCITY is the speed, i.e. position change per tick."
 
 (defun make-edit-distance-cacher ()
   (declare (optimize (debug 3)))
-  (mru-function-cacher (lambda (org1 org2) (compute-edit-distance (orgap-genes (orgcont-orgap org1)) (orgap-genes (orgcont-orgap org2)))) 100000 :make-hash-table-fn #'make-sxhash-equal-hash-table))
+  (make-mru-function-cacher (lambda (org1 org2) (compute-edit-distance (orgap-genes (orgcont-orgap org1)) (orgap-genes (orgcont-orgap org2)))) 100000 :make-hash-table-fn #'make-sxhash-equal-hash-table))
 
 (defun software-render-texture (&key (frames -1) (win-x 212) (win-y 0) (win-w 800) (win-h 400))
   "Software renderer example, drawing a texture on the screen.
