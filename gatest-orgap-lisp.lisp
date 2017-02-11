@@ -1,5 +1,7 @@
 ;;; organism implementation in lisp
 
+;; TODO: speed up by finding frequent gene subsequences by randomly doing pairwise alignments and keeping the longest gap-free alignments in a most-recently-used cache. this establishes frequent instruction subsequences. now #"MAKE-ORGAP only needs to detect these frequent instruction subsequences (by some quick means) and replace these instructions with one long instruction. EVAL-ORGAP has to be recompiled from time to time to support the latest detected frequent instruction sequences and drop support for no longer frequent instruction sequences.
+
 (defstruct (orgap
 	     (:constructor make-orgap*))
   genes ;genes of the organism
@@ -134,7 +136,7 @@
 		   (setf energy 0))
 		 (return-from eval-orgap (values :kill ins-count)))
 	       (survive ()
-		 (if (>= (orgcont-age orgcont) 2000000)
+		 (if (>= (orgcont-age orgcont) 100000000)
 		     (die "too old")
 		     (return-from eval-orgap (values :survive ins-count))))
 	       (cell-division (off-x off-y off-energy)
@@ -303,7 +305,7 @@
 			(setf (aref stack sp) (1+ ip))
 			(setf sp (mod (1+ sp) (array-dimension stack 0)))
 			(setf ip jump-ip)
-			(prind "call0" ip)
+			(print "call0" ip)
 			(if (<= 0 ip max-ip)
 			    (go next-ins)
 			    (die "invalid call target"))))

@@ -292,7 +292,10 @@ VELOCITY is the speed, i.e. position change per tick."
 				       ;;(genes '(MRK0 SUB-FROM-BN-AN SET-BS-RANDOM MRK1 READ-BS READ-NEXT WRITE-BS CMP-AS-AS-BS JNE1 SET-ANGLE-TO-BN SET-AN-1 IN-BN-ENERGY-Y+ TURN-CW-BN ATTACK-TARGET SET-BN-1 SIGN-AN ADD-TO-BN-AN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN CMP-BS-GT-BN-AN MUL-TO-AN-BN MUL-TO-AN-BN SPLIT-CELL-AN WALK-AN WALK-AN SET-TARGET-NEAR SET-AS-NIL ATTACK-TARGET EAT WALK-BN EAT JNE0))
 				       ;;(genes '(MRK1 READ-BS READ-NEXT WRITE-BS IN-BN-ENERGY-X+ CMP-AS-AS-BS IN-BN-ENERGY-Y- ADD-TO-AN-BN SET-AN-1 SET-BN-1 ADD-TO-BN-AN ADD-TO-AN-BN ADD-TO-AN-BN SET-BN-MAX-AN-BN ADD-TO-AN-BN WALK-BN WALK-BN EAT JNE1 MRK0 TURN-CCW-AN WALK-AN EAT WALK-AN IN-BN-ENERGY-Y- WALK-AN READ-AS WRITE-AS WALK-AN SET-AN-TO-ANGLE SPLIT-CELL-AN MUL-TO-BN-AN IN-BN-ENERGY-LEFT SET-AN-MAX-AN-BN EAT IN-BN-ENERGY-X+ JNE1 CMP-AS-GT-AN-BN MRK3 WAIT-AN TURN-CCW-AN))
 				       ;;(genes '(MRK1 READ-BS READ-NEXT WRITE-BS TURN-CCW-BN IN-BN-ENERGY-X+ CMP-AS-AS-BS EAT ADD-TO-AN-BN SET-AN-1 SET-BN-1 WRITE-AS ADD-TO-BN-AN ADD-TO-AN-BN ADD-TO-AN-BN SET-BN-MAX-AN-BN ADD-TO-AN-BN WALK-AN WALK-BN WALK-BN WALK-AN WALK-AN JNE1 MRK0 TURN-CCW-AN CMP-AS-AS-BS EAT WALK-AN IN-BN-ENERGY-Y- WALK-AN WRITE-AS SET-ANGLE-TO-BN WALK-AN SET-AN-TO-ANGLE SET-BN-TO-ANGLE SPLIT-CELL-AN MUL-TO-BN-AN IN-BN-ENERGY-LEFT SET-AN-MAX-AN-BN EAT IN-BN-ENERGY-X+ TURN-CW-AN JNE1 SET-AN-1 CMP-AS-GT-AN-BN MRK3 SET-ANGLE-DOWN TURN-CCW-AN IN-BN-ENERGY-LEFT))
-				       (genes '(MRK1 READ-BS READ-NEXT WRITE-BS CMP-AS-AS-BS EAT SET-AN-1 SET-BN-1 ADD-TO-BN-AN MUL-TO-BN-AN ADD-TO-BN-AN ADD-TO-AN-BN ADD-TO-AN-BN SET-BN-MAX-AN-BN WALK-AN WALK-BN WALK-BN WALK-AN WALK-AN TURN-CCW-BN WALK-BN TURN-CW-BN JNE1 IN-BN-ENERGY-Y+ MRK0 WAIT-AN CMP-AS-AS-BS WRITE-BS WALK-AN IN-BN-ENERGY-Y- WALK-AN SPLIT-CELL-BN WRITE-AS SET-AN-1 WALK-AN SET-AN-TO-ANGLE SPLIT-CELL-AN MUL-TO-BN-AN SET-AN-TO-BN EAT IN-BN-ENERGY-X+ TURN-CW-AN JNE1 SET-AN-1 SET-ANGLE-DOWN SET-AS-RANDOM TURN-CCW-AN))
+				       ;;(genes '(MRK1 READ-BS READ-NEXT WRITE-BS CMP-AS-AS-BS EAT SET-AN-1 SET-BN-1 ADD-TO-BN-AN MUL-TO-BN-AN ADD-TO-BN-AN ADD-TO-AN-BN ADD-TO-AN-BN SET-BN-MAX-AN-BN WALK-AN WALK-BN WALK-BN WALK-AN WALK-AN TURN-CCW-BN WALK-BN TURN-CW-BN JNE1 IN-BN-ENERGY-Y+ MRK0 WAIT-AN CMP-AS-AS-BS WRITE-BS WALK-AN IN-BN-ENERGY-Y- WALK-AN SPLIT-CELL-BN WRITE-AS SET-AN-1 WALK-AN SET-AN-TO-ANGLE SPLIT-CELL-AN MUL-TO-BN-AN SET-AN-TO-BN EAT IN-BN-ENERGY-X+ TURN-CW-AN JNE1 SET-AN-1 SET-ANGLE-DOWN SET-AS-RANDOM TURN-CCW-AN))
+				       ;;(genes '(MRK1 READ-BS READ-NEXT WRITE-BS CMP-AS-AS-BS EAT SET-AN-1 SET-BN-1 ADD-TO-BN-AN ADD-TO-BN-AN ADD-TO-AN-BN ADD-TO-AN-BN SET-BN-MAX-AN-BN WALK-AN WALK-BN SET-BS-NIL WALK-BN WALK-AN TURN-CCW-BN WALK-BN TURN-CW-BN JNE1 IN-BN-ENERGY-Y+ WAIT-AN CMP-AS-AS-BS WRITE-BS WALK-AN IN-BN-ENERGY-Y- SPLIT-CELL-BN WRITE-AS IN-AN-ENERGY-LEFT SET-AN-1 WALK-AN SET-AN-TO-ANGLE SPLIT-CELL-AN MUL-TO-BN-AN SUB-FROM-AN-BN EAT TURN-CW-AN IN-BN-ENERGY-Y- JNE1 SET-AN-1 SET-AN-TO-ANGLE CMP-BS-GT-BN-AN SET-AS-RANDOM TURN-CCW-AN SET-AN-TO-ENERGY))
+				       ;;(genes '(mrk0 set-an-1 set-bn-1 add-to-bn-an add-to-an-bn walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an mul-to-an-bn mul-to-bn-an mul-to-an-bn mul-to-bn-an mul-to-an-bn mul-to-bn-an wait-bn eat mrk1 read-as read-next write-as cmp-as-as-bs jne1 in-bn-energy-left split-cell-bn turn-cw-bn jmp0))
+				       (genes '(EAT MRK0 SET-AN-1 SET-BN-1 ADD-TO-BN-AN ADD-TO-AN-BN MUL-TO-AN-BN WALK-AN WALK-AN WALK-AN SIGN-BN WALK-AN WALK-AN WALK-AN WALK-AN EAT WALK-AN MUL-TO-AN-BN SET-AN--1 MUL-TO-BN-AN MUL-TO-AN-BN MUL-TO-BN-AN EAT MRK1 READ-AS READ-NEXT WRITE-AS CMP-AS-AS-BS JNE1 IN-BN-ENERGY-LEFT SPLIT-CELL-BN TURN-CW-BN JMP0 MRK1))
 				       )
   (loop for i below num collect
        (let ((x (random (array-dimension *world* 0)))
@@ -432,7 +435,7 @@ VELOCITY is the speed, i.e. position change per tick."
 	   (clouds-energy-used-sum (- clouds-energy-drop-sum clouds-energy-unused-sum)))
       (let* ((ins/s (round total-ins-count (max 0.0001 (/ (- (get-internal-real-time) loop-start-real-time) internal-time-units-per-second)))))
 	(format t "i ~A+~A ~8Ains/s (org num:~4A energy avg:~5A max:~5A used:~4,3FA(li~4,2F) tage/noff avg:~6F totage max:~6A)~%"
-		*world-tick* ticks ins/s length-orgs (if avg-org-energy (round avg-org-energy) nil) max-org-energy (float (/ clouds-energy-used-sum clouds-energy-drop-sum)) (float (/ (- clouds-energy-used-sum last-clouds-energy-used-sum) (- clouds-energy-drop-sum last-clouds-energy-drop-sum))) avg-org-tage/noff max-totage))
+		*world-tick* ticks ins/s length-orgs (if avg-org-energy (round avg-org-energy) nil) max-org-energy (float (/ clouds-energy-used-sum clouds-energy-drop-sum)) (let ((ds (- clouds-energy-drop-sum last-clouds-energy-drop-sum))) (if (= ds 0) nil (float (/ (- clouds-energy-used-sum last-clouds-energy-used-sum) ds)))) avg-org-tage/noff max-totage))
       (setf last-clouds-energy-used-sum clouds-energy-used-sum)
       (setf last-clouds-energy-drop-sum clouds-energy-drop-sum))))
 
@@ -659,10 +662,11 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 				   (set-pixel x y color))))
 		       (loop for cloud in *world-clouds* do
 			    (multiple-value-bind (x y) (funcall (cloud-position-function cloud) *world-tick*)
-			      (set-pixel (mod (round x) w) (mod (round y) h) (color-to-argb8888 255 255 255 0))
-			      (set-pixel (mod (round (1+ x)) w) (mod (round y) h) (color-to-argb8888 255 255 255 0))
-			      (set-pixel (mod (round x) w) (mod (round (1+ y)) h) (color-to-argb8888 255 255 255 0))
-			      (set-pixel (mod (round (1+ x)) w) (mod (round (1+ y)) h) (color-to-argb8888 255 255 255 0))))
+			      (let ((c (random 256)))
+				(set-pixel (mod (round x) w) (mod (round y) h) (color-to-argb8888 255 c c 0))
+				(set-pixel (mod (round (1+ x)) w) (mod (round y) h) (color-to-argb8888 255 c c 0))
+				(set-pixel (mod (round x) w) (mod (round (1+ y)) h) (color-to-argb8888 255 c c 0))
+				(set-pixel (mod (round (1+ x)) w) (mod (round (1+ y)) h) (color-to-argb8888 255 c c 0)))))
 		       (loop for org being the hash-values of *orgs* do
 			    (let* ((orgap (orgcont-orgap org))
 				   (x (floor (orgap-x orgap)))
