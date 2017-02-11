@@ -43,10 +43,6 @@ Returns as values the subtree found and a value indicating if all elements of PA
   (assert (eq 2 (multitree-select-path mt-type mt2 '(a b))))
   (assert (eq 1 (multitree-select-path mt-type mt2 '(a a)))))
 
-;;;; A deterministic function cacher (mru: most recently used)
-
-(load "mru-cacher.lisp")
-
 ;;;; Property lists, i.e. a list of alternating SYMBOL and VALUE.
 ;;;; Example '(a 1 b 2 c (a list))
 

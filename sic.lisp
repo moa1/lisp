@@ -1,9 +1,7 @@
 (load "~/quicklisp/setup.lisp")
 (load "~/lisp/multitree.lisp")
 (ql:quickload 'hu.dwim.serializer)
-
-(define-custom-hash-table-constructor make-lsxhash-equalp-hash-table
-    :test equalp :hash-function lsxhash)
+(ql:quickload 'mru-cache)
 
 (defun rssb (mem steps)
   "See Wikipedia article 'One instruction set computer', paragraph 'Reverse subtract and skip if borrow' (rssb). MEM must be a simple array that contains the memory values, steps is the number of steps that are to be executed.
@@ -212,7 +210,7 @@ This function handles writes(reads) outside the memory by taking the logical AND
 
 (defun systematic-mapping-to-hash-table (mem-size rssb-function)
   "Return a hash-table that contains all possible memory configurations and their 1-step result obtained after passing the configuratio to RSSB-FUNCTION."
-  (let ((mem-cache (make-lsxhash-equalp-hash-table)))
+  (let ((mem-cache (mru-cache:make-lsxhash-equalp-hash-table)))
     (labels ((rec (mem)
 	       (let* ((mem-1 (funcall rssb-function (copy-array mem) 1))
 		      (mem-0 (copy-array mem)))

@@ -7,6 +7,7 @@
 (load "/home/toni/quicklisp/setup.lisp")
 (ql:quickload :sdl2)
 (ql:quickload :cl-heap)
+(ql:quickload :mru-cache)
 
 (defmacro prind (&rest args)
   "Print args"
@@ -349,7 +350,7 @@ VELOCITY is the speed, i.e. position change per tick."
 	    ip (length genes) as bs an bn)
     (format t "orgap stack:~S~%"
 	    stack)
-    (format t "~A length:~S lsxhash:~S~%" genes (length genes) (lsxhash genes))))
+    (format t "~A length:~S hash:~S~%" genes (length genes) (mru-cache:lsxhash genes))))
 
 (defun compute-fitness (org &optional (fitness-function #'orgcont-energy-out-sum))
   (if (> (orgap-energy (orgcont-orgap org)) 0)
@@ -534,11 +535,9 @@ VELOCITY is the speed, i.e. position change per tick."
 			 dist))
 		     :exclude exclude-orgs))
 
-(load "mru-cacher.lisp")
-
 (defun make-edit-distance-cacher ()
   (declare (optimize (debug 3)))
-  (make-mru-function-cacher (lambda (org1 org2) (compute-edit-distance (orgap-genes (orgcont-orgap org1)) (orgap-genes (orgcont-orgap org2)))) 100000 :make-hash-table-fn #'make-sxhash-equal-hash-table))
+  (mru-cache:make-function-cacher (lambda (org1 org2) (compute-edit-distance (orgap-genes (orgcont-orgap org1)) (orgap-genes (orgcont-orgap org2)))) 100000 :make-hash-table-fn #'mru-cache:make-sxhash-equal-hash-table))
 
 (defun software-render-texture (&key (frames -1) (win-x 212) (win-y 0) (win-w 800) (win-h 400))
   "Software renderer example, drawing a texture on the screen.
