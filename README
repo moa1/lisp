@@ -1,0 +1,15 @@
+quicklisp packages :MANIFEST, :DOCBROWSER seems to provide a documentation browser for LISP packages, but I could not load it because the SBCL I'm using lacks INET6 support.
+
+:BLACKTHORN-COLLISION-TEST is a game using the :BLACKTHORN game engine.
+
+~/quicklisp/dists/quicklisp/software/manifest-20120208-git/descriptions.txt contains one-line descriptions of some quicklisp packages.
+
+:CL-ODE is a CFFI binding to the ODE physics engine.
+
+:CL-NCURSES, :CL-CHARMS, :CROATOAN are ncurses bindings.
+
+:MONTEZUMA is a text search engine library for Lisp based on the Ferret library for Ruby, which is itself based on the Lucene library for Java.
+
+:SQUIRL is a native Lisp port of the Chipmunk physics library.
+
+

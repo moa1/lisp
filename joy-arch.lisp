@@ -9,6 +9,7 @@
 (ql:quickload 'ltree)
 (use-package 'ltree)
 (ql:quickload 'cl-heap)
+(ql:quickload 'mru-cache)
 
 (load "~/lisp/arbitrary-trees.lisp")
 ;;(load "~/lisp/multitree.lisp")
@@ -17,10 +18,6 @@
 (load "~/lisp/refal-patmat2.lisp")
 ;;(ql:quickload :cl-custom-hash-table)
 ;;(use-package :cl-custom-hash-table)
-
-(define-custom-hash-table-constructor make-lsxhash-equal-hash-table
-    ;; equalp required when hashing hash tables
-    :test equal :hash-function lsxhash)
 
 (defclass joy ()
   ((stack :accessor joy-stack
@@ -1320,7 +1317,7 @@ r should be a list of one value, otherwise +test-cases-invalid+ is returned."
       (generate-test-cases-enumerate-all-exps-and-results exp-nodes initial-stk)
     (systematicmapping exp-nodes nil test-cases-all-exps joy-ops max-ticks max-seconds nil)
     (let* ((exps-and-results (funcall get-exps-and-results))
-	   (joy-exp-to-result (make-lsxhash-equal-hash-table)))
+	   (joy-exp-to-result (mru-cache:make-lsxhash-equal-hash-table)))
       (mapcar (lambda (exp-and-result)
 		(destructuring-bind (exp . result) exp-and-result
 		  (setf (gethash exp joy-exp-to-result) (if (eq 'error result) nil t))))
@@ -1535,7 +1532,7 @@ E.g. (enumerate-permutations '(1 2 3) 2) == '((1 2) (1 3) (2 1) (2 3) (3 1) (3 2
 				       (enumerate-permutations stk i))))
 	 (stks-perm-w/o-id (remove stk stks-perm :test #'equal)) ;TODO: Currently this doesn't handle superfluous computation for other permutations, e.g. (nil pop swap),(swap nil pop) etc. Rather than removing the identity, have an additional scoring variable representing the total time required.
 	 (stk-tail (loop for i below 10 collect (gensym "T")))
-	 (stks-hashtable (make-lsxhash-equal-hash-table)))
+	 (stks-hashtable (mru-cache:make-lsxhash-equal-hash-table)))
     ;; insert all permuted stacks to be recognized into stks-hashtable.
     (dolist (stk-head stks-perm-w/o-id)
       (let ((stk-whole (append stk-head stk-tail)))
@@ -1889,7 +1886,7 @@ l-1-scores must be a list of test-cases scores which must be nil if the previous
 	 (best-fit (apply #'+ fitn))
 	 (best-exp (list nil))
 	 (number-trees (count-labelled-trees maxlevel (length joy-ops)))
-	 (results-seen-cache (when cache (make-mru-cache (min number-trees cache))))
+	 (results-seen-cache (when cache (mru-cache:make (min number-trees cache))))
 	 (trees-evaluated 0))
     (flet ((collectfit (stks heaps exp fit)
 	     (incf trees-evaluated)
@@ -1908,12 +1905,12 @@ l-1-scores must be a list of test-cases scores which must be nil if the previous
 		 (let* ((heap-alists (loop for h in heaps collect (if (null h) nil (hash-table-to-alist h)))) ;;convert to alist to save space
 			(res (cons stks heap-alists)))
 		   (multiple-value-bind (exp-old present)
-		       (mru-cache-get-value results-seen-cache res)
+		       (mru-cache:get results-seen-cache res)
 		     (let* ((exp-nodes (count-tree-nodes exp))
 			    (exp-old-nodes (count-tree-nodes exp-old))
 			    (pursue (or (not present) (< exp-nodes exp-old-nodes))))
 		       (when pursue
-			 (mru-cache-set results-seen-cache res exp))
+			 (mru-cache:set results-seen-cache res exp))
 		       ;;(when (and present (< exp-nodes exp-old-nodes))
 		       ;;  (format t "exp-old:~A exp:~A~%" exp-old exp))
 		       ;;(when present
