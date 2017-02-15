@@ -2,6 +2,37 @@
 
 ;; TODO: speed up by finding frequent gene subsequences by randomly doing pairwise alignments and keeping the longest gap-free alignments in a most-recently-used cache. this establishes frequent instruction subsequences. now #"MAKE-ORGAP only needs to detect these frequent instruction subsequences (by some quick means) and replace these instructions with one long instruction. EVAL-ORGAP has to be recompiled from time to time to support the latest detected frequent instruction sequences and drop support for no longer frequent instruction sequences.
 
+(defun frequent-instruction-subsequences (orgs min-length)
+  (let* ((orgs (let ((a (make-array (hash-table-count orgs))))
+		 (loop for v being the hash-value of orgs for i from 0 do (setf (aref a i) v))
+		 a))
+	 (n (length orgs))
+	 (instruction-subseqs (make-hash-table :test #'equal :hash-function #'mru-cache:lsxhash)))
+    (loop for i below (1- n) do
+	 (let* ((j (+ i (random (- n i))))
+		(org1-genes (orgap-genes (orgcont-orgap (aref orgs i))))
+		(org2-genes (orgap-genes (orgcont-orgap (aref orgs j))))
+		(alignments (nth-value 1 (edit-distance-score-and-alignments org1-genes org2-genes 1 -1 -1 nil))))
+	   (loop for alignment in alignments do
+		(let ((ali1 (car alignment))
+		      (ali2 (cadr alignment))
+		      (subseq nil))
+		  (assert (= (length ali1) (length ali2)))
+		  (loop for pos below (length ali1) do
+		       (let ((ins1 (aref ali1 pos))
+			     (ins2 (aref ali1 pos)))
+			 (if (and (eq ins1 ins2) (not (null ins1)))
+			     (push ins1 subseq)
+			     (progn
+			       (unless (null subseq)
+				 (incf (gethash subseq instruction-subseqs 0)))
+			       (setf subseq nil)))))))))
+    (let ((is (make-array (hash-table-count instruction-subseqs))))
+      (let ((i 0))
+	(maphash (lambda (k v) (setf (aref is i) (cons v k)) (incf i)) instruction-subseqs))
+      (sort is (lambda (a b) (> (car a) (car b))))
+      (prind is))))
+
 (defstruct (orgap
 	     (:constructor make-orgap*))
   genes ;genes of the organism
@@ -305,7 +336,7 @@
 			(setf (aref stack sp) (1+ ip))
 			(setf sp (mod (1+ sp) (array-dimension stack 0)))
 			(setf ip jump-ip)
-			(print "call0" ip)
+			(prind "call0" ip)
 			(if (<= 0 ip max-ip)
 			    (go next-ins)
 			    (die "invalid call target"))))
