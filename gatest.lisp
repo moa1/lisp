@@ -269,13 +269,16 @@ VELOCITY is the speed, i.e. position change per tick."
 (defun make-orgcont (&rest args)
   (apply #'make-instance 'orgcont args))
 
+;; load edit-distance functions
+(load "edit-distance.lisp")
+
 ;; load organism implementation
 (load "~/lisp/gatest-orgap-lisp.lisp")
 ;;(load "~/lisp/gatest-orgap-lightning.lisp")
 
-(defun orgcont-copy (orgcont)
-  (with-slots (orgap id age totage offspring-count lasttick) orgcont
-    (make-orgcont :orgap (copy-orgap orgap) :id id :age age :totage totage :offspring-count offspring-count :lasttick lasttick)))
+(defun copy-orgcont (orgcont)
+  (with-slots (orgap id lasttick nexttick age totage offspring-list offspring-count offspring-energy-sum walk-sum walk-count kill-count energy-in-sum energy-out-sum) orgcont
+    (make-orgcont :orgap (copy-orgap orgap) :id id :lasttick lasttick :nexttick nexttick :age age :totage totage :offspring-list offspring-list :offspring-count offspring-count :offspring-energy-sum offspring-energy-sum :walk-sum walk-sum :walk-count walk-count :kill-count kill-count :energy-in-sum energy-in-sum :energy-out-sum energy-out-sum)))
 
 (defun orgs-add-org (orgcont)
   (setf (gethash (orgcont-id orgcont) *orgs*) orgcont))
@@ -366,13 +369,11 @@ VELOCITY is the speed, i.e. position change per tick."
 	    (orgap-x orgap) (orgap-y orgap) (float (orgap-angle orgap)) (when (> walk-count 0) (/ walk-sum walk-count)) kill-count (when (> offspring-count 0) (round offspring-energy-sum offspring-count))))
   (print-orgap orgcont))
 
-(load "edit-distance.lisp")
-
 (defun compute-raw-edit-distance (org1-genes org2-genes)
   (declare (optimize (debug 3)))
-  (let* ((score-fn (make-edit-distance-match-score-fn 0 -1))
-	 (m (edit-distance-matrix org1-genes org2-genes score-fn -1))
-	 (score (edit-distance-score m))
+  (let* ((score-fn (make-score-fn 0 -1))
+	 (m (needleman-wunsch org1-genes org2-genes score-fn -1))
+	 (score (best-alignment-score m))
 	 (length (let ((l1 (length org1-genes))
 		       (l2 (length org2-genes)))
 		   (if (or (= l1 0) (= l2 0))
@@ -383,9 +384,9 @@ VELOCITY is the speed, i.e. position change per tick."
 
 (defun compute-edit-distance (org1-genes org2-genes)
   (declare (optimize (debug 3)))
-  (let* ((score-fn (make-edit-distance-match-score-fn 1 -1))
-	 (m (edit-distance-matrix org1-genes org2-genes score-fn -1))
-	 (score (edit-distance-score m))
+  (let* ((score-fn (make-score-fn 1 -1))
+	 (m (needleman-wunsch org1-genes org2-genes score-fn -1))
+	 (score (best-alignment-score m))
 	 (length (length org1-genes))
 	 (scaled-score (expt 2 (* (- (float score) length) 0.125)))
 	 )
@@ -398,9 +399,9 @@ VELOCITY is the speed, i.e. position change per tick."
 		 a))
 	 (n (length orgs))
 	 (score-sum 0.0))
-    (loop for i below n do
+    (loop for i below (1- n) do
 	 ;;(loop for j from (1+ i) below n do
-	 (let* ((j (random n))
+	 (let* ((j (+ i (random (- n i))))
 		(org1-genes (orgap-genes (orgcont-orgap (aref orgs i))))
 		(org2-genes (orgap-genes (orgcont-orgap (aref orgs j))))
 		(scaled-score (compute-raw-edit-distance org1-genes org2-genes)))
