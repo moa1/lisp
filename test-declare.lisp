@@ -1,3 +1,5 @@
+;; https://stackoverflow.com/questions/19485248/what-do-optional-and-rest-mean-in-a-values-type-specifier: CLHS states "The &optional and &rest markers can appear in the value-type list; they indicate the parameter list of a function that, when given to multiple-value-call along with the values, would correctly receive those values."
+
 (defun declare-special-1 ()
   (labels ((test (n)
 	     (if (= n 0)
