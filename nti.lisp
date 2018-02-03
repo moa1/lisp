@@ -28,6 +28,8 @@ The evaluation of the body of PROGN would have to detect that GO doesn't return,
 What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We know that the GO-form must leave the FLET-form, because a TAGBODY can only have labels in its top-level body (i.e. not in nested forms inside the TAGBODY). This means that if the body of a function returns a (MAKE-RESULTS :NVALUES 0), we know that its application form (F1) won't return either.
 |#
 
+(declaim (optimize (debug 3)))
+
 (load "~/quicklisp/setup.lisp")
 (ql:quickload '(:walker :walker-plus))
 
@@ -217,19 +219,23 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
   (infinite nil :type (or symbol list))) ;the infinite part of the values list of the result
 
 (defun make-results (&rest results)
-  (make-results* :nvalues (expt 2 (length results)) :finite (copy-list results) :infinite 'null))
+  (let ((results-head (nreverse (member-if (lambda (result) (not (eql 'null result))) (reverse results)))))
+    (make-results* :nvalues (expt 2 (length results)) :finite (copy-list results-head) :infinite 'null)))
+
+(defun make-results-infinite (result-type)
+  (make-results* :nvalues -1 :finite nil :infinite result-type))
 
 (defun is-results-infinite (results infinite-part)
   (and (= (results-nvalues results) -1) (eql (results-finite results) nil) (eql (results-infinite results) infinite-part)))
 
 (defun make-results-t ()
-  (make-results* :nvalues -1 :finite nil :infinite t))
+  (make-results-infinite t))
 
 (defun is-results-t (results)
   (is-results-infinite results t))
 
 (defun make-results-nil ()
-  (make-results* :nvalues -1 :finite nil :infinite nil))
+  (make-results-infinite nil))
 
 (defun is-results-nil (results)
   (is-results-infinite results nil))
@@ -335,7 +341,7 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 	 (nv1 (results-nvalues results1))
 	 (nv2 (results-nvalues results2))
 	 (nv (funcall nvalues-function nv1 nv2)))
-    (make-results* :nvalues nv :finite finite-cropped :infinite infinite)))    
+    (make-results* :nvalues nv :finite finite-cropped :infinite infinite)))
 
 (defun meet-results (results1 results2)
   "RESULTS1 and RESULTS2 are each of type RESULTS. Meet them and return the new RESULTS."
@@ -696,89 +702,6 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 			  (annotate ast))
 |#
 
-#|
-(defun forward (ast &key (join-namespaces t) (join-form t) (meet-namespaces t))
-  (declare (optimize (debug 3)))
-  (loop for form in (form-forms ast) do
-       (when (null (form-branches-prev form))
-	 (meet-namespace-prev! form ast)))
-  (let ((last-active-forms nil))
-    (loop for form in (form-forms ast) do
-	 (when meet-namespaces
-	   (let* ((branches (form-branches-prev form))
-		  (active-branches (remove-if (lambda (b) (etypecase b
-							    (go-form (not (eq (walker:form-tag form) (walker:form-tag b))))
-							    (return-from-form (not (eq (walker:form-blo form) (walker:form-blo b))))
-							    (t (is-not-returning-form b))))
-					      branches)))
-	     (unless (null active-branches)
-	       (join-namespaces! (form-prev-upper form) (form-prev-lower form) (mapcar #'form-next-upper active-branches) (mapcar #'form-next-lower active-branches))
-	       (when (typep form 'blo)
-		 (join-forms! form (mapcar (lambda (x) (if (typep x 'return-from-form) (walker:form-value x) x)) active-branches))))))
-	 (deduce-forward form)
-	 (when (is-returning-form form)
-	   (funcall (form-action-forward form)))
-	 (let ((branches-next (form-branches-next form)))
-	   (when (and (null branches-next) (is-returning-form form))
-	     (push form last-active-forms))))
-    (cond
-      (last-active-forms
-       (when join-namespaces
-	 (join-namespaces! (form-next-upper ast) (form-next-lower ast) (mapcar #'form-next-upper last-active-forms) (mapcar #'form-next-lower last-active-forms)))
-       (when join-form
-	 (join-forms! ast last-active-forms)))
-      (t
-       (setf (form-upper ast) (make-results-0))
-       (setf (form-lower ast) (make-results-0))
-       (meet-namespace-next-prev! ast ast)))))
-
-(defun backward (ast &key (meet-namespaces t) (meet-form t))
-  (declare (optimize (debug 3)))
-  (let ((last-active-forms nil))
-    (loop for form in (form-forms ast) do
-	 (unless (etypecase form
-		   ;;(go-form (not (eq (walker:nso-definition (walker:form-tag form)) ast))) ;TODO: FIXME: this is wrong, AST may not be a TAGBODY
-		   ;;(return-from-form (not (eq (walker:nso-definition (walker:form-blo form)) ast))) ;TODO: FIXME: ditto
-		   (go-form nil)
-		   (return-from-form nil)
-		   (t (is-not-returning-form form)))
-	   (push form last-active-forms)))
-    ;; note that LAST-ACTIVE-FORMS is already in reverse order to (FORM-FORMS AST) here.
-    (cond
-      (last-active-forms
-       (when meet-namespaces
-	 (loop for form in last-active-forms do
-	      (when (null (form-branches-next form))
-		(meet-namespace-next! form ast)
-		(when meet-form
-		  (meet-form! form ast)))))
-       (loop for form in last-active-forms do
-	    (let* ((branches-next (form-branches-next form)))
-	      (cond
-		((or (null branches-next)
-		     (loop for branch in branches-next thereis
-			  (is-returning-form branch)))
-		 (let* ((branches (form-branches-next form))
-			(active-branches (remove-if #'is-not-returning-form branches)))
-		   (when (typep form 'blo)
-		     (loop for branch in active-branches do
-			  (meet-form! branch form)))
-		   (unless (null active-branches)
-		     (join-namespaces! (form-next-upper form) (form-next-lower form) (mapcar #'form-prev-upper active-branches) (mapcar #'form-prev-lower active-branches))))
-		 (when (is-returning-form form)
-		   (funcall (form-action-backward form)))
-		 (deduce-backward form)
-		 ))))
-       (loop for form in (form-forms ast) do
-	    (when (null (form-branches-prev form))
-	      (meet-namespace-prev! ast form))))
-      (t
-       (meet-namespace-prev-next! ast ast)))))
-|#
-
-
-;;;; REWRITE 2: First construct the control flow graph: In which order are the forms evaluated?
-
 ;;; CLIST, a list that stores the last cons separately. It can be appended to in constant time.
 
 (defstruct (clist (:constructor make-clist*))
@@ -795,7 +718,7 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
   "Returns the list stored in the clist CL."
   (cdr (clist-head cl)))
 
-(defun clist-push (cl object)
+(defun clist-pushend (cl object)
   "Push the OBJECT to the end of the clist CL. Returns FG."
   (let ((tailcons2 (cons object nil)))
     (setf (cdr (clist-tailcons cl)) tailcons2)
@@ -815,10 +738,10 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 
 (defun test-clist ()
   (let ((cl (make-clist)))
-    (clist-push cl 1)
+    (clist-pushend cl 1)
     (assert (equal (clist-list cl) '(1)))
     (assert (eql (clist-last cl) 1))
-    (clist-push cl 2)
+    (clist-pushend cl 2)
     (assert (equal (clist-list cl) '(1 2)))
     (assert (eql (clist-last cl) 2))
     (let ((cl2 (make-clist)))
@@ -839,17 +762,39 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
   (format stream "~W" (clist-list object)))
 
 ;;; Type inference properties of forms.
-
+#|
 (defclass userproperties ()
   ((lexical-namespace :initform nil :initarg :lexical-namespace :accessor userproperties-lexical-namespace :documentation "The lexical namespace before the form was parsed.")
    (free-namespace :initform nil :initarg :free-namespace :accessor userproperties-free-namespace :documentation "The free namespace before the form was parsed.")
    (funbinding :initform nil :initarg :funbinding :accessor userproperties-funbinding :documentation "For APPLICATION-FORMs, a copy of the AST of the function binding being called.")
-   (upper :initform (make-results-t) :initarg :upper :accessor userproperties-upper :documentation "The upper type bound of the form.")
-   (lower :initform (make-results-nil) :initarg :lower :accessor userproperties-lower :documentation "The lower type bound of the form.")))
+   (exits :initform nil :initarg :exits :accessor userproperties-exits :type nil
+	  :documentation "NIL if no part of the form is reachable (non-deterministically) from the root AST, or the list of exits (TAGs and BLOs outside the form, and the form itself) that are exited from inside the form.")
+   (upper :initform (make-results-t) :initarg :upper :accessor userproperties-upper :type results :documentation "The upper type bound of the form.")
+   (lower :initform (make-results-nil) :initarg :lower :accessor userproperties-lower :type results :documentation "The lower type bound of the form.")))
+|#
+(defstruct userproperties
+  (lexical-namespace nil)
+  (free-namespace nil)
+  (funbinding nil)
+  (exits nil)
+  (upper (make-results-t) :type results)
+  (lower (make-results-nil) :type results))
 
 (defmethod print-object ((user userproperties) stream)
   (print-unreadable-object (user stream :type t :identity nil)
-    (format t "~S ~S" (userproperties-upper user) (userproperties-lower user))))
+    (format t "~A~S ~S" (if (userproperties-exits user) "" "DEAD ") (userproperties-upper user) (userproperties-lower user))))
+
+(defun ast-lexical-namespace (ast)
+  (userproperties-lexical-namespace (walker:user ast)))
+
+(defun ast-free-namespace (ast)
+  (userproperties-free-namespace (walker:user ast)))
+
+(defun ast-exits (ast)
+  (userproperties-exits (walker:user ast)))
+
+(defun (setf ast-exits) (value ast)
+  (setf (userproperties-exits (walker:user ast)) value))
 
 (defun ast-upper (ast)
   (userproperties-upper (walker:user ast)))
@@ -863,10 +808,63 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 (defun (setf ast-lower) (value ast)
   (setf (userproperties-lower (walker:user ast)) value))
 
+(defun mapc-namespaces (function asts)
+  "FUNCTION is a function of the variables stored in the namespaces of ASTS."
+  (apply #'mapc
+	 (lambda (&rest vars)
+	   (assert (loop for var in (cdr vars) always (eql (walker:nso-name (car vars)) (walker:nso-name var))))
+	   (apply function vars))
+	 (mapcar (lambda (namespace) (loop for acons in namespace collect (cdr acons)))
+		 (mapcar #'walker:namespace-var
+			 (mapcar #'ast-lexical-namespace asts)))))
+
 (defun meet-ast! (ast-target ast2)
   "Meet the results of AST-TARGET and AST2 and save the result in AST-TARGET."
   (setf (ast-upper ast-target) (meet-results (ast-upper ast-target) (ast-upper ast2)))
   (setf (ast-lower ast-target) (meet-results (ast-upper ast-target) (ast-lower ast2))))
+
+(defun meet-namespace! (ast-target ast2)
+  (mapc-namespaces (lambda (target-var ast2-var)
+		     (setf (ast-upper target-var) (meet-results (ast-upper target-var) (ast-upper ast2-var))
+			   (ast-lower target-var) (meet-results (ast-upper target-var) (ast-lower ast2-var))))
+		   (list ast-target ast2)))
+
+(defun join-ast! (ast-target asts)
+  "Join the results of ASTS and meet the result with AST-TARGET."
+  (setf (ast-upper ast-target) (meet-results (ast-upper ast-target) (reduce #'join-results (mapcar #'ast-upper (cdr asts)) :initial-value (ast-upper (car asts))))
+	(ast-lower ast-target) (meet-results (ast-upper ast-target) (reduce #'join-results (mapcar #'ast-lower (cdr asts)) :initial-value (ast-lower (car asts)))))) ;meet AST-UPPER again
+
+(defun join-ast-results! (ast-target results-upper results-lower)
+  "Join the results of ASTS and meet the result with AST-TARGET."
+  (setf (ast-upper ast-target) (meet-results (ast-upper ast-target) (reduce #'join-results (cdr results-upper) :initial-value (car results-upper)))
+	(ast-lower ast-target) (meet-results (ast-upper ast-target) (reduce #'join-results (cdr results-lower) :initial-value (car results-lower))))) ;meet AST-UPPER again
+
+(defun join-namespaces! (ast-target asts)
+  "Join the common namespace of ASTS and meet the result with AST-TARGET."
+  (mapc-namespaces (lambda (target-var ns0-var &rest nss-var)
+		     ;; it should be correct to set (AST-UPPER TARGET-VAR) directly to the join instead of set the meet of TARGET-VAR with the join of the new namespaces? If it isn't then how does an IF-FORM prevent only being able to calculate subtypes of the variable types (of variables in the namespace) before the IF-FORM?
+		     #|(setf (ast-upper target-var)
+			   (meet-results (ast-upper target-var)
+					 (reduce (lambda (v1 v2)
+						   (prind (ast-upper v1) (ast-upper v2))
+						   (join-results (ast-upper v1) (ast-upper v2)))
+						 nss-var :initial-value ns0-var)))
+		     (setf (ast-lower target-var)
+			   (meet-results (ast-upper target-var) ;meet AST-UPPER again
+					 (reduce (lambda (v1 v2)
+						   (join-results (ast-lower v1) (ast-lower v2)))
+						 nss-var :initial-value ns0-var)))
+		     |#
+		     (setf (ast-upper target-var)
+			   (reduce #'join-results nss-var :initial-value (ast-upper ns0-var) :key #'ast-upper))
+		     (setf (ast-lower target-var)
+			   (reduce #'join-results nss-var :initial-value (ast-lower ns0-var) :key #'ast-lower)))
+		   (cons ast-target asts)))
+
+(defun set-ast-result (ast type)
+  (let ((type (make-results type)))
+    (setf (ast-upper ast) type
+	  (ast-lower ast) type)))
 
 ;;; PARSER
 
@@ -878,10 +876,9 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 
 (defmethod set-userproperties ((ast walker:application-form) (parser parser-nti) last-parser parent)
   ;; If this is a non-recursive call, then copy the FUN-BINDING and store the copy in USERPROPERTIES.
-  (let ((userproperties (make-instance 'userproperties :lexical-namespace (walker:parser-lexical-namespace parser) :free-namespace (walker:parser-free-namespace parser))))
+  (let ((userproperties (make-userproperties :lexical-namespace (walker:parser-lexical-namespace parser) :free-namespace (walker:parser-free-namespace parser))))
     (cond
       ((not (find-builtin-function (walker:nso-name (walker:form-fun ast))))
-       ;;(let ((fun (walker:nso-name (walker:form-fun ast)))) (or (walker:namespace-boundp 'walker:fun fun (walker:parser-lexical-namespace parser)) (walker:namespace-boundp 'walker:fun fun (walker:parser-free-namespace parser))))
        (cond
 	 ((walker:form-recursivep ast)
 	  nil)
@@ -897,29 +894,34 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 	    (setf (userproperties-funbinding userproperties) fun-binding-ast-copy))))))
     (setf (walker:user ast) userproperties)))
 
+(defun redefine-var! (parser symbol new-var)
+  "Redefine the variable defined for SYMBOL in PARSER to be NEW-VAR. Return NIL."
+  (let ((new-lexical-namespace (walker:namespace-var (walker:parser-lexical-namespace parser)))
+	(new-free-namespace (walker:namespace-var (walker:parser-free-namespace parser))))
+    (let ((cons-lexical (assoc symbol new-lexical-namespace :test #'equal))
+	  (cons-free (assoc symbol new-free-namespace :test #'equal)))
+      (cond
+	(cons-lexical
+	 (setf (cdr cons-lexical) new-var))
+	(cons-free
+	 (setf (cdr cons-free) new-var))
+	(t (error "Var ~S is neither in lexical nor in free namespace" symbol))))
+    (setf (walker:namespace-var (walker:parser-lexical-namespace parser)) new-lexical-namespace
+	  (walker:namespace-var (walker:parser-free-namespace parser)) new-free-namespace))
+  nil)
+
 (defmethod set-userproperties ((ast walker:setq-form) (parser parser-nti) last-parser parent)
   (flet ((copy-var (var)
 	   (walker:make-ast parser 'walker:var :name (walker:nso-name var) :freep (walker:nso-freep var) :definition (walker:nso-definition var) :sites (walker:nso-sites var) :declspecs (walker:nso-declspecs var) :macrop (walker:nso-macrop var)))) ;slot USER is set by the overridden #'MAKE-AST
-    (let ((new-lexical-namespace (walker:namespace-var (walker:parser-lexical-namespace parser)))
-	  (new-free-namespace (walker:namespace-var (walker:parser-free-namespace parser))))
-      (loop for var-rest on (walker:form-vars ast) do
-	   (let* ((var (car var-rest))
-		  (symbol (walker:nso-name var))
-		  (cons-lexical (assoc symbol new-lexical-namespace :test #'equal))
-		  (cons-free (assoc symbol new-free-namespace :test #'equal)))
-	     (setf (car var-rest)
-		   (cond
-		     (cons-lexical
-		      (setf (cdr cons-lexical) (copy-var var)))
-		     (cons-free
-		      (setf (cdr cons-free) (copy-var var)))
-		     (t (error "Var ~S is neither in lexical nor in free namespace" var))))))
-      (setf (walker:namespace-var (walker:parser-lexical-namespace parser)) new-lexical-namespace
-	    (walker:namespace-var (walker:parser-free-namespace parser)) new-free-namespace)))
-  (setf (walker:user ast) (make-instance 'userproperties :lexical-namespace (walker:parser-lexical-namespace parser) :free-namespace (walker:parser-free-namespace parser))))
+    (loop for var-rest on (walker:form-vars ast) do
+	 (let* ((var (car var-rest))
+		(new-var (copy-var var)))
+	   (redefine-var! parser (walker:nso-name var) new-var)
+	   (setf (car var-rest) new-var))))
+  (setf (walker:user ast) (make-userproperties :lexical-namespace (walker:parser-lexical-namespace parser) :free-namespace (walker:parser-free-namespace parser))))
 
 (defmethod set-userproperties (ast (parser parser-nti) form parent)
-  (setf (walker:user ast) (make-instance 'userproperties :lexical-namespace (walker:parser-lexical-namespace parser) :free-namespace (walker:parser-free-namespace parser))))
+  (setf (walker:user ast) (make-userproperties :lexical-namespace (walker:parser-lexical-namespace parser) :free-namespace (walker:parser-free-namespace parser))))
 
 (defmethod walker:parse :around ((parser parser-nti) form parent)
   (let* ((last-parser (walker:copy-parser parser))
@@ -929,66 +931,269 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 
 (defmethod walker:make-ast :around ((parser parser-nti) type &rest arguments)
   (let ((ast (apply #'call-next-method parser type arguments)))
-    (when (or (typep ast 'walker:nso) (typep ast 'walker:selfevalobject))
-      (let ((userproperties (make-instance 'userproperties :lexical-namespace (walker:parser-lexical-namespace parser) :free-namespace (walker:parser-free-namespace parser))))
-	(setf (walker:user ast) userproperties)))
+    (let ((userproperties (make-userproperties :lexical-namespace (walker:parser-lexical-namespace parser) :free-namespace (walker:parser-free-namespace parser))))
+      (setf (walker:user ast) userproperties))
     ast))
 
 ;;; ANNOTATE
 
 (defclass deparser-annotate (walker:deparser)
-  ((borders :initarg :borders :initform '(upper) :accessor deparser-borders :documentation "The list of borders to be displayed: may be one of '() '(UPPER) '(LOWER) '(UPPER LOWER).") ;TODO
-   (show :initarg :show :initform 'form :accessor deparser-show :documentation "Whether to show ASTs or FORMs."))
-  (:documentation "Deparser for #'ANNOTATE"))
+  ((borders :initarg :borders :initform '(:upper) :accessor deparser-borders :documentation "What type of borders to show for a form: may be one of:
+NIL (no annotation)
+:UPPER (annotation using the special form THE)
+:LOWER (annotation using the new form THE-L)
+:UPPER-LOWER (annotation using the new form THE-UL).")
+   (show :initarg :show :initform :form :accessor deparser-show :documentation "Whether to show :AST or :FORM.") ;TODO
+   (notannotating1 :initarg :notannotating1 :accessor deparser-notannotating1 :documentation "An instance of class 'DEPARSER-NOTANNOTATE."))
+  (:documentation "Annotating deparser for #'ANNOTATE"))
 
-(defmethod walker:deparse :around ((deparser deparser-annotate) ast)
+(defclass deparser-notannotate (walker:deparser)
+  ((next :initarg :next :accessor deparser-next :documentation "An instance of class DEPARSER-ANNOTATE."))
+  (:documentation "Deparser that doesn't annotate the first level for #'ANNOTATE."))
+
+(defmethod walker:deparse :around ((deparser deparser-annotate) (ast walker:declspec-ftype))
+  (walker:deparse (deparser-notannotating1 deparser) ast))
+
+(defmethod walker:deparse :around ((deparser deparser-annotate) (ast walker:llist))
+  (walker:deparse (deparser-notannotating1 deparser) ast))
+
+(defmethod walker:deparse :around ((deparser deparser-annotate) (ast walker:fun))
+  (walker:deparse (deparser-notannotating1 deparser) ast))
+
+(defmethod walker:deparse :around ((deparser deparser-annotate) (ast walker:fun-binding))
+  ;; TODO: in DEPARSER-INFER, add declarations to the function.
+  (walker:deparse (deparser-notannotating1 deparser) ast))
+
+(defmethod walker:deparse :around ((deparser deparser-annotate) (ast walker:var-binding))
   (let ((form (call-next-method deparser ast)))
-    (flet ((results-format (u l)
-	     (let ((m (max (results-nvalues u) (results-nvalues l))))
+    (list (caddr (caaddr form)) (cadr (caddr form)))))
+
+(defmethod walker:deparse :around ((deparser deparser-annotate) (ast walker:setq-form))
+  (let ((form (call-next-method deparser ast)))
+    (do ((rest (cdaddr form) (cddr rest))) ((null rest) form)
+      (setf (car rest) (caddar rest)))))
+
+(defmethod walker:deparse :around ((deparser deparser-annotate) (ast walker:tag))
+  (walker:deparse (deparser-notannotating1 deparser) ast))
+
+(defun results-format (deparser ast form)
+  (nconc
+   (let* ((u (ast-upper ast))
+	  (l (ast-lower ast))
+	  (m (max (results-nvalues u) (results-nvalues l))))
+     (ecase (deparser-borders deparser)
+       (:upper-lower
+	(cons 'the-ul
+	      (cond
+		((or (is-results-0 u) (is-results-0 l))
+		 (list nil nil))
+		((= m -1)
+		 (list (list '&rest (results-infinite u) '&rest (results-infinite l))))
+		(t
+		 (loop for i below (most-significant-bit m) collect
+		      (list (resultn u i) (resultn l i)))))))
+       (:upper
+	(cons 'the
+	      (list
 	       (cond
 		 ((= m -1)
-		  (list (results-infinite u) '* (results-infinite l) '*))
+		  (list 'values '&rest (results-infinite u)))
 		 (t
-		  (loop for i below (most-significant-bit m) collect
-		       (list (resultn u i) (resultn l i))))))))
-      (etypecase ast
-	(walker:fun
-	 form)
-	(walker:var-binding ;remove type
-	 (list (car (last (car form))) (cadr form)))
-	(walker:setq-form ;remove type from variables
-	 (let ((f (results-format (ast-upper ast) (ast-lower ast))))
-	   (nconc (cons 'the-ul f)
-		  (do ((rest (cdr form) (cddr rest))) ((null rest) (list form))
-		    (setf (car rest) (caddar rest))))))
-	(t
-	 (let ((f (results-format (ast-upper ast) (ast-lower ast))))
-	   (nconc (cons 'the-ul f) (list (ecase (deparser-show deparser) (ast ast) (form form))))))))))
+		  (list* 'values (loop for i below (most-significant-bit m) collect
+				      (resultn u i))))))))
+       (t (error "TODO"))))
+   (list form)))
 
-(defun annotate (ast)
-  (let* ((deparser (make-instance 'deparser-annotate)))
-    (walker:deparse deparser ast)))
+(defmethod walker:deparse :around ((deparser deparser-annotate) ast)
+  (results-format deparser ast (call-next-method deparser ast)))
+
+(defmethod walker:deparse :around ((deparser deparser-notannotate) ast)
+  (call-next-method (deparser-next deparser) ast))
+
+(defun annotate (ast &key (borders :upper-lower) (show :form))
+  (let* ((deparser-annotate (make-instance 'deparser-annotate :borders borders :show show))
+	 (deparser-notannotating1 (make-instance 'deparser-notannotate :next deparser-annotate)))
+    (setf (deparser-notannotating1 deparser-annotate) deparser-notannotating1)
+    (walker:deparse deparser-annotate ast)))
 
 ;;; INFER
 
 (defclass deparser-infer (walker:deparser-map-ast)
-  ((order :initarg :order :initform (make-clist) :accessor deparser-order :documentation "A list containing the order the forms were evaluated in during the forward pass.")))
+  ((stack :initarg :stack :initform (make-clist) :accessor deparser-stack :documentation "A stack of ASTs, started to be processed. and finished or unfinished.")
+   (order :initarg :order :initform (make-clist) :accessor deparser-order :documentation "A CLIST containing the order the forms were evaluated in during the forward pass.")))
 
-(defmethod walker:deparse :before ((deparser deparser-infer) ast)
-  (clist-push (deparser-order deparser) ast))
+;; INFER AROUND METHODS: save the order the ASTs are evaluated in and track the liveness of ASTs.
 
+(defmethod walker:deparse :around ((deparser deparser-infer) ast)
+  (let ((stack (deparser-stack deparser))
+	(order (deparser-order deparser)))
+    (cond
+      ((eql (clist-last stack) ast) ;necessary because :AROUND-methods on more specific forms (e.g. TAGBODY-FORMs) call this fallback-:AROUND-method using CALL-NEXT-METHOD. TODO: maybe avoid this by using a non-standard method resolution order.
+       (call-next-method deparser ast))
+      (t
+       (setf (ast-exits ast)
+	     (cond
+	       ((or (null (clist-list order)) (find (clist-last order) (ast-exits (clist-last order))))
+		(clist-pushend stack ast) ;must be before #'CALL-NEXT-METHOD
+		(call-next-method deparser ast) ;infer the form
+		(prog1 
+		    (let ((last (clist-last order)))
+		      (cond
+			((null last)
+			 (list ast))
+			((find last (ast-exits last))
+			 (cons ast (remove last (ast-exits last))))
+			(t
+			 (ast-exits last))))
+		  (clist-pushend order ast)))
+	       (t ;dead forms are not inferred.
+		(warn "dead form ~S" ast)
+		nil)))))))
+
+(defmethod walker:deparse :around ((deparser deparser-infer) (ast walker:tag))
+  (clist-pushend (deparser-stack deparser) ast)
+  (call-next-method deparser ast)
+  (setf (ast-exits ast) (list ast))
+  (clist-pushend (deparser-order deparser) ast))
+
+(defmethod walker:deparse :around ((deparser deparser-infer) (ast walker:go-form))
+  (clist-pushend (deparser-stack deparser) ast)
+  (call-next-method deparser ast)
+  (setf (ast-exits ast) (list (walker:form-tag ast)))
+  (setf (ast-upper ast) (make-results-0)
+	(ast-lower ast) (make-results-0))
+  (clist-pushend (deparser-order deparser) ast))
+
+(defmethod walker:deparse :around ((deparser deparser-infer) (ast walker:tagbody-form))
+  (declare (optimize (debug 3)))
+  (clist-pushend (deparser-stack deparser) ast)
+  (let ((outside-exits nil) ;the list of TAGs and BLOs that are jumped to outside AST
+	(goforms (list (walker:form-body ast))) ;a list of list of forms inside AST that are jumped to.
+	(tag-gopoints (mapcar #'car (mapcar #'walker:nso-gopoint (walker:form-tags ast))))
+	(inside-exits (make-hash-table))
+	(visited (make-hash-table)))
+    (loop while (not (null goforms)) do
+	 (let ((goforms0 (pop goforms)))
+	   (let* ((first (car goforms0))
+		  (entrances (gethash first inside-exits)))
+	     (when entrances
+	       (join-namespaces! first entrances)))
+	   (loop for form-cdr on goforms0 do
+		(let ((form (car form-cdr))
+		      (next-form (cadr form-cdr)))
+		  (when (gethash form visited nil) ;prevent infinite loops
+		    (return))
+		  (setf (gethash form visited) t)
+		  (walker:deparse deparser form)
+		  (let ((non-normal-exits (remove form (ast-exits form))))
+		    (setf outside-exits
+			  (nconc (remove-if (lambda (exit)
+					      (if (find exit (walker:form-tags ast))
+						  (let ((gopoint (walker:nso-gopoint exit)))
+						    (push gopoint goforms)
+						    (push form (gethash (car gopoint) inside-exits)))
+						  nil))
+					    non-normal-exits)
+				 outside-exits))
+		    (when (not (find form (ast-exits form)))
+		      (return)))
+		  (when (and next-form (find next-form tag-gopoints))
+		    (push form (gethash next-form inside-exits)))))))
+    (let ((last (walker:form-body-last ast)))
+      (setf (ast-exits ast)
+	    (nconc (when (and last (find last (ast-exits last)))
+		     (list ast))
+		   outside-exits))
+      (meet-namespace! ast last)))
+  (loop for form in (walker:form-body ast) do
+       (unless (find form (clist-list (deparser-order deparser)))
+	 (warn "dead form ~S" form)))
+  (set-ast-result ast 'null)
+  (clist-pushend (deparser-order deparser) ast))
+
+(defmethod walker:deparse :around ((deparser deparser-infer) (ast walker:return-from-form))
+  (clist-pushend (deparser-stack deparser) ast)
+  (call-next-method deparser ast)
+  (cond
+    ((null (walker:form-value ast))
+     (set-ast-result ast 'null))
+    (t
+     (meet-ast! ast (walker:form-value ast))))
+  (setf (ast-exits ast) (list (walker:form-blo ast)))
+  (clist-pushend (deparser-order deparser) ast))
+
+(defmethod walker:deparse :around ((deparser deparser-infer) (ast walker:block-naming-form))
+  (declare (optimize (debug 3)))
+  (clist-pushend (deparser-stack deparser) ast)
+  (let ((outside-exits nil) ;the list of TAGs and BLOs that are jumped to outside AST
+	(inside-exits nil)) ;the list of RETURN-FORMs that leave this AST
+    (loop for form in (walker:form-body ast) do
+	 (walker:deparse deparser form)
+	 (let ((non-normal-exits (remove form (ast-exits form))))
+	   (setf outside-exits (nconc (remove-if (lambda (exit)
+						   (and (eql exit (walker:form-blo ast))
+							(push form inside-exits)))
+						 non-normal-exits)
+				      outside-exits))
+	   (when (not (find form (ast-exits form)))
+	     (return))))
+    (join-ast! ast inside-exits)
+    (setf (ast-exits ast)
+	  (nconc (let ((last (walker:form-body-last ast)))
+		   (when (and last (find last (ast-exits last)))
+		     (list ast)))
+		 outside-exits)))
+  (loop for form in (walker:form-body ast) do
+       (unless (find form (clist-list (deparser-order deparser)))
+	 (warn "dead form ~S" form)))
+  (clist-pushend (deparser-order deparser) ast))
+
+(defmethod walker:deparse :around ((deparser deparser-infer) (ast walker:if-form))
+  (clist-pushend (deparser-stack deparser) ast)
+  (let ((test (walker:form-test ast))
+	(then (walker:form-then ast))
+	(else (walker:form-else ast)))
+    (walker:deparse deparser test)
+    (let ((test-exits (find test (ast-exits test)))
+	  (else-defined else)
+	  (else (if else else (walker:make-ast (walker:make-parser :type 'parser-nti) 'walker:selfevalobject :object nil))))
+      (when test-exits
+	(walker:deparse deparser then)
+	(if else-defined
+	    (walker:deparse (make-instance 'deparser-infer) else) ;so that (AST-EXITS ELSE) doesn't return NIL if THEN-EXITS==NIL.
+	    (walker:deparse (make-instance 'deparser-infer) else))) ;so that (AST-EXITS ELSE) doesn't return NIL
+      (let ((then-exits (find then (ast-exits then)))
+	    (else-exits (find else (ast-exits else))))
+	(prind else-exits (ast-exits else))
+	(cond
+	  (test-exits
+	   (setf (ast-exits ast) (nconc (when (or then-exits else-exits)
+					  (list ast))
+					(remove then (ast-exits then))
+					(remove else (ast-exits else)))))
+	  (t
+	   (setf (ast-exits ast) (ast-exits test))))
+	(let ((exiting (append (when then-exits (list then)) (when else-exits (list else)))))
+	  (if (and test-exits (not (null exiting)));must be after (JOIN-NAMESPACES! AST ...), so that namespaces in THEN and ELSE are correct.
+	      (join-ast! ast exiting)
+	      (setf (ast-upper ast) (make-results-0)
+		    (ast-lower ast) (make-results-0))))
+	))
+    (join-namespaces! ast (if (null else) (list test then) (list then else))))
+  (clist-pushend (deparser-order deparser) ast))
+
+;; INFER PRIMARY METHODS: type inference.
+    
 (defmethod walker:deparse ((deparser deparser-infer) (ast walker:selfevalobject))
-  ;; maybe move this to #'PARSE; would save some time but a reader wouldn't know where to look for.
-  (let ((type
-	 (etypecase (walker:selfevalobject-object ast)
-	   (fixnum 'fixnum)
-	   (float 'single-float)
-	   (null 'null)
-	   (boolean 'boolean) ;must be after NULL
-	   (symbol 'symbol)
-	   (t t))))
-    (setf (ast-upper ast) (make-results type)
-	  (ast-lower ast) (make-results type))))
+  ;; maybe move this to #'PARSE; would save some time but a person reading code wouldn't know where to look for.
+  (set-ast-result ast
+		  (etypecase (walker:selfevalobject-object ast)
+		    (fixnum 'fixnum)
+		    (float 'single-float)
+		    (null 'null)
+		    (boolean 'boolean) ;must be after NULL
+		    (symbol 'symbol)
+		    (t t))))
 
 (defmethod walker:deparse :after ((deparser deparser-infer) (ast walker:application-form))
   (let* ((fun (walker:form-fun ast))
@@ -1000,42 +1205,64 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
     (setf (ast-upper ast) fun-result-upper
 	  (ast-lower ast) fun-result-lower)))
 
-(defmethod walker:deparse :after ((deparser deparser-infer) (ast walker:var-bindings-form))
-  (loop for binding in (walker:form-bindings ast) do
-       (meet-ast! (walker:form-sym binding) (walker:form-value binding))))
+(defmethod walker:deparse :after ((deparser deparser-infer) (ast walker:var-binding))
+  (meet-ast! (walker:form-sym ast) (walker:form-value ast)))
 
 (defmethod walker:deparse :after ((deparser deparser-infer) (ast walker:body-form))
-  (meet-ast! ast (walker:form-body-last ast)))
+  (let ((last-form (walker:form-body-last ast)))
+    (cond
+      ((null last-form)
+       (set-ast-result ast 'null))
+      (t
+       (meet-ast! ast last-form)))))
 
 (defmethod walker:deparse :after ((deparser deparser-infer) (ast walker:setq-form))
   (loop for var in (walker:form-vars ast) for value in (walker:form-values ast) do
        (meet-ast! var value))
   (meet-ast! ast (car (last (walker:form-values ast)))))
 
-(defun infer (form &key (only-forward t) (rounds 0))
+;;; INFER FUNCTION AND TESTs.
+
+(defun infer (form &key (only-forward t) (rounds -1) (borders :upper-lower) (show :form))
+  "ROUNDS<0 infers until type inference doesn't find any sharper types.
+ROUNDS=0 only parses and annotates the FORM, but doesn't do any type inference rounds."
   (declare (ignore only-forward))
-  (declare (type unsigned-byte rounds))
   (let* ((parser (walker:make-parser :type 'parser-nti))
 	 (ast (walker:parse-with-namespace form :parser parser))
-	 (deparser (make-instance 'deparser-infer)))
+	 (inferer (make-instance 'deparser-infer)))
     (do* ((a 0 (1+ a)) (old nil res) (res t (annotate ast)))
-	 ((if (= rounds 0) (equal old res) (= a rounds)))
-      (walker:deparse deparser ast)
-      (format t "~S~%" (annotate ast)))
-    (annotate ast)))
+	 ((if (minusp rounds) (equal old res) (= a rounds)))
+      (setf (deparser-order inferer) (make-clist))
+      (setf (deparser-stack inferer) (make-clist))
+      (walker:deparse inferer ast)
+      (format t "~S~%" (annotate ast :borders borders :show show))
+      )
+    (annotate ast :borders borders :show show)))
 
 (defun test-infer ()
   (flet ((assert-infer (form desired-result)
-	   (let ((actual-result (infer form)))
+	   (let ((actual-result (infer form :borders :upper-lower)))
 	     (assert (equal desired-result actual-result) () "TEST-INFER failed for~%form: ~S~%desired-result:~S~%actual-result:~S" form desired-result actual-result))))
     (assert-infer '1 '(the-ul (fixnum fixnum) 1))
     (assert-infer '(1+ 1) '(the-ul (fixnum nil) (1+ (the-ul (fixnum fixnum) 1))))
     (assert-infer '(+ 1 1.0) '(the-ul (single-float nil) (+ (the-ul (fixnum fixnum) 1) (the-ul (single-float single-float) 1.0))))
     (assert-infer '(let ((a 1)) a) '(the-ul (fixnum fixnum) (let ((a (the-ul (fixnum fixnum) 1))) (the-ul (fixnum fixnum) a))))
     (assert-infer '(let ((a 1)) (setq a 1.0)) '(the-ul (single-float single-float) (let ((a (the-ul (fixnum fixnum) 1))) (the-ul (single-float single-float) (setq a (the-ul (single-float single-float) 1.0))))))
-#|
-    (test '(tagbody a (go b) (go a) b)
-    ;; check that the test in IF works
+    ;; test IF-FORM join.
+    (assert-infer '(if 1 1 1.0) '(the-ul (number number) (if (the-ul (fixnum fixnum) 1) (the-ul (fixnum fixnum) 1) (the-ul (single-float single-float) 1.0))))
+    (assert-infer '(let ((a nil)) (if 1 (setq a 1.0) (setq a 1))) '(the-ul (number number) (let ((a (the-ul (null null) nil))) (the-ul (number number) (if (the-ul (fixnum fixnum) 1) (the-ul (single-float single-float) (setq a (the-ul (single-float single-float) 1.0))) (the-ul (fixnum fixnum) (setq a (the-ul (fixnum fixnum) 1))))))))
+    (assert-infer '(let ((a nil)) (if (setq a 1) (setq a 1.0)) a) '(the-ul (number number) (let ((a (the-ul (null null) nil))) (the-ul (t t) (if (the-ul (fixnum fixnum) (setq a (the-ul (fixnum fixnum) 1))) (the-ul (single-float single-float) (setq a (the-ul (single-float single-float) 1.0))))) (the-ul (number number) a))))
+    (assert-infer '(let ((a 1)) a (if a (setq a 1.0)) a) '(the-ul (number number) (let ((a (the-ul (fixnum fixnum) 1))) (the-ul (number number) a) (the-ul (t t) (if (the-ul (number number) a) (the-ul (single-float single-float) (setq a (the-ul (single-float single-float) 1.0))))) (the-ul (number number) a))))
+    ;; IF-FORM: check that joining does not join the wrong variables.
+    (assert-infer '(if 1 (let ((a 1)) a) (let ((b 1)) b)) '(the-ul (fixnum fixnum) (if (the-ul (fixnum fixnum) 1) (the-ul (fixnum fixnum) (let ((a (the-ul (fixnum fixnum) 1))) (the-ul (fixnum fixnum) a))) (the-ul (fixnum fixnum) (let ((b (the-ul (fixnum fixnum) 1))) (the-ul (fixnum fixnum) b))))))
+    ;; TAGBODY-FORM
+    (assert-infer '(tagbody a (go b) (go a) b) '(the-ul (null null) (tagbody a (the-ul nil nil (go b)) (the-ul (&rest t &rest nil) (go a)) b)))
+					;(assert-infer '(let ((a 1)) (tagbody (if a (progn (setq a 1.0) (go a)) a) a) a) )
+    ;; check that an empty else-form works.
+    (assert-infer '(let ((a 1)) (tagbody (if 1 (progn (setq a 1.0) (go a))) a) a) '(the-ul (number number) (let ((a (the-ul (fixnum fixnum) 1))) (the-ul (null null) (tagbody (the-ul (null null) (if (the-ul (fixnum fixnum) 1) (the-ul nil nil (progn (the-ul (single-float single-float) (setq a (the-ul (single-float single-float) 1.0))) (the-ul nil nil (go a)))))) a)) (the-ul (number number) a))))
+    ;;(assert-infer '(let ((a 1)) (tagbody (if a (progn (setq a 1.0) (go a))) a) a)
+#|    ;; check that the test in IF works
+    '(let ((a 1)) (tagbody (if (go a) (setq a 1.0) (setq a 1.0)) a) a)
     (test '(tagbody a (if (go b) (go a) (go a)) b)
     ;; check that :LOOPS are detected, and :ALT works
     (test '(tagbody a (if 1 (go b) (go a)) b)
@@ -1044,6 +1271,11 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
     (test '(tagbody a (if 1 (let ((x (go b))) 2) (go a)) b)
     ;; check that labels works
     (test '(tagbody a (if 1 (labels ((f () 1)) (go b)) (go a)) b)
+    ;; check that detecting dead forms works: the NILs should be dead
+    '(tagbody (go a) nil a)
+    '(tagbody b (go b) nil)
+    '(block a 1 (return-from a) nil) ;the 1 shouln't be dead
+    '(block a 1 (return-from a 1) nil) ;the 1s shouln't be dead
     ;; check that function application works
     '(tagbody a (if 1 (labels ((f () (go b))) (f)) (go a)) b)
     '(tagbody a (if 1 (labels ((f () (go b)) (g () (f))) (g)) (go a)) b)

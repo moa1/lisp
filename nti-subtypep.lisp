@@ -34,7 +34,8 @@
 		  `(format t "~%")
 		  `(progn
 		     (format t "~A:" ,(format nil "~A" a))
-		     (dolist (,i (multiple-value-list ,a))
+		     (dolist (,i (handler-case (multiple-value-list ,a)
+				   (error (e) (list e))))
 		       (prin1 ,i)
 		       (princ " ")))))
        (format t "~%"))))
