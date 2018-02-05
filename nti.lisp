@@ -1024,6 +1024,20 @@ NIL (no annotation)
 
 ;; INFER AROUND METHODS: save the order the ASTs are evaluated in and track the liveness of ASTs.
 
+(defun ast-exits-normal (ast)
+  "Return normal exits of AST. Normal exits are defined as exits that do not jump."
+  (remove-if (lambda (ast)
+	       (when (is-results-0 (ast-upper ast)) (assert (is-results-0 (ast-lower ast))))
+	       (is-results-0 (ast-upper ast)))
+	     (ast-exits ast)))
+
+(defun ast-exits-abnormal (ast)
+  "Return abnormal exits of AST. Abnormal exits are defined as exits that do jump."
+  (remove-if (lambda (ast)
+	       (when (is-results-0 (ast-upper ast)) (assert (is-results-0 (ast-lower ast))))
+	       (not (is-results-0 (ast-upper ast))))
+	     (ast-exits ast)))
+
 (defmethod walker:deparse :around ((deparser deparser-infer) ast)
   (let ((stack (deparser-stack deparser))
 	(order (deparser-order deparser)))
@@ -1033,7 +1047,8 @@ NIL (no annotation)
       (t
        (setf (ast-exits ast)
 	     (cond
-	       ((or (null (clist-list order)) (find (clist-last order) (ast-exits (clist-last order))))
+	       ((or (null (clist-list order))
+		    (find (clist-last order) (ast-exits-normal (clist-last order))))
 		(clist-pushend stack ast) ;must be before #'CALL-NEXT-METHOD
 		(call-next-method deparser ast) ;infer the form
 		(prog1 
@@ -1041,8 +1056,8 @@ NIL (no annotation)
 		      (cond
 			((null last)
 			 (list ast))
-			((find last (ast-exits last))
-			 (cons ast (remove last (ast-exits last))))
+			((find last (ast-exits-normal last))
+			 (cons ast (remove last (ast-exits-normal last))))
 			(t
 			 (ast-exits last))))
 		  (clist-pushend order ast)))
@@ -1059,7 +1074,7 @@ NIL (no annotation)
 (defmethod walker:deparse :around ((deparser deparser-infer) (ast walker:go-form))
   (clist-pushend (deparser-stack deparser) ast)
   (call-next-method deparser ast)
-  (setf (ast-exits ast) (list (walker:form-tag ast)))
+  (setf (ast-exits ast) (list ast))
   (setf (ast-upper ast) (make-results-0)
 	(ast-lower ast) (make-results-0))
   (clist-pushend (deparser-order deparser) ast))
@@ -1085,23 +1100,24 @@ NIL (no annotation)
 		    (return))
 		  (setf (gethash form visited) t)
 		  (walker:deparse deparser form)
-		  (let ((non-normal-exits (remove form (ast-exits form))))
+		  (let ((abnormal-exits (ast-exits-abnormal form)))
 		    (setf outside-exits
 			  (nconc (remove-if (lambda (exit)
-					      (if (find exit (walker:form-tags ast))
-						  (let ((gopoint (walker:nso-gopoint exit)))
+					      (if (and (typep exit 'walker:go-form)
+						       (find (walker:form-tag exit) (walker:form-tags ast)))
+						  (let ((gopoint (walker:nso-gopoint (walker:form-tag exit))))
 						    (push gopoint goforms)
-						    (push form (gethash (car gopoint) inside-exits)))
+						    (push exit (gethash (car gopoint) inside-exits)))
 						  nil))
-					    non-normal-exits)
+					    abnormal-exits)
 				 outside-exits))
-		    (when (not (find form (ast-exits form)))
+		    (when (not (find form (ast-exits-normal form)))
 		      (return)))
 		  (when (and next-form (find next-form tag-gopoints))
 		    (push form (gethash next-form inside-exits)))))))
     (let ((last (walker:form-body-last ast)))
       (setf (ast-exits ast)
-	    (nconc (when (and last (find last (ast-exits last)))
+	    (nconc (when (or (null last) (find last (ast-exits-normal last)))
 		     (list ast))
 		   outside-exits))
       (meet-namespace! ast last)))
@@ -1114,12 +1130,9 @@ NIL (no annotation)
 (defmethod walker:deparse :around ((deparser deparser-infer) (ast walker:return-from-form))
   (clist-pushend (deparser-stack deparser) ast)
   (call-next-method deparser ast)
-  (cond
-    ((null (walker:form-value ast))
-     (set-ast-result ast 'null))
-    (t
-     (meet-ast! ast (walker:form-value ast))))
-  (setf (ast-exits ast) (list (walker:form-blo ast)))
+  (setf (ast-exits ast) (list ast))
+  (setf (ast-upper ast) (make-results-0)
+	(ast-lower ast) (make-results-0))
   (clist-pushend (deparser-order deparser) ast))
 
 (defmethod walker:deparse :around ((deparser deparser-infer) (ast walker:block-naming-form))
@@ -1129,18 +1142,18 @@ NIL (no annotation)
 	(inside-exits nil)) ;the list of RETURN-FORMs that leave this AST
     (loop for form in (walker:form-body ast) do
 	 (walker:deparse deparser form)
-	 (let ((non-normal-exits (remove form (ast-exits form))))
+	 (let ((abnormal-exits (remove form (ast-exits-abnormal form))))
 	   (setf outside-exits (nconc (remove-if (lambda (exit)
 						   (and (eql exit (walker:form-blo ast))
 							(push form inside-exits)))
-						 non-normal-exits)
+						 abnormal-exits)
 				      outside-exits))
-	   (when (not (find form (ast-exits form)))
+	   (when (not (find form (ast-exits-normal form)))
 	     (return))))
     (join-ast! ast inside-exits)
     (setf (ast-exits ast)
 	  (nconc (let ((last (walker:form-body-last ast)))
-		   (when (and last (find last (ast-exits last)))
+		   (when (or (null last) (find last (ast-exits-normal last)))
 		     (list ast)))
 		 outside-exits)))
   (loop for form in (walker:form-body ast) do
@@ -1154,38 +1167,37 @@ NIL (no annotation)
 	(then (walker:form-then ast))
 	(else (walker:form-else ast)))
     (walker:deparse deparser test)
-    (let ((test-exits (find test (ast-exits test)))
-	  (else-defined else)
+    (let ((test-exits (find test (ast-exits-normal test)))
 	  (else (if else else (walker:make-ast (walker:make-parser :type 'parser-nti) 'walker:selfevalobject :object nil))))
       (when test-exits
 	(walker:deparse deparser then)
-	(if else-defined
-	    (walker:deparse (make-instance 'deparser-infer) else) ;so that (AST-EXITS ELSE) doesn't return NIL if THEN-EXITS==NIL.
-	    (walker:deparse (make-instance 'deparser-infer) else))) ;so that (AST-EXITS ELSE) doesn't return NIL
-      (let ((then-exits (find then (ast-exits then)))
-	    (else-exits (find else (ast-exits else))))
-	(prind else-exits (ast-exits else))
+	(walker:deparse (make-instance 'deparser-infer) else)) ;new DEPARSE-INFER so that (AST-EXITS ELSE) doesn't return NIL if THEN-EXITS==NIL.
+      (let ((then-exits (find then (ast-exits-normal then)))
+	    (else-exits (find else (ast-exits-normal else))))
 	(cond
 	  (test-exits
-	   (setf (ast-exits ast) (nconc (when (or then-exits else-exits)
-					  (list ast))
-					(remove then (ast-exits then))
-					(remove else (ast-exits else)))))
+	   (setf (ast-exits ast) (nconc (when (or then-exits else-exits) (list ast))
+					(ast-exits-abnormal then)
+				        (ast-exits-abnormal else))))
 	  (t
+	   (warn "dead form ~S" then)
+	   (warn "dead form ~S" else)
 	   (setf (ast-exits ast) (ast-exits test))))
 	(let ((exiting (append (when then-exits (list then)) (when else-exits (list else)))))
 	  (if (and test-exits (not (null exiting)));must be after (JOIN-NAMESPACES! AST ...), so that namespaces in THEN and ELSE are correct.
 	      (join-ast! ast exiting)
 	      (setf (ast-upper ast) (make-results-0)
-		    (ast-lower ast) (make-results-0))))
-	))
-    (join-namespaces! ast (if (null else) (list test then) (list then else))))
+		    (ast-lower ast) (make-results-0)))
+	  (join-namespaces! ast exiting)))))
   (clist-pushend (deparser-order deparser) ast))
 
 ;; INFER PRIMARY METHODS: type inference.
     
 (defmethod walker:deparse ((deparser deparser-infer) (ast walker:selfevalobject))
-  ;; maybe move this to #'PARSE; would save some time but a person reading code wouldn't know where to look for.
+  ;; maybe move this to #'WALKER:PARSE, which would save some time but a person reading code wouldn't know where to look for.
+  (clist-pushend (deparser-stack deparser) ast)
+  (setf (ast-exits ast) (list ast))
+  ;; this must set the sharpest bound possible.
   (set-ast-result ast
 		  (etypecase (walker:selfevalobject-object ast)
 		    (fixnum 'fixnum)
@@ -1193,7 +1205,8 @@ NIL (no annotation)
 		    (null 'null)
 		    (boolean 'boolean) ;must be after NULL
 		    (symbol 'symbol)
-		    (t t))))
+		    (t t)))
+  (clist-pushend (deparser-order deparser) ast))
 
 (defmethod walker:deparse :after ((deparser deparser-infer) (ast walker:application-form))
   (let* ((fun (walker:form-fun ast))
@@ -1235,7 +1248,7 @@ ROUNDS=0 only parses and annotates the FORM, but doesn't do any type inference r
       (setf (deparser-order inferer) (make-clist))
       (setf (deparser-stack inferer) (make-clist))
       (walker:deparse inferer ast)
-      (format t "~S~%" (annotate ast :borders borders :show show))
+      ;;(format t "~S~%" (annotate ast :borders borders :show show))
       )
     (annotate ast :borders borders :show show)))
 
@@ -1251,7 +1264,7 @@ ROUNDS=0 only parses and annotates the FORM, but doesn't do any type inference r
     ;; test IF-FORM join.
     (assert-infer '(if 1 1 1.0) '(the-ul (number number) (if (the-ul (fixnum fixnum) 1) (the-ul (fixnum fixnum) 1) (the-ul (single-float single-float) 1.0))))
     (assert-infer '(let ((a nil)) (if 1 (setq a 1.0) (setq a 1))) '(the-ul (number number) (let ((a (the-ul (null null) nil))) (the-ul (number number) (if (the-ul (fixnum fixnum) 1) (the-ul (single-float single-float) (setq a (the-ul (single-float single-float) 1.0))) (the-ul (fixnum fixnum) (setq a (the-ul (fixnum fixnum) 1))))))))
-    (assert-infer '(let ((a nil)) (if (setq a 1) (setq a 1.0)) a) '(the-ul (number number) (let ((a (the-ul (null null) nil))) (the-ul (t t) (if (the-ul (fixnum fixnum) (setq a (the-ul (fixnum fixnum) 1))) (the-ul (single-float single-float) (setq a (the-ul (single-float single-float) 1.0))))) (the-ul (number number) a))))
+    (assert-infer '(let ((a nil)) (if (setq a 1) (setq a 1.0)) a) '(the-ul (number number) (let ((a (the-ul (null null) nil))) (the-ul (t t) (if (the-ul (fixnum fixnum) (setq a (the-ul (fixnum fixnum) 1))) (the-ul (single-float single-float) (setq a (the-ul (single-float single-float) 1.0))))) (the-ul (number number) a)))) ;SETQ in TEST-FORM
     (assert-infer '(let ((a 1)) a (if a (setq a 1.0)) a) '(the-ul (number number) (let ((a (the-ul (fixnum fixnum) 1))) (the-ul (number number) a) (the-ul (t t) (if (the-ul (number number) a) (the-ul (single-float single-float) (setq a (the-ul (single-float single-float) 1.0))))) (the-ul (number number) a))))
     ;; IF-FORM: check that joining does not join the wrong variables.
     (assert-infer '(if 1 (let ((a 1)) a) (let ((b 1)) b)) '(the-ul (fixnum fixnum) (if (the-ul (fixnum fixnum) 1) (the-ul (fixnum fixnum) (let ((a (the-ul (fixnum fixnum) 1))) (the-ul (fixnum fixnum) a))) (the-ul (fixnum fixnum) (let ((b (the-ul (fixnum fixnum) 1))) (the-ul (fixnum fixnum) b))))))
