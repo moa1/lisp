@@ -866,17 +866,17 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
     (setf (ast-upper ast) type
 	  (ast-lower ast) type)))
 
-;;; PARSER
+;;; NTIPARSER
 
-(defclass parser-nti (walker:parser)
+(defclass ntiparser (walker:parser)
   ())
 
-(defmethod walker:copy-parser ((parser parser-nti))
-  (make-instance 'parser-nti :lexical-namespace (walker:parser-lexical-namespace parser) :free-namespace (walker:parser-free-namespace parser)))
+(defmethod walker:copy-parser ((ntiparser ntiparser))
+  (make-instance 'ntiparser :lexical-namespace (walker:parser-lexical-namespace ntiparser) :free-namespace (walker:parser-free-namespace ntiparser)))
 
-(defmethod set-userproperties ((ast walker:application-form) (parser parser-nti) last-parser parent)
+(defmethod set-userproperties ((ast walker:application-form) (ntiparser ntiparser) last-parser parent)
   ;; If this is a non-recursive call, then copy the FUN-BINDING and store the copy in USERPROPERTIES.
-  (let ((userproperties (make-userproperties :lexical-namespace (walker:parser-lexical-namespace parser) :free-namespace (walker:parser-free-namespace parser))))
+  (let ((userproperties (make-userproperties :lexical-namespace (walker:parser-lexical-namespace ntiparser) :free-namespace (walker:parser-free-namespace ntiparser))))
     (cond
       ((not (find-builtin-function (walker:nso-name (walker:form-fun ast))))
        (cond
@@ -894,10 +894,10 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 	    (setf (userproperties-funbinding userproperties) fun-binding-ast-copy))))))
     (setf (walker:user ast) userproperties)))
 
-(defun redefine-var! (parser symbol new-var)
-  "Redefine the variable defined for SYMBOL in PARSER to be NEW-VAR. Return NIL."
-  (let ((new-lexical-namespace (walker:namespace-var (walker:parser-lexical-namespace parser)))
-	(new-free-namespace (walker:namespace-var (walker:parser-free-namespace parser))))
+(defun redefine-var! (ntiparser symbol new-var)
+  "Redefine the variable defined for SYMBOL in NTIPARSER to be NEW-VAR. Return NIL."
+  (let ((new-lexical-namespace (walker:namespace-var (walker:parser-lexical-namespace ntiparser)))
+	(new-free-namespace (walker:namespace-var (walker:parser-free-namespace ntiparser))))
     (let ((cons-lexical (assoc symbol new-lexical-namespace :test #'equal))
 	  (cons-free (assoc symbol new-free-namespace :test #'equal)))
       (cond
@@ -906,32 +906,32 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 	(cons-free
 	 (setf (cdr cons-free) new-var))
 	(t (error "Var ~S is neither in lexical nor in free namespace" symbol))))
-    (setf (walker:namespace-var (walker:parser-lexical-namespace parser)) new-lexical-namespace
-	  (walker:namespace-var (walker:parser-free-namespace parser)) new-free-namespace))
+    (setf (walker:namespace-var (walker:parser-lexical-namespace ntiparser)) new-lexical-namespace
+	  (walker:namespace-var (walker:parser-free-namespace ntiparser)) new-free-namespace))
   nil)
 
-(defmethod set-userproperties ((ast walker:setq-form) (parser parser-nti) last-parser parent)
+(defmethod set-userproperties ((ast walker:setq-form) (ntiparser ntiparser) last-parser parent)
   (flet ((copy-var (var)
-	   (walker:make-ast parser 'walker:var :name (walker:nso-name var) :freep (walker:nso-freep var) :definition (walker:nso-definition var) :sites (walker:nso-sites var) :declspecs (walker:nso-declspecs var) :macrop (walker:nso-macrop var)))) ;slot USER is set by the overridden #'MAKE-AST
+	   (walker:make-ast ntiparser 'walker:var :name (walker:nso-name var) :freep (walker:nso-freep var) :definition (walker:nso-definition var) :sites (walker:nso-sites var) :declspecs (walker:nso-declspecs var) :macrop (walker:nso-macrop var)))) ;slot USER is set by the overridden #'MAKE-AST
     (loop for var-rest on (walker:form-vars ast) do
 	 (let* ((var (car var-rest))
 		(new-var (copy-var var)))
-	   (redefine-var! parser (walker:nso-name var) new-var)
+	   (redefine-var! ntiparser (walker:nso-name var) new-var)
 	   (setf (car var-rest) new-var))))
-  (setf (walker:user ast) (make-userproperties :lexical-namespace (walker:parser-lexical-namespace parser) :free-namespace (walker:parser-free-namespace parser))))
+  (setf (walker:user ast) (make-userproperties :lexical-namespace (walker:parser-lexical-namespace ntiparser) :free-namespace (walker:parser-free-namespace ntiparser))))
 
-(defmethod set-userproperties (ast (parser parser-nti) form parent)
-  (setf (walker:user ast) (make-userproperties :lexical-namespace (walker:parser-lexical-namespace parser) :free-namespace (walker:parser-free-namespace parser))))
+(defmethod set-userproperties (ast (ntiparser ntiparser) form parent)
+  (setf (walker:user ast) (make-userproperties :lexical-namespace (walker:parser-lexical-namespace ntiparser) :free-namespace (walker:parser-free-namespace ntiparser))))
 
-(defmethod walker:parse :around ((parser parser-nti) form parent)
-  (let* ((last-parser (walker:copy-parser parser))
-	 (ast (call-next-method parser form parent)))
-    (set-userproperties ast parser last-parser parent)
+(defmethod walker:parse :around ((ntiparser ntiparser) form parent)
+  (let* ((last-parser (walker:copy-parser ntiparser))
+	 (ast (call-next-method ntiparser form parent)))
+    (set-userproperties ast ntiparser last-parser parent)
     ast))
 
-(defmethod walker:make-ast :around ((parser parser-nti) type &rest arguments)
-  (let ((ast (apply #'call-next-method parser type arguments)))
-    (let ((userproperties (make-userproperties :lexical-namespace (walker:parser-lexical-namespace parser) :free-namespace (walker:parser-free-namespace parser))))
+(defmethod walker:make-ast :around ((ntiparser ntiparser) type &rest arguments)
+  (let ((ast (apply #'call-next-method ntiparser type arguments)))
+    (let ((userproperties (make-userproperties :lexical-namespace (walker:parser-lexical-namespace ntiparser) :free-namespace (walker:parser-free-namespace ntiparser))))
       (setf (walker:user ast) userproperties))
     ast))
 
@@ -1168,7 +1168,7 @@ NIL (no annotation)
 	(else (walker:form-else ast)))
     (walker:deparse inferer test)
     (let ((test-exits (find test (ast-exits-normal test)))
-	  (else (if else else (walker:make-ast (walker:make-parser :type 'parser-nti) 'walker:selfevalobject :object nil))))
+	  (else (if else else (walker:make-ast (walker:make-parser :type 'ntiparser) 'walker:selfevalobject :object nil))))
       (when test-exits
 	(walker:deparse inferer then)
 	(walker:deparse (make-instance 'inferer) else)) ;new DEPARSE-INFER so that (AST-EXITS ELSE) doesn't return NIL if THEN-EXITS==NIL.
@@ -1240,7 +1240,7 @@ NIL (no annotation)
   "ROUNDS<0 infers until type inference doesn't find any sharper types.
 ROUNDS=0 only parses and annotates the FORM, but doesn't do any type inference rounds."
   (declare (ignore only-forward))
-  (let* ((parser (walker:make-parser :type 'parser-nti))
+  (let* ((parser (walker:make-parser :type 'ntiparser))
 	 (ast (walker:parse-with-namespace form :parser parser))
 	 (inferer (make-instance 'inferer)))
     (do* ((a 0 (1+ a)) (old nil res) (res t (annotate ast)))
