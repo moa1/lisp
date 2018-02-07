@@ -1016,11 +1016,11 @@ NIL (no annotation)
     (setf (deparser-notannotating1 deparser-annotate) deparser-notannotating1)
     (walker:deparse deparser-annotate ast)))
 
-;;; INFER
+;;; INFERER
 
-(defclass deparser-infer (walker:deparser-map-ast)
-  ((stack :initarg :stack :initform (make-clist) :accessor deparser-stack :documentation "A stack of ASTs, started to be processed. and finished or unfinished.")
-   (order :initarg :order :initform (make-clist) :accessor deparser-order :documentation "A CLIST containing the order the forms were evaluated in during the forward pass.")))
+(defclass inferer (walker:deparser-map-ast)
+  ((stack :initarg :stack :initform (make-clist) :accessor inferer-stack :documentation "A stack of ASTs, started to be processed. and finished or unfinished.")
+   (order :initarg :order :initform (make-clist) :accessor inferer-order :documentation "A CLIST containing the order the forms were evaluated in during the forward pass.")))
 
 ;; INFER AROUND METHODS: save the order the ASTs are evaluated in and track the liveness of ASTs.
 
@@ -1038,19 +1038,19 @@ NIL (no annotation)
 	       (not (is-results-0 (ast-upper ast))))
 	     (ast-exits ast)))
 
-(defmethod walker:deparse :around ((deparser deparser-infer) ast)
-  (let ((stack (deparser-stack deparser))
-	(order (deparser-order deparser)))
+(defmethod walker:deparse :around ((inferer inferer) ast)
+  (let ((stack (inferer-stack inferer))
+	(order (inferer-order inferer)))
     (cond
       ((eql (clist-last stack) ast) ;necessary because :AROUND-methods on more specific forms (e.g. TAGBODY-FORMs) call this fallback-:AROUND-method using CALL-NEXT-METHOD. TODO: maybe avoid this by using a non-standard method resolution order.
-       (call-next-method deparser ast))
+       (call-next-method inferer ast))
       (t
        (setf (ast-exits ast)
 	     (cond
 	       ((or (null (clist-list order))
 		    (find (clist-last order) (ast-exits-normal (clist-last order))))
 		(clist-pushend stack ast) ;must be before #'CALL-NEXT-METHOD
-		(call-next-method deparser ast) ;infer the form
+		(call-next-method inferer ast) ;infer the form
 		(prog1 
 		    (let ((last (clist-last order)))
 		      (cond
@@ -1065,23 +1065,23 @@ NIL (no annotation)
 		(warn "dead form ~S" ast)
 		nil)))))))
 
-(defmethod walker:deparse :around ((deparser deparser-infer) (ast walker:tag))
-  (clist-pushend (deparser-stack deparser) ast)
-  (call-next-method deparser ast)
+(defmethod walker:deparse :around ((inferer inferer) (ast walker:tag))
+  (clist-pushend (inferer-stack inferer) ast)
+  (call-next-method inferer ast)
   (setf (ast-exits ast) (list ast))
-  (clist-pushend (deparser-order deparser) ast))
+  (clist-pushend (inferer-order inferer) ast))
 
-(defmethod walker:deparse :around ((deparser deparser-infer) (ast walker:go-form))
-  (clist-pushend (deparser-stack deparser) ast)
-  (call-next-method deparser ast)
+(defmethod walker:deparse :around ((inferer inferer) (ast walker:go-form))
+  (clist-pushend (inferer-stack inferer) ast)
+  (call-next-method inferer ast)
   (setf (ast-exits ast) (list ast))
   (setf (ast-upper ast) (make-results-0)
 	(ast-lower ast) (make-results-0))
-  (clist-pushend (deparser-order deparser) ast))
+  (clist-pushend (inferer-order inferer) ast))
 
-(defmethod walker:deparse :around ((deparser deparser-infer) (ast walker:tagbody-form))
+(defmethod walker:deparse :around ((inferer inferer) (ast walker:tagbody-form))
   (declare (optimize (debug 3)))
-  (clist-pushend (deparser-stack deparser) ast)
+  (clist-pushend (inferer-stack inferer) ast)
   (let ((outside-exits nil) ;the list of TAGs and BLOs that are jumped to outside AST
 	(goforms (list (walker:form-body ast))) ;a list of list of forms inside AST that are jumped to.
 	(tag-gopoints (mapcar #'car (mapcar #'walker:nso-gopoint (walker:form-tags ast))))
@@ -1099,7 +1099,7 @@ NIL (no annotation)
 		  (when (gethash form visited nil) ;prevent infinite loops
 		    (return))
 		  (setf (gethash form visited) t)
-		  (walker:deparse deparser form)
+		  (walker:deparse inferer form)
 		  (let ((abnormal-exits (ast-exits-abnormal form)))
 		    (setf outside-exits
 			  (nconc (remove-if (lambda (exit)
@@ -1122,26 +1122,26 @@ NIL (no annotation)
 		   outside-exits))
       (meet-namespace! ast last)))
   (loop for form in (walker:form-body ast) do
-       (unless (find form (clist-list (deparser-order deparser)))
+       (unless (find form (clist-list (inferer-order inferer)))
 	 (warn "dead form ~S" form)))
   (set-ast-result ast 'null)
-  (clist-pushend (deparser-order deparser) ast))
+  (clist-pushend (inferer-order inferer) ast))
 
-(defmethod walker:deparse :around ((deparser deparser-infer) (ast walker:return-from-form))
-  (clist-pushend (deparser-stack deparser) ast)
-  (call-next-method deparser ast)
+(defmethod walker:deparse :around ((inferer inferer) (ast walker:return-from-form))
+  (clist-pushend (inferer-stack inferer) ast)
+  (call-next-method inferer ast)
   (setf (ast-exits ast) (list ast))
   (setf (ast-upper ast) (make-results-0)
 	(ast-lower ast) (make-results-0))
-  (clist-pushend (deparser-order deparser) ast))
+  (clist-pushend (inferer-order inferer) ast))
 
-(defmethod walker:deparse :around ((deparser deparser-infer) (ast walker:block-naming-form))
+(defmethod walker:deparse :around ((inferer inferer) (ast walker:block-naming-form))
   (declare (optimize (debug 3)))
-  (clist-pushend (deparser-stack deparser) ast)
+  (clist-pushend (inferer-stack inferer) ast)
   (let ((outside-exits nil) ;the list of TAGs and BLOs that are jumped to outside AST
 	(inside-exits nil)) ;the list of RETURN-FORMs that leave this AST
     (loop for form in (walker:form-body ast) do
-	 (walker:deparse deparser form)
+	 (walker:deparse inferer form)
 	 (let ((abnormal-exits (remove form (ast-exits-abnormal form))))
 	   (setf outside-exits (nconc (remove-if (lambda (exit)
 						   (and (eql exit (walker:form-blo ast))
@@ -1157,21 +1157,21 @@ NIL (no annotation)
 		     (list ast)))
 		 outside-exits)))
   (loop for form in (walker:form-body ast) do
-       (unless (find form (clist-list (deparser-order deparser)))
+       (unless (find form (clist-list (inferer-order inferer)))
 	 (warn "dead form ~S" form)))
-  (clist-pushend (deparser-order deparser) ast))
+  (clist-pushend (inferer-order inferer) ast))
 
-(defmethod walker:deparse :around ((deparser deparser-infer) (ast walker:if-form))
-  (clist-pushend (deparser-stack deparser) ast)
+(defmethod walker:deparse :around ((inferer inferer) (ast walker:if-form))
+  (clist-pushend (inferer-stack inferer) ast)
   (let ((test (walker:form-test ast))
 	(then (walker:form-then ast))
 	(else (walker:form-else ast)))
-    (walker:deparse deparser test)
+    (walker:deparse inferer test)
     (let ((test-exits (find test (ast-exits-normal test)))
 	  (else (if else else (walker:make-ast (walker:make-parser :type 'parser-nti) 'walker:selfevalobject :object nil))))
       (when test-exits
-	(walker:deparse deparser then)
-	(walker:deparse (make-instance 'deparser-infer) else)) ;new DEPARSE-INFER so that (AST-EXITS ELSE) doesn't return NIL if THEN-EXITS==NIL.
+	(walker:deparse inferer then)
+	(walker:deparse (make-instance 'inferer) else)) ;new DEPARSE-INFER so that (AST-EXITS ELSE) doesn't return NIL if THEN-EXITS==NIL.
       (let ((then-exits (find then (ast-exits-normal then)))
 	    (else-exits (find else (ast-exits-normal else))))
 	(cond
@@ -1189,13 +1189,13 @@ NIL (no annotation)
 	      (setf (ast-upper ast) (make-results-0)
 		    (ast-lower ast) (make-results-0)))
 	  (join-namespaces! ast exiting)))))
-  (clist-pushend (deparser-order deparser) ast))
+  (clist-pushend (inferer-order inferer) ast))
 
 ;; INFER PRIMARY METHODS: type inference.
     
-(defmethod walker:deparse ((deparser deparser-infer) (ast walker:selfevalobject))
+(defmethod walker:deparse ((inferer inferer) (ast walker:selfevalobject))
   ;; maybe move this to #'WALKER:PARSE, which would save some time but a person reading code wouldn't know where to look for.
-  (clist-pushend (deparser-stack deparser) ast)
+  (clist-pushend (inferer-stack inferer) ast)
   (setf (ast-exits ast) (list ast))
   ;; this must set the sharpest bound possible.
   (set-ast-result ast
@@ -1206,9 +1206,9 @@ NIL (no annotation)
 		    (boolean 'boolean) ;must be after NULL
 		    (symbol 'symbol)
 		    (t t)))
-  (clist-pushend (deparser-order deparser) ast))
+  (clist-pushend (inferer-order inferer) ast))
 
-(defmethod walker:deparse :after ((deparser deparser-infer) (ast walker:application-form))
+(defmethod walker:deparse :after ((inferer inferer) (ast walker:application-form))
   (let* ((fun (walker:form-fun ast))
 	 (args (walker:form-arguments ast))
 	 (arg-types-upper (loop for arg in args collect (result1 (ast-upper arg))))
@@ -1218,10 +1218,10 @@ NIL (no annotation)
     (setf (ast-upper ast) fun-result-upper
 	  (ast-lower ast) fun-result-lower)))
 
-(defmethod walker:deparse :after ((deparser deparser-infer) (ast walker:var-binding))
+(defmethod walker:deparse :after ((inferer inferer) (ast walker:var-binding))
   (meet-ast! (walker:form-sym ast) (walker:form-value ast)))
 
-(defmethod walker:deparse :after ((deparser deparser-infer) (ast walker:body-form))
+(defmethod walker:deparse :after ((inferer inferer) (ast walker:body-form))
   (let ((last-form (walker:form-body-last ast)))
     (cond
       ((null last-form)
@@ -1229,7 +1229,7 @@ NIL (no annotation)
       (t
        (meet-ast! ast last-form)))))
 
-(defmethod walker:deparse :after ((deparser deparser-infer) (ast walker:setq-form))
+(defmethod walker:deparse :after ((inferer inferer) (ast walker:setq-form))
   (loop for var in (walker:form-vars ast) for value in (walker:form-values ast) do
        (meet-ast! var value))
   (meet-ast! ast (car (last (walker:form-values ast)))))
@@ -1242,11 +1242,11 @@ ROUNDS=0 only parses and annotates the FORM, but doesn't do any type inference r
   (declare (ignore only-forward))
   (let* ((parser (walker:make-parser :type 'parser-nti))
 	 (ast (walker:parse-with-namespace form :parser parser))
-	 (inferer (make-instance 'deparser-infer)))
+	 (inferer (make-instance 'inferer)))
     (do* ((a 0 (1+ a)) (old nil res) (res t (annotate ast)))
 	 ((if (minusp rounds) (equal old res) (= a rounds)))
-      (setf (deparser-order inferer) (make-clist))
-      (setf (deparser-stack inferer) (make-clist))
+      (setf (inferer-order inferer) (make-clist))
+      (setf (inferer-stack inferer) (make-clist))
       (walker:deparse inferer ast)
       ;;(format t "~S~%" (annotate ast :borders borders :show show))
       )
