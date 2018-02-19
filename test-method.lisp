@@ -209,6 +209,52 @@ around MOTHER after
 around CHILD after
 around GRANDCHILD after
 (AROUND GRANDCHILD)
+NIL
+|#
 
+(defmethod pri ((a mother))
+  (format t "pri mother before~%")
+  (when (next-method-p)
+    (call-next-method))
+  (format t "pri mother after~%"))
+
+(defmethod pri ((a father))
+  (format t "pri father before~%")
+  (when (next-method-p)
+    (call-next-method))
+  (format t "pri father after~%"))
+
+(defmethod pri ((a child))
+  (format t "pri child before~%")
+  (when (next-method-p)
+    (call-next-method))
+  (format t "pri child after~%"))
+
+(defmethod pri ((a grandchild))
+  (format t "pri grandchild before~%")
+  (when (next-method-p)
+    (call-next-method))
+  (format t "pri grandchild after~%"))
+
+(defun test-primaries ()
+  (format t "(PRI (MAKE-INSTANCE 'MOTHER))~%")
+  (pri (make-instance 'mother))
+  (format t "(PRI (MAKE-INSTANCE 'GRANDCHILD))~%")
+  (pri (make-instance 'grandchild)))
+
+#|
+(test-primaries)
+(PRI (MAKE-INSTANCE 'MOTHER))
+pri mother before
+pri mother after
+(PRI (MAKE-INSTANCE 'GRANDCHILD))
+pri grandchild before
+pri child before
+pri mother before
+pri father before
+pri father after
+pri mother after
+pri child after
+pri grandchild after
 NIL
 |#
