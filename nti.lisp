@@ -1330,10 +1330,22 @@ ROUNDS=0 only parses and annotates the FORM, but doesn't do any type inference r
 
 ;;; FIND EXITS
 
-;;(defgeneric find-exits
+(defun last1 (list)
+  "Return the last element of LIST."
+  (car (last list)))
+
+(defmacro pushend (list1 &rest lists)
+  "Concatenate LIST1 and all LISTS, using #'NCONC, and set LIST1 to the resulting list."
+  `(setf ,list1 (apply #'nconc ,list1 ,@(butlast lists) (list ,(last1 lists)))))
+
+(defmacro pushfront (list-last &rest lists)
+  "Concatenate all LISTS and LIST-LAST, using #'NCONC, and set LIST-LAST to the resulting list."
+  `(setf ,list-last (apply #'nconc ,@lists (list ,list-last))))
 
 (defclass exitfinder (walker:deparser)
   ())
+
+;;(defgeneric find-exits
 
 (defun normal-exits (exits)
   (remove-if (lambda (exit)
@@ -1353,31 +1365,28 @@ ROUNDS=0 only parses and annotates the FORM, but doesn't do any type inference r
 (defmethod find-exits ((exitfinder exitfinder) (ast walker:var))
   (list ast))
 
-(defun last1 (list)
-  (car (last list)))
-
-(defun gatekeep-forms-list (exitfinder forms next-method-p call-next-method-fun)
-  "Return the forms that return the value in FORMS, which are embedded in AST.
-If NEXT-METHOD-P is non-NIL, the function CALL-NEXT-METHOD-FUN is called at the end, and its value is returned."
+(defun find-exits-forms-list (exitfinder ast forms next-method-p call-next-method-fun)
+  "Return the list of forms consisting of 1. the last evaluated form in FORMS, or 2. jump out of FORMS.
+If NEXT-METHOD-P is non-NIL, the function CALL-NEXT-METHOD-FUN is called at the end, and its results override point 1 from above."
   (let ((ast-exits nil))
     (loop for form in (butlast forms) do
-	 (let* ((form-exits (find-exits exitfinder form))
-		(normal-exits (normal-exits form-exits)))
-	   (setf ast-exits (nconc ast-exits (remove form form-exits)))
-	   (unless normal-exits
+	 (let* ((form-exits (find-exits exitfinder form)))
+	   (pushend ast-exits (jumping-exits form-exits))
+	   (unless (normal-exits form-exits)
 	     (return))))
     (let* ((last-form (last1 forms))
-	   (last-form-exits (find-exits exitfinder last-form)))
-      (setf ast-exits (nconc ast-exits last-form-exits))
+	   (last-form-exits (if last-form (find-exits exitfinder last-form) (list ast))))
+      (pushend ast-exits last-form-exits)
       (if next-method-p
-	  (nconc (remove last-form ast-exits) (funcall call-next-method-fun))
+	  (nconc (jumping-exits ast-exits) (funcall call-next-method-fun))
 	  ast-exits))))
 
 (defmethod find-exits ((exitfinder exitfinder) (ast walker:body-form))
-  (gatekeep-forms-list exitfinder (walker:form-body ast) nil #'call-next-method))
+  ;; The NIL for NEXT-METHOD-P means that subtypes of AST below WALKER:BODY-FORM are not called using #'FIND-EXITS.
+  (find-exits-forms-list exitfinder ast (walker:form-body ast) nil #'call-next-method))
 
 (defmethod find-exits ((exitfinder exitfinder) (ast walker:var-bindings-form))
-  (gatekeep-forms-list exitfinder (mapcar #'walker:form-value (walker:form-bindings ast)) (next-method-p) #'call-next-method))
+  (find-exits-forms-list exitfinder ast (mapcar #'walker:form-value (walker:form-bindings ast)) (next-method-p) #'call-next-method))
 
 (defmethod find-exits ((exitfinder exitfinder) (ast walker:if-form))
   (let* ((test-form (walker:form-test ast))
@@ -1406,37 +1415,50 @@ If NEXT-METHOD-P is non-NIL, the function CALL-NEXT-METHOD-FUN is called at the 
 	(goforms (list (walker:form-body ast))) ;a list of list of forms inside AST that are jumped to.
 	(visited (make-hash-table))
 	(last-form (walker:form-body-last ast)))
-    (loop while (not (null goforms)) do
-	 (let* ((goforms0 (pop goforms))
-		(last-goform (last1 goforms0)))
-	   (loop for form in goforms0 do
-		(when (gethash form visited nil) ;prevent infinite loops
-		  (return))
-		(setf (gethash form visited) t)
-		(let* ((form-exits (find-exits exitfinder form)))
-		  (setf ast-exits
-			(nconc ast-exits
-			       (remove-if (lambda (exit)
-					    (if (and (typep exit 'walker:go-form)
-						     (find (walker:form-tag exit) (walker:form-tags ast)))
-						(push (walker:nso-gopoint (walker:form-tag exit)) goforms)
-						nil))
-					  form-exits)))
-		  (when (not (find form form-exits)) ;skip the rest of GOFORMS0
+    (flet ((go-form-jumps-inside-ast (goform)
+	     (and (typep goform 'walker:go-form)
+		  (find (walker:form-tag goform) (walker:form-tags ast)))))
+      (loop while (not (null goforms)) do
+	   (let* ((goforms0 (pop goforms))
+		  (last-goform (last1 goforms0)))
+	     (loop for form in goforms0 do
+		  (when (gethash form visited nil) ;prevent infinite loops
 		    (return))
+		  (setf (gethash form visited) t)
+		  (let* ((form-exits (find-exits exitfinder form)))
+		    (pushend ast-exits
+			     (remove-if (lambda (exit)
+					  (if (go-form-jumps-inside-ast exit)
+					      (push (walker:nso-gopoint (walker:form-tag exit)) goforms)
+					      nil))
+					form-exits))
+		    (unless (normal-exits form-exits) ;skip the rest of GOFORMS0
+		      (return))
 		  (unless (eql form last-goform)
-		    (setf ast-exits (remove form ast-exits)))))))
-    (when (or (null last-form) (find last-form ast-exits))
-      (setf ast-exits (nconc (remove last-form ast-exits) (list ast))))
-    (loop for form in (walker:form-body ast) do
-	 (unless (gethash form visited nil)
-	   (warn "dead form ~S" form)))
+		    (setf ast-exits (remove-if (lambda (x) (or (typep x 'walker:tag) (walker:is-inside x form))) ast-exits)))))))
+      (when (or (null last-form) (normal-exits ast-exits))
+	(setf ast-exits (nconc (jumping-exits ast-exits) (list ast))))
+      (loop for form in (walker:form-body ast) do
+	   (unless (gethash form visited nil)
+	     (warn "dead form ~S" form))))
     ast-exits))
 
 (defmethod find-exits ((exitfinder exitfinder) (ast walker:return-from-form))
   (list ast))
 
-;;(defmethod find-exits ((exitfinder exitfinder) (ast walker:block-form))
+(defmethod find-exits ((exitfinder exitfinder) (ast walker:block-form))
+  (let ((blo (walker:form-blo ast))
+	(ast-exits (find-exits-forms-list exitfinder ast (walker:form-body ast) nil nil))
+	(local-returns nil))
+    (setf ast-exits
+	  (remove-if (lambda (exit)
+		       (when (and (typep exit 'walker:return-from-form)
+				  (eql (walker:form-blo exit) blo))
+			 (setf local-returns t)))
+		     ast-exits))
+    (when (or (null ast-exits) local-returns)
+      (pushend ast-exits (list ast)))
+    ast-exits))
 
 ;; TEST FIND-EXITS
 
@@ -1473,7 +1495,8 @@ If NEXT-METHOD-P is non-NIL, the function CALL-NEXT-METHOD-FUN is called at the 
 	   (multiple-value-bind (ast container) (capturing-parse form)
 	     (let ((desired-exits-1 (loop for exit in desired-exits collect
 					 (if (symbolp exit)
-					     (gethash exit container)
+					     (let ((r (gethash exit container nil)))
+					       (if r r (error "symbol ~S is not captured" exit)))
 					     exit)))
 		   (actual-exits (find-exits (make-instance 'exitfinder) ast)))
 	       (assert (equal actual-exits desired-exits-1)
@@ -1482,18 +1505,33 @@ If NEXT-METHOD-P is non-NIL, the function CALL-NEXT-METHOD-FUN is called at the 
     (assert-find-exit '(capture a 1) '(a))
     (assert-find-exit '(capture a a) '(a))
     (assert-find-exit '(progn (capture a 1)) '(a))
+    (assert-find-exit '(capture a (progn)) '(a))
+    (assert-find-exit '(progn (progn (capture a 1))) '(a))
     (assert-find-exit '(if (capture a (go a)) 1 2) '(a))
     (assert-find-exit '(if (capture a 1) (capture b (go a))) '(a b))
     (assert-find-exit '(if 1 (capture a (go a)) (capture b (go a))) '(a b))
     (assert-find-exit '(if 1 (capture a 2) (capture b 3)) '(a b))
     (assert-find-exit '(if (if 1 (capture a (go a)) t) (capture b 2) (capture c 3)) '(a b c))
     (assert-find-exit '(if (if 1 (capture a (go a))) (capture b 2) (capture c 3)) '(a b c))
+    (assert-find-exit '(if (if 1 (progn (capture a (go a)))) (capture b 2) (capture c 3)) '(a b c))
+    (assert-find-exit '(if 1 (progn (capture a (go e))) (capture b 2)) '(a b))
+    (assert-find-exit '(if 1 (if 1 (capture a (go e)) (capture b 2)) (capture c 2)) '(a b c))
+    (assert-find-exit '(capture a (tagbody)) '(a))
     (assert-find-exit '(capture a (tagbody s (if 1 (go s) (go e)) e)) '(a))
     (assert-find-exit '(capture a (tagbody (if (go e) 1) e)) '(a))
     (assert-find-exit '(tagbody (if (capture a (go a)) (go e)) e) '(a))
     (assert-find-exit '(capture a (tagbody (if 1 (capture b (go a)) (go e)) e)) '(b a))
     (assert-find-exit '(tagbody (if 1 (capture a (go a)) (capture b (go b)))) '(a b))
     (assert-find-exit '(tagbody (if 1 (capture a (go a)) (capture b (go a)))) '(a b))
+    (assert-find-exit '(tagbody (capture a (go e)) (progn 1)) '(a))
+    (assert-find-exit '(tagbody (progn (capture a (go e))) (progn 1)) '(a))
+    (assert-find-exit '(capture a (block nil (return-from nil))) '(a))
+    (assert-find-exit '(capture a (block nil)) '(a))
+    (assert-find-exit '(block nil (capture a (return-from x))) '(a))
+    (assert-find-exit '(block nil (if 1 (capture a (return-from x)) (capture b (return-from x)))) '(a b))
+    (assert-find-exit '(capture a (block nil (if (capture b 1) (return-from nil)))) '(b a))
     ))
 
 (test-find-exits)
+
+;;TODO: I have to know which forms of the TAGBODY are the last form before a TAG and are alive, so that I can merge their namespaces in.
