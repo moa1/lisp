@@ -762,7 +762,7 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
   (format stream "~W" (clist-list object)))
 
 ;;; Type inference properties of forms.
-#|
+
 (defclass userproperties ()
   ((lexical-namespace :initform nil :initarg :lexical-namespace :accessor userproperties-lexical-namespace :documentation "The lexical namespace before the form was parsed.")
    (free-namespace :initform nil :initarg :free-namespace :accessor userproperties-free-namespace :documentation "The free namespace before the form was parsed.")
@@ -771,7 +771,7 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 	  :documentation "NIL if no part of the form is reachable (non-deterministically) from the root AST, or the list of exits (TAGs and BLOs outside the form, and the form itself) that are exited from inside the form.")
    (upper :initform (make-results-t) :initarg :upper :accessor userproperties-upper :type results :documentation "The upper type bound of the form.")
    (lower :initform (make-results-nil) :initarg :lower :accessor userproperties-lower :type results :documentation "The lower type bound of the form.")))
-|#
+#|
 (defstruct userproperties
   (lexical-namespace nil)
   (free-namespace nil)
@@ -779,6 +779,10 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
   (exits nil)
   (upper (make-results-t) :type results)
   (lower (make-results-nil) :type results))
+|#
+
+(defun make-userproperties (&key lexical-namespace free-namespace funbinding exits (upper (make-results-t)) (lower (make-results-nil)))
+  (make-instance 'userproperties :lexical-namespace lexical-namespace :free-namespace free-namespace :funbinding funbinding :exits exits :upper upper :lower lower))
 
 (defmethod print-object ((user userproperties) stream)
   (print-unreadable-object (user stream :type t :identity nil)
@@ -808,26 +812,31 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 (defun (setf ast-lower) (value ast)
   (setf (userproperties-lower (walker:user ast)) value))
 
-(defun mapc-namespaces (function asts)
-  "FUNCTION is a function of the variables stored in the namespaces of ASTS."
+(defun mapc-namespaces (function namespaces)
+  "FUNCTION is a function of the variables stored in the NAMESPACES."
   (apply #'mapc
 	 (lambda (&rest vars)
 	   (assert (loop for var in (cdr vars) always (eql (walker:nso-name (car vars)) (walker:nso-name var))))
 	   (apply function vars))
-	 (mapcar (lambda (namespace) (loop for acons in namespace collect (cdr acons)))
-		 (mapcar #'walker:namespace-var
-			 (mapcar #'ast-lexical-namespace asts)))))
+	 namespaces))
+
+(defun mapc-asts (function asts)
+  "FUNCTION is a function of the variables stored in the namespaces of ASTS."
+  (mapc-namespaces function
+		   (mapcar (lambda (namespace) (loop for acons in namespace collect (cdr acons)))
+			   (mapcar #'walker:namespace-var
+				   (mapcar #'ast-lexical-namespace asts)))))
 
 (defun meet-ast! (ast-target ast2)
   "Meet the results of AST-TARGET and AST2 and save the result in AST-TARGET."
   (setf (ast-upper ast-target) (meet-results (ast-upper ast-target) (ast-upper ast2)))
   (setf (ast-lower ast-target) (meet-results (ast-upper ast-target) (ast-lower ast2))))
 
-(defun meet-namespace! (ast-target ast2)
-  (mapc-namespaces (lambda (target-var ast2-var)
-		     (setf (ast-upper target-var) (meet-results (ast-upper target-var) (ast-upper ast2-var))
-			   (ast-lower target-var) (meet-results (ast-upper target-var) (ast-lower ast2-var))))
-		   (list ast-target ast2)))
+(defun meet-namespaces! (ast-target ast2)
+  (mapc-asts (lambda (target-var ast2-var)
+	       (setf (ast-upper target-var) (meet-results (ast-upper target-var) (ast-upper ast2-var))
+		     (ast-lower target-var) (meet-results (ast-upper target-var) (ast-lower ast2-var))))
+	     (list ast-target ast2)))
 
 (defun join-ast! (ast-target asts)
   "Join the results of ASTS and meet the result with AST-TARGET."
@@ -841,25 +850,13 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 
 (defun join-namespaces! (ast-target asts)
   "Join the common namespace of ASTS and meet the result with AST-TARGET."
-  (mapc-namespaces (lambda (target-var ns0-var &rest nss-var)
-		     ;; it should be correct to set (AST-UPPER TARGET-VAR) directly to the join instead of set the meet of TARGET-VAR with the join of the new namespaces? If it isn't then how does an IF-FORM prevent only being able to calculate subtypes of the variable types (of variables in the namespace) before the IF-FORM?
-		     #|(setf (ast-upper target-var)
-			   (meet-results (ast-upper target-var)
-					 (reduce (lambda (v1 v2)
-						   (prind (ast-upper v1) (ast-upper v2))
-						   (join-results (ast-upper v1) (ast-upper v2)))
-						 nss-var :initial-value ns0-var)))
-		     (setf (ast-lower target-var)
-			   (meet-results (ast-upper target-var) ;meet AST-UPPER again
-					 (reduce (lambda (v1 v2)
-						   (join-results (ast-lower v1) (ast-lower v2)))
-						 nss-var :initial-value ns0-var)))
-		     |#
-		     (setf (ast-upper target-var)
-			   (reduce #'join-results nss-var :initial-value (ast-upper ns0-var) :key #'ast-upper))
-		     (setf (ast-lower target-var)
-			   (reduce #'join-results nss-var :initial-value (ast-lower ns0-var) :key #'ast-lower)))
-		   (cons ast-target asts)))
+  (mapc-asts (lambda (target-var ns0-var &rest nss-var)
+	       ;; it should be correct to set (AST-UPPER TARGET-VAR) directly to the join instead of the meet of TARGET-VAR with the join of the new namespaces? If it isn't then how does an IF-FORM prevent only being able to calculate subtypes of the variable types (of variables in the namespace) before the IF-FORM?
+	       (setf (ast-upper target-var)
+		     (reduce #'join-results nss-var :initial-value (ast-upper ns0-var) :key #'ast-upper))
+	       (setf (ast-lower target-var)
+		     (reduce #'join-results nss-var :initial-value (ast-lower ns0-var) :key #'ast-lower)))
+	     (cons ast-target asts)))
 
 (defun set-ast-result (ast type)
   (let ((type (make-results type)))
@@ -910,6 +907,15 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 	  (walker:namespace-var (walker:parser-free-namespace ntiparser)) new-free-namespace))
   nil)
 
+(defun prepare-join-namespace! (ntiparser asts) ;the name NAMESPACE-PARSERS sucks
+  "Redefine in NTIPARSER the variables that are defined as different variables in the namespaces of ASTS. Return NIL."
+  (mapc-namespaces (lambda (ntiparser-acons &rest namespace-parsers-aconses)
+		     (prind ntiparser-acons namespace-parsers-aconses))
+		   (cons (mapcar #'cdr (walker:namespace-var (walker:parser-lexical-namespace ntiparser)))
+			 (loop for ast in asts collect
+			      (mapcar #'cdr (walker:namespace-var (ast-lexical-namespace ast))))))
+  nil)
+
 (defmethod set-userproperties ((ast walker:setq-form) (ntiparser ntiparser) last-parser parent)
   (flet ((copy-var (var)
 	   (walker:make-ast ntiparser 'walker:var :name (walker:nso-name var) :freep (walker:nso-freep var) :definition (walker:nso-definition var) :sites (walker:nso-sites var) :declspecs (walker:nso-declspecs var) :macrop (walker:nso-macrop var)))) ;slot USER is set by the overridden #'MAKE-AST
@@ -923,6 +929,17 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 (defmethod set-userproperties (ast (ntiparser ntiparser) form parent)
   (setf (walker:user ast) (make-userproperties :lexical-namespace (walker:parser-lexical-namespace ntiparser) :free-namespace (walker:parser-free-namespace ntiparser))))
 
+(defmethod set-userproperties :before ((ast walker:tag) (ntiparser ntiparser) last-parser parent)
+  ;;(setf (walker:parser-lexical-namespace ntiparser) (walker:parser-lexical-namespace (walker:copy-parser-deep-lexical-namespace ntiparser)))
+  )
+
+(defmethod set-userproperties :after ((ast walker:if-form) (ntiparser ntiparser) last-parser parent)
+  (prepare-join-namespace! ntiparser
+			   (append (list (walker:form-then ast))
+				   (list (if (walker:form-else ast)
+					     (walker:form-else ast)
+					     (walker:form-then ast))))))
+
 (defmethod walker:parse :around ((ntiparser ntiparser) form parent)
   (let* ((last-parser (walker:copy-parser ntiparser))
 	 (ast (call-next-method ntiparser form parent)))
@@ -932,7 +949,8 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 (defmethod walker:make-ast :around ((ntiparser ntiparser) type &rest arguments)
   (let ((ast (apply #'call-next-method ntiparser type arguments)))
     (let ((userproperties (make-userproperties :lexical-namespace (walker:parser-lexical-namespace ntiparser) :free-namespace (walker:parser-free-namespace ntiparser))))
-      (setf (walker:user ast) userproperties))
+      ;;(setf (walker:user ast) userproperties)
+      )
     ast))
 
 ;;; ANNOTATE
@@ -1016,9 +1034,10 @@ NIL (no annotation)
     (setf (deparser-notannotating1 deparser-annotate) deparser-notannotating1)
     (walker:deparse deparser-annotate ast)))
 
+#|
 ;;; INFERER
 
-(defclass inferer (walker:deparser-map-ast)
+(defclass inferer (walker:deparser)
   ((stack :initarg :stack :initform (make-clist) :accessor inferer-stack :documentation "A stack of ASTs, started to be processed. and finished or unfinished.")
    (order :initarg :order :initform (make-clist) :accessor inferer-order :documentation "A CLIST containing the order the forms were evaluated in during the forward pass.")))
 
@@ -1049,7 +1068,9 @@ NIL (no annotation)
 	     (cond
 	       ((or (null (clist-list order))
 		    (find (clist-last order) (ast-exits-normal (clist-last order))))
-		(clist-pushend stack ast) ;must be before #'CALL-NEXT-METHOD
+		(clist-pushend stack ast) ;must come before #'CALL-NEXT-METHOD
+		(unless (null (clist-last order))
+		  (meet-namespaces! ast (clist-last order)))
 		(call-next-method inferer ast) ;infer the form
 		(prog1 
 		    (let ((last (clist-last order)))
@@ -1064,6 +1085,9 @@ NIL (no annotation)
 	       (t ;dead forms are not inferred.
 		(warn "dead form ~S" ast)
 		nil)))))))
+
+;;(defmethod walker:deparse :around ((inferer inferer) (ast walker:var-binding))
+
 
 (defmethod walker:deparse :around ((inferer inferer) (ast walker:tag))
   (clist-pushend (inferer-stack inferer) ast)
@@ -1099,6 +1123,7 @@ NIL (no annotation)
 		  (when (gethash form visited nil) ;prevent infinite loops
 		    (return))
 		  (setf (gethash form visited) t)
+		  (prind form (annotate form))
 		  (walker:deparse inferer form)
 		  (let ((abnormal-exits (ast-exits-abnormal form)))
 		    (setf outside-exits
@@ -1113,14 +1138,16 @@ NIL (no annotation)
 				 outside-exits))
 		    (when (not (find form (ast-exits-normal form)))
 		      (return)))
-		  (when (and next-form (find next-form tag-gopoints))
-		    (push form (gethash next-form inside-exits)))))))
+		  (when next-form
+		    ;;(meet-namespaces! next-form form)
+		    (when (find next-form tag-gopoints)
+		      (push form (gethash next-form inside-exits))))))))
     (let ((last (walker:form-body-last ast)))
       (setf (ast-exits ast)
 	    (nconc (when (or (null last) (find last (ast-exits-normal last)))
 		     (list ast))
 		   outside-exits))
-      (meet-namespace! ast last)))
+      (meet-namespaces! ast last)))
   (loop for form in (walker:form-body ast) do
        (unless (find form (clist-list (inferer-order inferer)))
 	 (warn "dead form ~S" form)))
@@ -1140,16 +1167,20 @@ NIL (no annotation)
   (clist-pushend (inferer-stack inferer) ast)
   (let ((outside-exits nil) ;the list of TAGs and BLOs that are jumped to outside AST
 	(inside-exits nil)) ;the list of RETURN-FORMs that leave this AST
-    (loop for form in (walker:form-body ast) do
-	 (walker:deparse inferer form)
-	 (let ((abnormal-exits (remove form (ast-exits-abnormal form))))
-	   (setf outside-exits (nconc (remove-if (lambda (exit)
-						   (and (eql exit (walker:form-blo ast))
-							(push form inside-exits)))
-						 abnormal-exits)
-				      outside-exits))
-	   (when (not (find form (ast-exits-normal form)))
-	     (return))))
+    (loop for form-cdr on (walker:form-body ast) do
+	 (let ((form (car form-cdr))
+	       (next-form (cadr form-cdr)))
+	   (walker:deparse inferer form)
+	   (when next-form
+	     ;;(meet-namespaces! next-form form)
+	     (let ((abnormal-exits (remove form (ast-exits-abnormal form))))
+	       (setf outside-exits (nconc (remove-if (lambda (exit)
+						       (and (eql exit (walker:form-blo ast))
+							    (push form inside-exits)))
+						     abnormal-exits)
+					  outside-exits))
+	       (when (not (find form (ast-exits-normal form)))
+		 (return))))))
     (join-ast! ast inside-exits)
     (setf (ast-exits ast)
 	  (nconc (let ((last (walker:form-body-last ast)))
@@ -1170,8 +1201,8 @@ NIL (no annotation)
     (let ((test-exits (find test (ast-exits-normal test)))
 	  (else (if else else (walker:make-ast (walker:make-parser :type 'ntiparser) 'walker:selfevalobject :object nil))))
       (when test-exits
-	(walker:deparse inferer then)
-	(walker:deparse (make-instance 'inferer) else)) ;new DEPARSE-INFER so that (AST-EXITS ELSE) doesn't return NIL if THEN-EXITS==NIL.
+	(walker:deparse (make-instance 'inferer) then) ;new INFERER for consistency with the ELSE branch.
+	(walker:deparse (make-instance 'inferer) else)) ;new INFERER so that (AST-EXITS ELSE) doesn't return NIL if THEN-EXITS==NIL.
       (let ((then-exits (find then (ast-exits-normal then)))
 	    (else-exits (find else (ast-exits-normal else))))
 	(cond
@@ -1265,13 +1296,13 @@ ROUNDS=0 only parses and annotates the FORM, but doesn't do any type inference r
     (assert-infer '(if 1 1 1.0) '(the-ul (number number) (if (the-ul (fixnum fixnum) 1) (the-ul (fixnum fixnum) 1) (the-ul (single-float single-float) 1.0))))
     (assert-infer '(let ((a nil)) (if 1 (setq a 1.0) (setq a 1))) '(the-ul (number number) (let ((a (the-ul (null null) nil))) (the-ul (number number) (if (the-ul (fixnum fixnum) 1) (the-ul (single-float single-float) (setq a (the-ul (single-float single-float) 1.0))) (the-ul (fixnum fixnum) (setq a (the-ul (fixnum fixnum) 1))))))))
     (assert-infer '(let ((a nil)) (if (setq a 1) (setq a 1.0)) a) '(the-ul (number number) (let ((a (the-ul (null null) nil))) (the-ul (t t) (if (the-ul (fixnum fixnum) (setq a (the-ul (fixnum fixnum) 1))) (the-ul (single-float single-float) (setq a (the-ul (single-float single-float) 1.0))))) (the-ul (number number) a)))) ;SETQ in TEST-FORM
+    ;; check that an empty else-form works.
     (assert-infer '(let ((a 1)) a (if a (setq a 1.0)) a) '(the-ul (number number) (let ((a (the-ul (fixnum fixnum) 1))) (the-ul (number number) a) (the-ul (t t) (if (the-ul (number number) a) (the-ul (single-float single-float) (setq a (the-ul (single-float single-float) 1.0))))) (the-ul (number number) a))))
     ;; IF-FORM: check that joining does not join the wrong variables.
     (assert-infer '(if 1 (let ((a 1)) a) (let ((b 1)) b)) '(the-ul (fixnum fixnum) (if (the-ul (fixnum fixnum) 1) (the-ul (fixnum fixnum) (let ((a (the-ul (fixnum fixnum) 1))) (the-ul (fixnum fixnum) a))) (the-ul (fixnum fixnum) (let ((b (the-ul (fixnum fixnum) 1))) (the-ul (fixnum fixnum) b))))))
     ;; TAGBODY-FORM
     (assert-infer '(tagbody a (go b) (go a) b) '(the-ul (null null) (tagbody a (the-ul nil nil (go b)) (the-ul (&rest t &rest nil) (go a)) b)))
-					;(assert-infer '(let ((a 1)) (tagbody (if a (progn (setq a 1.0) (go a)) a) a) a) )
-    ;; check that an empty else-form works.
+    ;;(assert-infer '(let ((a 1)) (tagbody (if a (progn (setq a 1.0) (go a)) a) a) a) )
     (assert-infer '(let ((a 1)) (tagbody (if 1 (progn (setq a 1.0) (go a))) a) a) '(the-ul (number number) (let ((a (the-ul (fixnum fixnum) 1))) (the-ul (null null) (tagbody (the-ul (null null) (if (the-ul (fixnum fixnum) 1) (the-ul nil nil (progn (the-ul (single-float single-float) (setq a (the-ul (single-float single-float) 1.0))) (the-ul nil nil (go a)))))) a)) (the-ul (number number) a))))
     ;;(assert-infer '(let ((a 1)) (tagbody (if a (progn (setq a 1.0) (go a))) a) a)
 #|    ;; check that the test in IF works
@@ -1295,3 +1326,174 @@ ROUNDS=0 only parses and annotates the FORM, but doesn't do any type inference r
 |#
     ))
 ;;(test-infer)
+|#
+
+;;; FIND EXITS
+
+;;(defgeneric find-exits
+
+(defclass exitfinder (walker:deparser)
+  ())
+
+(defun normal-exits (exits)
+  (remove-if (lambda (exit)
+	       (or (typep exit 'walker:go-form)
+		   (typep exit 'walker:return-from-form)))
+	     exits))
+
+(defun jumping-exits (exits)
+  (remove-if (lambda (exit)
+	       (not (or (typep exit 'walker:go-form)
+			(typep exit 'walker:return-from-form))))
+	     exits))
+
+(defmethod find-exits ((exitfinder exitfinder) (ast walker:selfevalobject))
+  (list ast))
+
+(defmethod find-exits ((exitfinder exitfinder) (ast walker:var))
+  (list ast))
+
+(defun last1 (list)
+  (car (last list)))
+
+(defun gatekeep-forms-list (exitfinder forms next-method-p call-next-method-fun)
+  "Return the forms that return the value in FORMS, which are embedded in AST.
+If NEXT-METHOD-P is non-NIL, the function CALL-NEXT-METHOD-FUN is called at the end, and its value is returned."
+  (let ((ast-exits nil))
+    (loop for form in (butlast forms) do
+	 (let* ((form-exits (find-exits exitfinder form))
+		(normal-exits (normal-exits form-exits)))
+	   (setf ast-exits (nconc ast-exits (remove form form-exits)))
+	   (unless normal-exits
+	     (return))))
+    (let* ((last-form (last1 forms))
+	   (last-form-exits (find-exits exitfinder last-form)))
+      (setf ast-exits (nconc ast-exits last-form-exits))
+      (if next-method-p
+	  (nconc (remove last-form ast-exits) (funcall call-next-method-fun))
+	  ast-exits))))
+
+(defmethod find-exits ((exitfinder exitfinder) (ast walker:body-form))
+  (gatekeep-forms-list exitfinder (walker:form-body ast) nil #'call-next-method))
+
+(defmethod find-exits ((exitfinder exitfinder) (ast walker:var-bindings-form))
+  (gatekeep-forms-list exitfinder (mapcar #'walker:form-value (walker:form-bindings ast)) (next-method-p) #'call-next-method))
+
+(defmethod find-exits ((exitfinder exitfinder) (ast walker:if-form))
+  (let* ((test-form (walker:form-test ast))
+	 (then-form (walker:form-then ast))
+	 (else-form (walker:form-else ast))
+	 (test-exits (find-exits exitfinder test-form)))
+    (cond
+      ((null (normal-exits test-exits))
+       test-exits)
+      (t
+       (let ((then-exits (find-exits exitfinder then-form))
+	     (else-exits (when else-form (find-exits exitfinder else-form))))
+	 (nconc (if else-form (jumping-exits test-exits) test-exits)
+		then-exits
+	        else-exits))))))
+
+(defmethod find-exits ((exitfinder exitfinder) (ast walker:tag))
+  (list ast))
+
+(defmethod find-exits ((exitfinder exitfinder) (ast walker:go-form))
+  (list ast))
+
+(defmethod find-exits ((exitfinder exitfinder) (ast walker:tagbody-form))
+  (declare (optimize (debug 3)))
+  (let ((ast-exits nil) ;the list of forms in AST that jump outside AST
+	(goforms (list (walker:form-body ast))) ;a list of list of forms inside AST that are jumped to.
+	(visited (make-hash-table))
+	(last-form (walker:form-body-last ast)))
+    (loop while (not (null goforms)) do
+	 (let* ((goforms0 (pop goforms))
+		(last-goform (last1 goforms0)))
+	   (loop for form in goforms0 do
+		(when (gethash form visited nil) ;prevent infinite loops
+		  (return))
+		(setf (gethash form visited) t)
+		(let* ((form-exits (find-exits exitfinder form)))
+		  (setf ast-exits
+			(nconc ast-exits
+			       (remove-if (lambda (exit)
+					    (if (and (typep exit 'walker:go-form)
+						     (find (walker:form-tag exit) (walker:form-tags ast)))
+						(push (walker:nso-gopoint (walker:form-tag exit)) goforms)
+						nil))
+					  form-exits)))
+		  (when (not (find form form-exits)) ;skip the rest of GOFORMS0
+		    (return))
+		  (unless (eql form last-goform)
+		    (setf ast-exits (remove form ast-exits)))))))
+    (when (or (null last-form) (find last-form ast-exits))
+      (setf ast-exits (nconc (remove last-form ast-exits) (list ast))))
+    (loop for form in (walker:form-body ast) do
+	 (unless (gethash form visited nil)
+	   (warn "dead form ~S" form)))
+    ast-exits))
+
+(defmethod find-exits ((exitfinder exitfinder) (ast walker:return-from-form))
+  (list ast))
+
+;;(defmethod find-exits ((exitfinder exitfinder) (ast walker:block-form))
+
+;; TEST FIND-EXITS
+
+(defclass capturing-parser (walker:parser)
+  ((container :initarg :container :initform (make-hash-table) :accessor parser-container :documentation "A hash-table that contains all captured forms.")))
+
+(defmethod walker:copy-parser (parser)
+  (make-instance 'capturing-parser
+		 :free-namespace (walker:parser-free-namespace parser)
+		 :lexical-namespace (walker:parser-lexical-namespace parser)
+		 :container (parser-container parser)))
+
+(defmacro capture (name form)
+  "This macro is here just to aid in constructing test cases in #'TEST-FIND-EXITS."
+  (declare (ignore name))
+  form)
+
+(defmethod walker:parse-form ((parser capturing-parser) (head (eql 'capture)) rest parent)
+  (assert (and (consp rest) (null (cdddr rest))) () "Cannot parse QUOTE-form ~S" (cons head rest))
+  (let ((name (car rest))
+	(form (cadr rest)))
+    (let ((ast (walker:parse parser form parent)))
+      (setf (gethash name (parser-container parser)) ast)
+      ast)))
+
+(defun capturing-parse (form)
+  (let* ((capturing-parser (make-instance 'capturing-parser))
+	 (ast (walker:parse-with-namespace form :parser capturing-parser)))
+    (values ast (parser-container capturing-parser))))
+
+(defun test-find-exits ()
+  (flet ((assert-find-exit (form desired-exits)
+	   ;; TOOD: check that "dead form" warnings are correct.
+	   (multiple-value-bind (ast container) (capturing-parse form)
+	     (let ((desired-exits-1 (loop for exit in desired-exits collect
+					 (if (symbolp exit)
+					     (gethash exit container)
+					     exit)))
+		   (actual-exits (find-exits (make-instance 'exitfinder) ast)))
+	       (assert (equal actual-exits desired-exits-1)
+		       ()
+		       "(FIND-EXIT ~S)~%returned ~S,~%but expected ~S~%" form actual-exits desired-exits-1)))))
+    (assert-find-exit '(capture a 1) '(a))
+    (assert-find-exit '(capture a a) '(a))
+    (assert-find-exit '(progn (capture a 1)) '(a))
+    (assert-find-exit '(if (capture a (go a)) 1 2) '(a))
+    (assert-find-exit '(if (capture a 1) (capture b (go a))) '(a b))
+    (assert-find-exit '(if 1 (capture a (go a)) (capture b (go a))) '(a b))
+    (assert-find-exit '(if 1 (capture a 2) (capture b 3)) '(a b))
+    (assert-find-exit '(if (if 1 (capture a (go a)) t) (capture b 2) (capture c 3)) '(a b c))
+    (assert-find-exit '(if (if 1 (capture a (go a))) (capture b 2) (capture c 3)) '(a b c))
+    (assert-find-exit '(capture a (tagbody s (if 1 (go s) (go e)) e)) '(a))
+    (assert-find-exit '(capture a (tagbody (if (go e) 1) e)) '(a))
+    (assert-find-exit '(tagbody (if (capture a (go a)) (go e)) e) '(a))
+    (assert-find-exit '(capture a (tagbody (if 1 (capture b (go a)) (go e)) e)) '(b a))
+    (assert-find-exit '(tagbody (if 1 (capture a (go a)) (capture b (go b)))) '(a b))
+    (assert-find-exit '(tagbody (if 1 (capture a (go a)) (capture b (go a)))) '(a b))
+    ))
+
+(test-find-exits)
