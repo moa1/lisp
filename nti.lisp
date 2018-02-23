@@ -920,7 +920,7 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
   (flet ((copy-var (var)
 	   (walker:make-ast ntiparser 'walker:var :name (walker:nso-name var) :freep (walker:nso-freep var) :definition (walker:nso-definition var) :sites (walker:nso-sites var) :declspecs (walker:nso-declspecs var) :macrop (walker:nso-macrop var)))) ;slot USER is set by the overridden #'MAKE-AST
     (loop for var-rest on (walker:form-vars ast) do
-	 (let* ((var (car var-rest))
+	 (let* ((var (walker:form-var (car var-rest)))
 		(new-var (copy-var var)))
 	   (redefine-var! ntiparser (walker:nso-name var) new-var)
 	   (setf (car var-rest) new-var))))
@@ -1361,7 +1361,7 @@ ROUNDS=0 only parses and annotates the FORM, but doesn't do any type inference r
 
 ;; Forms (in the same order as exported from package WALKER)
 
-(defmethod find-exits ((exitfinder exitfinder) (ast walker:var))
+(defmethod find-exits ((exitfinder exitfinder) (ast walker:var-read-form))
   (list ast))
 
 (defmethod find-exits ((exitfinder exitfinder) (ast walker:object-form))
