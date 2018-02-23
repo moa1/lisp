@@ -1199,7 +1199,7 @@ NIL (no annotation)
 	(else (walker:form-else ast)))
     (walker:deparse inferer test)
     (let ((test-exits (find test (ast-exits-normal test)))
-	  (else (if else else (walker:make-ast (walker:make-parser :type 'ntiparser) 'walker:selfevalobject :object nil))))
+	  (else (if else else (walker:make-ast (walker:make-parser :type 'ntiparser) 'walker:object-form :object nil))))
       (when test-exits
 	(walker:deparse (make-instance 'inferer) then) ;new INFERER for consistency with the ELSE branch.
 	(walker:deparse (make-instance 'inferer) else)) ;new INFERER so that (AST-EXITS ELSE) doesn't return NIL if THEN-EXITS==NIL.
@@ -1224,13 +1224,13 @@ NIL (no annotation)
 
 ;; INFER PRIMARY METHODS: type inference.
     
-(defmethod walker:deparse ((inferer inferer) (ast walker:selfevalobject))
+(defmethod walker:deparse ((inferer inferer) (ast walker:object-form))
   ;; maybe move this to #'WALKER:PARSE, which would save some time but a person reading code wouldn't know where to look for.
   (clist-pushend (inferer-stack inferer) ast)
   (setf (ast-exits ast) (list ast))
   ;; this must set the sharpest bound possible.
   (set-ast-result ast
-		  (etypecase (walker:selfevalobject-object ast)
+		  (etypecase (walker:form-object ast)
 		    (fixnum 'fixnum)
 		    (float 'single-float)
 		    (null 'null)
@@ -1364,7 +1364,7 @@ ROUNDS=0 only parses and annotates the FORM, but doesn't do any type inference r
 (defmethod find-exits ((exitfinder exitfinder) (ast walker:var))
   (list ast))
 
-(defmethod find-exits ((exitfinder exitfinder) (ast walker:selfevalobject))
+(defmethod find-exits ((exitfinder exitfinder) (ast walker:object-form))
   (list ast))
 
 (defun find-exits-forms-list (exitfinder ast forms next-method-p call-next-method-fun)
