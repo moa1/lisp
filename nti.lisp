@@ -1430,7 +1430,7 @@ If NEXT-METHOD-P is non-NIL, the function CALL-NEXT-METHOD-FUN is called at the 
 ;; LOCALLY-FORM should be handled by BODY-FORM.
 
 (defmethod find-exits ((exitfinder exitfinder) (ast walker:the-form))
-  (find-exits exitfinder (walker:form-value)))
+  (find-exits exitfinder (walker:form-value ast)))
 
 (defmethod find-exits ((exitfinder exitfinder) (ast walker:if-form))
   (let* ((test-form (walker:form-test ast))
