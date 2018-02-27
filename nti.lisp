@@ -1367,7 +1367,7 @@ ROUNDS=0 only parses and annotates the FORM, but doesn't do any type inference r
 (defmethod find-exits ((exitfinder exitfinder) (ast walker:object-form))
   (list ast))
 
-(defun find-exits-forms-list (exitfinder ast forms next-method-p call-next-method-fun)
+(defun find-exits-forms-list (exitfinder ast forms)
   "Return the list of forms consisting of 1. the last evaluated form in FORMS, or 2. jump out of FORMS.
 If NEXT-METHOD-P is non-NIL, the function CALL-NEXT-METHOD-FUN is called at the end, and its results override point 1 from above."
   (let ((ast-exits nil))
@@ -1381,13 +1381,11 @@ If NEXT-METHOD-P is non-NIL, the function CALL-NEXT-METHOD-FUN is called at the 
     (let* ((last-form (last1 forms))
 	   (last-form-exits (if last-form (find-exits exitfinder last-form) (list ast))))
       (pushend ast-exits last-form-exits)
-      (if next-method-p
-	  (nconc (jumping-exits ast-exits) (funcall call-next-method-fun))
-	  ast-exits))))
+      ast-exits)))
 
 (defmethod find-exits ((exitfinder exitfinder) (ast walker:body-form))
   ;; The NIL for NEXT-METHOD-P means that subtypes of AST below WALKER:BODY-FORM are not called using #'FIND-EXITS.
-  (find-exits-forms-list exitfinder ast (walker:form-body ast) nil #'call-next-method))
+  (find-exits-forms-list exitfinder ast (walker:form-body ast)))
 
 (defmethod find-exits ((exitfinder exitfinder) (ast walker:function-form))
   (list ast))
@@ -1395,7 +1393,7 @@ If NEXT-METHOD-P is non-NIL, the function CALL-NEXT-METHOD-FUN is called at the 
 ;; PROGN-FORM is handled by BODY-FORM.
 
 (defmethod find-exits ((exitfinder exitfinder) (ast walker:var-bindings-form))
-  (find-exits-forms-list exitfinder ast (mapcar #'walker:form-value (walker:form-bindings ast)) (next-method-p) #'call-next-method))
+  (find-exits-forms-list exitfinder ast (nconc (mapcar #'walker:form-value (walker:form-bindings ast)) (walker:form-body ast))))
 
 (defun find-exits-functiondef (exitfinder funbinding arguments)
   (let ((callstack (deparser-callstack exitfinder)))
@@ -1415,7 +1413,7 @@ If NEXT-METHOD-P is non-NIL, the function CALL-NEXT-METHOD-FUN is called at the 
 		(unless (normal-exits form-exits)
 		  (return-from find-exits-functiondef ast-exits))))
 	 (let* ((body (walker:form-body funbinding))
-		(body-exits (find-exits-forms-list exitfinder funbinding body nil nil)))
+		(body-exits (find-exits-forms-list exitfinder funbinding body)))
 	   (pushend ast-exits body-exits))
 	 ast-exits)))))
 
@@ -1430,7 +1428,7 @@ If NEXT-METHOD-P is non-NIL, the function CALL-NEXT-METHOD-FUN is called at the 
 
 (defmethod find-exits ((exitfinder exitfinder) (ast walker:block-form))
   (let ((blo (walker:form-blo ast))
-	(ast-exits (find-exits-forms-list exitfinder ast (walker:form-body ast) nil nil))
+	(ast-exits (find-exits-forms-list exitfinder ast (walker:form-body ast)))
 	(local-returns nil))
     (setf ast-exits
 	  (remove-if (lambda (exit)
@@ -1442,12 +1440,12 @@ If NEXT-METHOD-P is non-NIL, the function CALL-NEXT-METHOD-FUN is called at the 
       (pushend ast-exits (list ast)))
     ast-exits))
 
-;; TODO: FLET-FORM and LABELS-FORM should be handled by FUN-BINDINGS-FORM and BODY-FORM.
+;; FLET-FORM and LABELS-FORM are handled by FUN-BINDINGS-FORM and BODY-FORM.
 
 (defmethod find-exits ((exitfinder exitfinder) (ast walker:lambda-form))
-  (error "TODO"))
+  (list ast))
 
-;; LOCALLY-FORM should be handled by BODY-FORM.
+;; LOCALLY-FORM is handled by BODY-FORM.
 
 (defmethod find-exits ((exitfinder exitfinder) (ast walker:the-form))
   (find-exits exitfinder (walker:form-value ast)))
@@ -1468,11 +1466,11 @@ If NEXT-METHOD-P is non-NIL, the function CALL-NEXT-METHOD-FUN is called at the 
 	        else-exits))))))
 
 (defmethod find-exits ((exitfinder exitfinder) (ast walker:setq-form))
-  (find-exits-forms-list exitfinder ast (walker:form-values ast) nil #'call-next-method))
+  (find-exits-forms-list exitfinder ast (walker:form-values ast)))
 
 (defmethod find-exits ((exitfinder exitfinder) (ast walker:catch-form))
-  (error "TODO: all THROW-FORMS potentially jump to this CATCH-FORM, so we should merge the types of this CATCH-FORM with the types of those forms")
-  (find-exits-forms-list exitfinder ast (walker:form-values ast) nil #'call-next-method))
+  (error "TODO: all subforms of AST that are a THROW-FORM potentially jump to this CATCH-FORM (AST), so we should merge the types of this CATCH-FORM with the types of those forms")
+  (find-exits-forms-list exitfinder ast (walker:form-values ast)))
 
 (defmethod find-exits ((exitfinder exitfinder) (ast walker:throw-form))
   (error "TODO: look above at CATCH-FORM."))
@@ -1507,10 +1505,13 @@ If NEXT-METHOD-P is non-NIL, the function CALL-NEXT-METHOD-FUN is called at the 
   (error "TOOD: due to protecting the PROTECTED-FORM, the UNWIND-PROTECT-FORM can transfer control after any form or subform consisting of GO-, HANDLER-CASE-, IGNORE-ERRORS-, RESTART-CASE-, RETURN-FROM-, THROW-, WITH-SIMPLE-RESTART-form to the CLEANUP-FORM (which is called BODY-FORM in WALKER)."))
 
 (defmethod find-exits ((exitfinder exitfinder) (ast walker:application-form))
-  (let ((arguments (walker:form-arguments ast)))
-    (if (typep (walker:form-fun ast) 'walker:lambda-form)
-	(find-exits-functiondef exitfinder (walker:form-fun ast) arguments)
-	(find-exits-functiondef exitfinder (walker:nso-definition (walker:form-fun ast)) arguments))))
+  (let ((arguments (walker:form-arguments ast))
+	(funobj (walker:function-object (walker:form-fun ast))))
+    (etypecase funobj
+      (walker:lambda-form
+       (find-exits-functiondef exitfinder funobj arguments))
+      (walker:fun
+       (find-exits-functiondef exitfinder (walker:nso-definition funobj) arguments)))))
 
 ;; MACROAPPLICATION-FORM, SYMBOL-MACROLET-FORM, and MACROLET-FORM don't have to be implemented, since evaluation of the program starts after all macros have been expanded.
 
@@ -1556,32 +1557,68 @@ If NEXT-METHOD-P is non-NIL, the function CALL-NEXT-METHOD-FUN is called at the 
 (defmethod find-exits ((exitfinder exitfinder) (ast walker:go-form))
   (list ast))
 
+(defmethod find-exits ((exitfinder exitfinder) (ast walker-plus:multiple-value-bind-form))
+  (find-exits-forms-list exitfinder ast (cons (walker:form-values ast) (walker:form-body ast))))
+
+(defmethod find-exits ((exitfinder exitfinder) (ast walker-plus:values-form))
+  (find-exits-forms-list exitfinder ast (walker:form-values ast)))
+
+(defmethod find-exits ((exitfinder exitfinder) (ast walker-plus:nth-value-form))
+  (find-exits-forms-list exitfinder ast (list (walker:form-value ast) (walker:form-values ast))))
+
+;;TODO: (defmethod find-exits ((exitfinder exitfinder) (ast walker-plus:defun-form)))
+
+(defmethod find-exits ((exitfinder exitfinder) (ast walker-plus:funcall-form))
+  (let ((arguments (walker:form-arguments ast)))
+    (cond
+      ((typep (walker:form-var ast) 'walker:lambda-form)
+       (find-exits-functiondef exitfinder (walker:form-var ast) arguments))
+      ((let ((var (walker:form-var ast))) (and (typep var 'walker:function-form) (typep (walker:form-object var) 'walker:lambda-form)))
+       (find-exits-functiondef exitfinder (walker:form-object (walker:form-var ast)) arguments))
+      ((let ((var (walker:form-var ast))) (and (typep var 'walker:function-form) (typep (walker:form-object var) 'walker:fun)))
+       (find-exits-functiondef exitfinder (walker:nso-definition (walker:form-var ast)) arguments))
+      (t
+       (error "TODO")))))
+
+;;TODO: (defmethod find-exits ((exitfinder exitfinder) (ast walker-plus:assert-form)))
+
 ;; TEST FIND-EXITS
 
 (defclass capturing-parser (walker:parser)
   ((container :initarg :container :initform (make-hash-table) :accessor parser-container :documentation "A hash-table that contains all captured forms.")))
-
-(defmethod walker:copy-parser (parser)
-  (make-instance 'capturing-parser
+(defun copy-capturing-parser (parser)
+  (make-instance (type-of parser)
 		 :free-namespace (walker:parser-free-namespace parser)
 		 :lexical-namespace (walker:parser-lexical-namespace parser)
 		 :container (parser-container parser)))
+(defmethod walker:copy-parser ((parser capturing-parser))
+  (copy-capturing-parser parser))
+
+(defclass capturing-parser-plus (walker-plus:parser-plus)
+  ((container :initarg :container :initform (make-hash-table) :accessor parser-container :documentation "A hash-table that contains all captured forms.")))
+(defmethod walker:copy-parser ((parser capturing-parser-plus))
+  (copy-capturing-parser parser))
 
 (defmacro capture (name form)
   "This macro is here just to aid in constructing test cases in #'TEST-FIND-EXITS."
   (declare (ignore name))
   form)
 
-(defmethod walker:parse-form ((parser capturing-parser) (head (eql 'capture)) rest parent)
-  (assert (and (consp rest) (null (cdddr rest))) () "Cannot parse QUOTE-form ~S" (cons head rest))
+(defun parse-capture-form (parser head rest parent)
+  (assert (and (consp rest) (null (cdddr rest))) () "Cannot parse CAPTURE-form ~S" (cons head rest))
   (let ((name (car rest))
 	(form (cadr rest)))
     (let ((ast (walker:parse parser form parent)))
       (setf (gethash name (parser-container parser)) ast)
       ast)))
+(defmethod walker:parse-form ((parser capturing-parser) (head (eql 'capture)) rest parent)
+  (parse-capture-form parser head rest parent))
+(defmethod walker:parse-form ((parser capturing-parser-plus) (head (eql 'capture)) rest parent)
+  (parse-capture-form parser head rest parent))
 
 (defun capturing-parse (form)
-  (let* ((capturing-parser (make-instance 'capturing-parser))
+  (let* (;;(capturing-parser (make-instance 'capturing-parser))
+	 (capturing-parser (make-instance 'capturing-parser-plus))
 	 (ast (walker:parse-with-namespace form :parser capturing-parser)))
     (values ast (parser-container capturing-parser))))
 
@@ -1634,6 +1671,14 @@ If NEXT-METHOD-P is non-NIL, the function CALL-NEXT-METHOD-FUN is called at the 
     (assert-find-exit '(labels ((fa (&optional (x (capture a (go a)))) (capture b 1))) (fa)) '(a)) ;TODO: check for dead form warning B
     (assert-find-exit '(labels ((fa (&optional (x (capture a (fa)))) (capture b 1))) (fa)) '()) ;TODO: check for dead form warning B
     (assert-find-exit '((lambda () (capture a 1))) '(a))
+    (assert-find-exit '(multiple-value-bind (a b) (values 2 3) a (capture a b)) '(a))
+    (assert-find-exit '(multiple-value-bind (a b) (capture a (go a)) (capture b a)) '(a)) ;TODO: check for dead form warning B
+    (assert-find-exit '(funcall (lambda () (capture a 1))) '(a))
+    (assert-find-exit '(funcall #'(lambda () (capture a 1))) '(a))
+    (assert-find-exit '(flet ((f1 () (capture a 1))) (funcall #'f1)) '(a))
+    (assert-find-exit '(nth-value 1 (values 1 (capture a 2))) '(a))
+    (assert-find-exit '(nth-value (capture a (go a)) (capture b (values 1 2))) '(a)) ;TODO: check for dead form warning B
+    (assert-find-exit '(nth-value 1 (values 1 (capture a (go a)))) '(a))
     ))
 
 (test-find-exits)
