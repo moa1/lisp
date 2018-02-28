@@ -263,7 +263,6 @@ VELOCITY is the speed, i.e. position change per tick."
    (offspring-energy-sum :initform 0 :initarg :offspring-energy-sum :accessor orgcont-offspring-energy-sum)
    (walk-sum :initform 0.0 :initarg :walk-sum :accessor orgcont-walk-sum)
    (walk-count :initform 0 :initarg :walk-count :accessor orgcont-walk-count)
-   (kill-count :initform 0 :initarg :kill-count :accessor orgcont-kill-count)
    (energy-in-sum :initform 0 :initarg :energy-in-sum :accessor orgcont-energy-in-sum :documentation "The total energy taken in, excluding initial energy of organisms spawned in the world.")
    (energy-out-sum :initform 0 :initarg :energy-out-sum :accessor orgcont-energy-out-sum :documentation "The total energy spent voluntarily or involutarily.")))
 (defun make-orgcont (&rest args)
@@ -277,8 +276,8 @@ VELOCITY is the speed, i.e. position change per tick."
 ;;(load "~/lisp/gatest-orgap-lightning.lisp")
 
 (defun copy-orgcont (orgcont)
-  (with-slots (orgap id lasttick nexttick age totage offspring-list offspring-count offspring-energy-sum walk-sum walk-count kill-count energy-in-sum energy-out-sum) orgcont
-    (make-orgcont :orgap (copy-orgap orgap) :id id :lasttick lasttick :nexttick nexttick :age age :totage totage :offspring-list offspring-list :offspring-count offspring-count :offspring-energy-sum offspring-energy-sum :walk-sum walk-sum :walk-count walk-count :kill-count kill-count :energy-in-sum energy-in-sum :energy-out-sum energy-out-sum)))
+  (with-slots (orgap id lasttick nexttick age totage offspring-list offspring-count offspring-energy-sum walk-sum walk-count energy-in-sum energy-out-sum) orgcont
+    (make-orgcont :orgap (copy-orgap orgap) :id id :lasttick lasttick :nexttick nexttick :age age :totage totage :offspring-list offspring-list :offspring-count offspring-count :offspring-energy-sum offspring-energy-sum :walk-sum walk-sum :walk-count walk-count :energy-in-sum energy-in-sum :energy-out-sum energy-out-sum)))
 
 (defun orgs-add-org (orgcont)
   (setf (gethash (orgcont-id orgcont) *orgs*) orgcont))
@@ -325,7 +324,7 @@ VELOCITY is the speed, i.e. position change per tick."
 (defun cloud-position-circle (tick)
   (values (+ (* 300 (cos (* tick .00000005)))) (+ (* 300 (sin (* tick .00000005))))))
 
-(defun set-default-world (&key (w 400) (h 200) (world-energy 0) (orgs 1000) (org-energy 4000) (reset-random-state t) (world-max-energy 4000) (rain-per-coordinate-per-tick .00001) (fraction-covered .01) (position-function #'cloud-position-circle) (num-barriers-horizontal 5) (barrier-width-horizontal 40) (num-barriers-vertical 5) (barrier-width-vertical 30))
+(defun set-default-world (&key (w 400) (h 200) (world-energy 0) (orgs 250) (org-energy 4000) (reset-random-state t) (world-max-energy 4000) (rain-per-coordinate-per-tick .00001) (fraction-covered .01) (position-function #'cloud-position-circle) (num-barriers-horizontal 5) (barrier-width-horizontal 40) (num-barriers-vertical 5) (barrier-width-vertical 30))
   (when reset-random-state
     (reset-random-state))
   (setf *id* 0)
@@ -361,12 +360,12 @@ VELOCITY is the speed, i.e. position change per tick."
       0))
 
 (defun print-orgcont (orgcont)
-  (with-slots (orgap id age totage offspring-count offspring-energy-sum walk-sum walk-count kill-count) orgcont
+  (with-slots (orgap id age totage offspring-count offspring-energy-sum walk-sum walk-count) orgcont
     (format t "org id:~5A wait:~5A energy:~4A(~5Ain,~5Aout) age:~3A/~A tage/off(~2A):~6F fitness(~3A,~3A):~A~%"
 	    id (orgap-wait orgap) (orgap-energy orgap) (orgcont-energy-in-sum orgcont) (orgcont-energy-out-sum orgcont) age totage
 	    offspring-count (when (> offspring-count 0) (float (/ totage offspring-count))) (compute-fitness orgcont (constantly 1)) (compute-fitness orgcont #'orgcont-offspring-count) (compute-fitness orgcont))
-    (format t "org x:~3,2F y:~3,2F angle:~7,2E speed avg:~1,3F kills:~3A off-energy avg:~4A~%"
-	    (orgap-x orgap) (orgap-y orgap) (float (orgap-angle orgap)) (when (> walk-count 0) (/ walk-sum walk-count)) kill-count (when (> offspring-count 0) (round offspring-energy-sum offspring-count))))
+    (format t "org x:~3,2F y:~3,2F angle:~7,2E speed avg:~1,3F off-energy avg:~4A~%"
+	    (orgap-x orgap) (orgap-y orgap) (float (orgap-angle orgap)) (when (> walk-count 0) (/ walk-sum walk-count)) (when (> offspring-count 0) (round offspring-energy-sum offspring-count))))
   (print-orgap orgcont))
 
 (defun compute-raw-edit-distance (org1-genes org2-genes)
@@ -414,8 +413,6 @@ VELOCITY is the speed, i.e. position change per tick."
     (format t "genome min:~3A avg:~4,1F max:~3A edit-distance-score avg:~F~%" (min-hash-table *orgs* #'genome-length) (avg-hash-table *orgs* #'genome-length) (max-hash-table *orgs* #'genome-length) (calculate-average-edit-distance *orgs*)))
   (flet ((speed (org) (if (> (orgcont-walk-count org) 0) (/ (orgcont-walk-sum org) (orgcont-walk-count org)) (values nil t))))
     (format t "speed min:~1,3F avg:~1,3F max:~1,3F~%" (min-hash-table *orgs* #'speed) (avg-hash-table *orgs* #'speed) (max-hash-table *orgs* #'speed)))
-  (flet ((kills (org) (orgcont-kill-count org)))
-    (format t "kills min:~3A avg:~3F max:~3A~%" (min-hash-table *orgs* #'kills) (avg-hash-table *orgs* #'kills) (max-hash-table *orgs* #'kills)))
   (flet ((compute-fitness-1 (org)
 	   (compute-fitness org (constantly 1)))
 	 (compute-fitness-offspring (org)
