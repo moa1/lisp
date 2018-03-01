@@ -347,9 +347,9 @@ VELOCITY is the speed, i.e. position change per tick."
   (set-default-world))
 
 (defun print-orgap (org)
-  (with-slots (ip genes off-genes as bs an bn stack) (orgcont-orgap org)
-    (format t "orgap ip:~3A/~3A as:~16A bs:~16A an:~A bn:~A~%"
-	    ip (length genes) as bs an bn)
+  (with-slots (ip genes off-genes as bs cs an bn stack) (orgcont-orgap org)
+    (format t "orgap ip:~3A/~3A as:~20A bs:~20A cs:~3A an:~A bn:~A~%"
+	    ip (length genes) as bs cs an bn)
     (format t "orgap stack:~S~%"
 	    stack)
     (format t "~A length:~S hash:~S~%" genes (length genes) (mru-cache:lsxhash genes))))
@@ -391,22 +391,26 @@ VELOCITY is the speed, i.e. position change per tick."
 	 )
     scaled-score))
 
-(defun calculate-average-edit-distance (orgs)
-  (declare (optimize (debug 3)))
-  (let* ((orgs (let ((a (make-array (hash-table-count orgs))))
-		 (loop for v being the hash-value of orgs for i from 0 do (setf (aref a i) v))
-		 a))
-	 (n (length orgs))
-	 (score-sum 0.0))
-    (loop for i below (1- n) do
+(let ((last nil))
+  (defun calculate-average-edit-distance (orgs)
+    (declare (optimize (debug 3)))
+    (let* ((orgs (let ((a (make-array (hash-table-count orgs))))
+		   (loop for v being the hash-value of orgs for i from 0 do (setf (aref a i) v))
+		   a))
+	   (n (length orgs))
+	   (score-sum 0.0))
+      (loop for i below (1- n) do
 	 ;;(loop for j from (1+ i) below n do
-	 (let* ((j (+ i (random (- n i))))
-		(org1-genes (orgap-genes (orgcont-orgap (aref orgs i))))
-		(org2-genes (orgap-genes (orgcont-orgap (aref orgs j))))
-		(scaled-score (compute-raw-edit-distance org1-genes org2-genes)))
-	   (incf score-sum scaled-score)))
-    (/ score-sum n)
-    ))
+	   (let* ((j (+ i (random (- n i))))
+		  (org1-genes (orgap-genes (orgcont-orgap (aref orgs i))))
+		  (org2-genes (orgap-genes (orgcont-orgap (aref orgs j))))
+		  (scaled-score (compute-raw-edit-distance org1-genes org2-genes)))
+	     (incf score-sum scaled-score)))
+      (let ((now (/ score-sum n)))
+	(setf last (if (null last)
+		       now
+		       (+ (* now 0.02) (* last 0.98))))
+	last))))
 
 (defun print-statistics ()
   (flet ((genome-length (org) (length (orgap-genes (orgcont-orgap org)))))
@@ -659,7 +663,7 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 				   (set-pixel x y color))))
 		       (loop for cloud in *world-clouds* do
 			    (multiple-value-bind (x y) (funcall (cloud-position-function cloud) *world-tick*)
-			      (let ((c (random 256)))
+			      (let ((c (+ 128 (random 128))))
 				(set-pixel (mod (round x) w) (mod (round y) h) (color-to-argb8888 255 c c 0))
 				(set-pixel (mod (round (1+ x)) w) (mod (round y) h) (color-to-argb8888 255 c c 0))
 				(set-pixel (mod (round x) w) (mod (round (1+ y)) h) (color-to-argb8888 255 c c 0))
