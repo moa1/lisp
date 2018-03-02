@@ -93,3 +93,33 @@
 	(loop for tag in tags2 for i below n collect
 	     (when (= 0 (mod i 2))
 	       (throw tag i)))))))
+
+;;; WARNINGS
+
+(define-condition mywarning (warning)
+  ())
+
+(defun warn-demo ()
+  (flet ((warner ()
+	   (format t "before #'WARN.~%")
+	   (restart-case (warn (make-condition 'mywarning))
+	     (mufflewarning ()
+	       t))
+	   (format t "after #'WARN.~%")))
+    (handler-bind ((mywarning #'(lambda (warning)
+				  (format t "warning ~S has been signaled~%" warning)
+				  (muffle-warning warning)
+				  ;;(invoke-restart 'mufflewarning)
+				  )))
+      (warner))))
+
+(defun warn-demo2-does-not-work ()
+  "Apparently HANDLER-CASE cannot do the same thing as HANDLER-BIND, since it unwinds the stack and cannot invoke restarts that were not established before it (i.e. the restart must be in a form enclosing the HANDLER-CASE)."
+  (flet ((warner ()
+	   (restart-case (warn "Foo.")
+	     (my-restart () 7))))
+    (handler-case (warner)
+      (warning (c)
+	(declare (ignore c))
+	(invoke-restart 'my-restart)))))
+
