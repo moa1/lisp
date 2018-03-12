@@ -719,7 +719,7 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
   (cdr (clist-head cl)))
 
 (defun clist-pushend (cl object)
-  "Push the OBJECT to the end of the clist CL. Returns FG."
+  "Push the OBJECT to the end of the clist CL. Returns CL."
   (let ((tailcons2 (cons object nil)))
     (setf (cdr (clist-tailcons cl)) tailcons2)
     (setf (clist-tailcons cl) tailcons2))
@@ -763,56 +763,60 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 
 ;;; Type inference properties of forms.
 
-(defclass userproperties ()
-  ((lexical-namespace :initform nil :initarg :lexical-namespace :accessor userproperties-lexical-namespace :documentation "The lexical namespace before the form was parsed.")
-   (free-namespace :initform nil :initarg :free-namespace :accessor userproperties-free-namespace :documentation "The free namespace before the form was parsed.")
-   (funbinding :initform nil :initarg :funbinding :accessor userproperties-funbinding :documentation "For APPLICATION-FORMs, a copy of the AST of the function binding being called.")
-   (exits :initform nil :initarg :exits :accessor userproperties-exits :type nil
-	  :documentation "NIL if no part of the form is reachable (non-deterministically) from the root AST, or the list of exits (TAGs and BLOs outside the form, and the form itself) that are exited from inside the form.")
-   (upper :initform (make-results-t) :initarg :upper :accessor userproperties-upper :type results :documentation "The upper type bound of the form.")
-   (lower :initform (make-results-nil) :initarg :lower :accessor userproperties-lower :type results :documentation "The lower type bound of the form.")))
-#|
-(defstruct userproperties
-  (lexical-namespace nil)
-  (free-namespace nil)
-  (funbinding nil)
-  (exits nil)
-  (upper (make-results-t) :type results)
-  (lower (make-results-nil) :type results))
-|#
+(defclass bounds ()
+  ((upper :initarg :upper :initform (make-results-t) :accessor bounds-upper :documentation "The upper bound of the form.")
+   (lower :initarg :lower :initform (make-results-nil) :accessor bounds-lower :documentation "The lower bounds of the form.")))
 
-(defun make-userproperties (&key lexical-namespace free-namespace funbinding exits (upper (make-results-t)) (lower (make-results-nil)))
-  (make-instance 'userproperties :lexical-namespace lexical-namespace :free-namespace free-namespace :funbinding funbinding :exits exits :upper upper :lower lower))
+(defmethod print-object ((bounds bounds) stream)
+  (print-unreadable-object (bounds stream :type t :identity t)
+    (format stream "upper:~S lower:~S" (bounds-upper bounds) (bounds-lower bounds))))
+
+(defun make-bounds (upper lower)
+  (make-instance 'bounds :upper upper :lower lower))
+
+(defclass userproperties ()
+  ((parser-prev :initarg :parser-prev :accessor userproperties-parser-prev :documentation "The parser before the form was parsed.")
+   (parser-next :initarg :parser-next :accessor userproperties-parser-next :documentation "The parser after the form was parsed.")
+   (form :initarg :form :accessor userproperties-form :documentation "Form-specific properties")
+   (bounds :initform (make-instance 'bounds) :initarg :bounds :accessor userproperties-bounds :type bounds :documentation "The upper and lower bound of the form.")))
+
+(defun make-userproperties (&key parser-prev parser-next form (bounds (make-instance 'bounds)))
+  (make-instance 'userproperties :parser-prev parser-prev :parser-next parser-next :form form :bounds bounds))
 
 (defmethod print-object ((user userproperties) stream)
-  (print-unreadable-object (user stream :type t :identity nil)
-    (format t "~A~S ~S" (if (userproperties-exits user) "" "DEAD ") (userproperties-upper user) (userproperties-lower user))))
+  (print-unreadable-object (user stream :type t :identity t)
+    (let ((bounds (userproperties-bounds user)))
+      (format stream "~S" bounds))))
 
-(defun ast-lexical-namespace (ast)
-  (userproperties-lexical-namespace (walker:user ast)))
+(defun ast-parser-prev (ast)
+  (userproperties-parser-prev (walker:user ast)))
+(defun (setf ast-parser-prev) (value ast)
+  (setf (userproperties-parser-prev (walker:user ast)) value))
 
-(defun ast-free-namespace (ast)
-  (userproperties-free-namespace (walker:user ast)))
+(defun ast-parser-next (ast)
+  (userproperties-parser-next (walker:user ast)))
+(defun (setf ast-parser-next) (value ast)
+  (setf (userproperties-parser-next (walker:user ast)) value))
 
-(defun ast-exits (ast)
-  (userproperties-exits (walker:user ast)))
+(defmethod ast-bounds ((ast walker:form))
+  (userproperties-bounds (walker:user ast)))
+(defmethod ast-bounds ((ast walker:sym))
+  (userproperties-bounds (walker:user ast)))
+(defmethod ast-bounds ((ast walker:var-binding))
+  (userproperties-bounds (walker:user ast)))
+(defmethod ast-bounds ((ast walker:var-reading))
+  (userproperties-bounds (walker:user ast)))
 
-(defun (setf ast-exits) (value ast)
-  (setf (userproperties-exits (walker:user ast)) value))
+(defmethod (setf ast-bounds) (value (ast walker:form))
+  (setf (userproperties-bounds (walker:user ast)) value))
+(defmethod (setf ast-bounds) (value (ast walker:sym))
+  (setf (userproperties-bounds (walker:user ast)) value))
+(defmethod (setf ast-bounds) (value (ast walker:var-binding))
+  (setf (userproperties-bounds (walker:user ast)) value))
+(defmethod (setf ast-bounds) (value (ast walker:var-reading))
+  (setf (userproperties-bounds (walker:user ast)) value))
 
-(defun ast-upper (ast)
-  (userproperties-upper (walker:user ast)))
-
-(defun (setf ast-upper) (value ast)
-  (setf (userproperties-upper (walker:user ast)) value))
-
-(defun ast-lower (ast)
-  (userproperties-lower (walker:user ast)))
-
-(defun (setf ast-lower) (value ast)
-  (setf (userproperties-lower (walker:user ast)) value))
-
-(defun mapc-namespaces (function namespaces)
+(defun mapc-vars-namespaces (function namespaces)
   "FUNCTION is a function of the variables stored in the NAMESPACES."
   (apply #'mapc
 	 (lambda (&rest vars)
@@ -820,48 +824,69 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 	   (apply function vars))
 	 namespaces))
 
+(defun mapc-namespaces (function namespaces)
+  "FUNCTION is a function of the variables stored in the namespaces of ASTS."
+  (mapc-vars-namespaces function
+			(mapcar (lambda (namespace) (mapcar #'cdr namespace))
+				(mapcar #'walker:namespace-var namespaces))))
+
 (defun mapc-asts (function asts)
   "FUNCTION is a function of the variables stored in the namespaces of ASTS."
-  (mapc-namespaces function
-		   (mapcar (lambda (namespace) (loop for acons in namespace collect (cdr acons)))
-			   (mapcar #'walker:namespace-var
-				   (mapcar #'ast-lexical-namespace asts)))))
+  (mapc-namespaces function (mapcar (lambda (ast) (walker:parser-lexical-namespace (ast-parser-next ast))) asts))
+  (mapc-namespaces function (mapcar (lambda (ast) (walker:parser-free-namespace (ast-parser-next ast))) asts)))
 
-(defun meet-ast! (ast-target ast2)
-  "Meet the results of AST-TARGET and AST2 and save the result in AST-TARGET."
-  (setf (ast-upper ast-target) (meet-results (ast-upper ast-target) (ast-upper ast2)))
-  (setf (ast-lower ast-target) (meet-results (ast-upper ast-target) (ast-lower ast2))))
+(defun meet-bounds (bounds-target bounds2)
+  "Meet the bounds BOUNDS-TARGET and BOUNDS2 and return the met bounds."
+  (let ((new-upper (meet-results (bounds-upper bounds-target) (bounds-upper bounds2)))
+	;; meet (BOUNDS-UPPER BOUNDS-TARGET) again
+	(new-lower (meet-results (bounds-upper bounds-target) (bounds-lower bounds2))))
+    (make-bounds new-upper new-lower)))
 
-(defun meet-namespaces! (ast-target ast2)
-  (mapc-asts (lambda (target-var ast2-var)
-	       (setf (ast-upper target-var) (meet-results (ast-upper target-var) (ast-upper ast2-var))
-		     (ast-lower target-var) (meet-results (ast-upper target-var) (ast-lower ast2-var))))
-	     (list ast-target ast2)))
+(defun join-bounds (&rest asts-bounds)
+  "Join the bounds ASTS-BOUNDS and return the joined bounds."
+  (let ((asts-upper (mapcar #'bounds-upper asts-bounds))
+	(asts-lower (mapcar #'bounds-lower asts-bounds)))
+    (let ((new-upper (reduce #'join-results (cdr asts-upper) :initial-value (car asts-upper)))
+	  (new-lower (reduce #'join-results (cdr asts-lower) :initial-value (car asts-lower))))
+      (make-bounds new-upper new-lower))))
 
-(defun join-ast! (ast-target asts)
-  "Join the results of ASTS and meet the result with AST-TARGET."
-  (setf (ast-upper ast-target) (meet-results (ast-upper ast-target) (reduce #'join-results (mapcar #'ast-upper (cdr asts)) :initial-value (ast-upper (car asts))))
-	(ast-lower ast-target) (meet-results (ast-upper ast-target) (reduce #'join-results (mapcar #'ast-lower (cdr asts)) :initial-value (ast-lower (car asts)))))) ;meet AST-UPPER again
+;; (defun meet-ast! (ast-target ast2)
+;;   "Meet the results of AST-TARGET and AST2 and store the result in AST-TARGET."
+;;   (setf (ast-bounds ast-target) (meet-bounds (ast-bounds ast-target) (ast-bounds ast2))))
+;;
+;; (defun join-ast! (ast-target asts)
+;;   "Join the bounds of ASTS, meet the resulting bounds with AST-TARGET's bounds, and store them there."
+;;   (let* ((new-bounds (apply #'join-bounds (mapcar #'ast-bounds asts))))
+;;     (setf (ast-bounds ast-target) (meet-bounds (ast-bounds ast-target) new-bounds))))
+;;
+;; (defun meet-namespaces! (ast-target ast2)
+;;   (mapc-asts (lambda (target-var ast2-var)
+;; 	       (setf (ast-bounds target-var) (meet-bounds (ast-bounds target-var) (ast-bounds ast2-var))))
+;; 	     (list ast-target ast2)))
 
-(defun join-ast-results! (ast-target results-upper results-lower)
-  "Join the results of ASTS and meet the result with AST-TARGET."
-  (setf (ast-upper ast-target) (meet-results (ast-upper ast-target) (reduce #'join-results (cdr results-upper) :initial-value (car results-upper)))
-	(ast-lower ast-target) (meet-results (ast-upper ast-target) (reduce #'join-results (cdr results-lower) :initial-value (car results-lower))))) ;meet AST-UPPER again
+(defun set-namespaces! (ast1 ast2 &key (key1 #'identity) (key2 #'identity))
+  "Set the namespace AST1 to AST2."
+  ;; should maybe be named SET-NAMESPACE!, but MEET-NAMESPACES! and JOIN-NAMESPACES! are plural.
+  (labels ((set-var! (ast1-var ast2-var)
+	     (setf (ast-bounds ast1-var) (ast-bounds ast2-var)))
+	   (mapc-namespaces-call (namespace-fun)
+	     (mapc-namespaces
+	      #'set-var!
+	      (mapcar namespace-fun (list (funcall key1 ast1) (funcall key2 ast2))))))
+    (mapc-namespaces-call #'walker:parser-lexical-namespace)
+    (mapc-namespaces-call #'walker:parser-free-namespace)))
+(defun set-namespaces-prev-next! (ast1 ast2)
+  (set-namespaces! ast1 ast2 :key1 #'ast-parser-prev :key2 #'ast-parser-next))
 
-(defun join-namespaces! (ast-target asts)
-  "Join the common namespace of ASTS and meet the result with AST-TARGET."
-  (mapc-asts (lambda (target-var ns0-var &rest nss-var)
-	       ;; it should be correct to set (AST-UPPER TARGET-VAR) directly to the join instead of the meet of TARGET-VAR with the join of the new namespaces? If it isn't then how does an IF-FORM prevent only being able to calculate subtypes of the variable types (of variables in the namespace) before the IF-FORM?
-	       (setf (ast-upper target-var)
-		     (reduce #'join-results nss-var :initial-value (ast-upper ns0-var) :key #'ast-upper))
-	       (setf (ast-lower target-var)
-		     (reduce #'join-results nss-var :initial-value (ast-lower ns0-var) :key #'ast-lower)))
-	     (cons ast-target asts)))
-
-(defun set-ast-result (ast type)
-  (let ((type (make-results type)))
-    (setf (ast-upper ast) type
-	  (ast-lower ast) type)))
+(defun join-namespaces! (target-parser parsers)
+  "Join the common namespaces of PARSERS and set the result to TARGET-PARSER."
+  (flet ((join! (target-var &rest join-vars)
+	   ;; it should be correct to set (AST-UPPER TARGET-VAR) directly to the join instead of the meet of TARGET-VAR with the join of the new namespaces? If it isn't then how does an IF-FORM prevent only being able to calculate subtypes of the variable types (of variables in the namespace) before the IF-FORM?
+	   (setf (ast-bounds target-var) (apply #'join-bounds (mapcar #'ast-bounds join-vars))))) ;TODO: meet the joined bounds with the declared bounds of TARGET-VAR. (This must be done also at MULTIPLE-VALUE-BIND, and everywhere where a variable is set.)
+    (mapc-namespaces #'join! (cons (walker:parser-lexical-namespace target-parser)
+				   (mapcar #'walker:parser-lexical-namespace parsers)))
+    (mapc-namespaces #'join! (cons (walker:parser-free-namespace target-parser)
+				   (mapcar #'walker:parser-free-namespace parsers)))))
 
 ;;; NTIPARSER
 
@@ -869,11 +894,29 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
   ())
 
 (defmethod walker:copy-parser ((ntiparser ntiparser))
-  (make-instance 'ntiparser :lexical-namespace (walker:parser-lexical-namespace ntiparser) :free-namespace (walker:parser-free-namespace ntiparser)))
+  (make-instance 'ntiparser
+		 :lexical-namespace (walker:parser-lexical-namespace ntiparser)
+		 :free-namespace (walker:parser-free-namespace ntiparser)))
 
-(defmethod set-userproperties ((ast walker:application-form) (ntiparser ntiparser) last-parser parent)
+(defun parser-redefine-var! (ntiparser symbol new-var)
+  "Redefine the variable defined for SYMBOL in NTIPARSER to be NEW-VAR. Return the modified NTIPARSER."
+  (let ((lexical-namespace (walker:namespace-var (walker:parser-lexical-namespace ntiparser)))
+	(free-namespace (walker:namespace-var (walker:parser-free-namespace ntiparser))))
+    (let ((cons-lexical (assoc symbol lexical-namespace :test #'equal))
+	  (cons-free (assoc symbol free-namespace :test #'equal)))
+      (cond
+	(cons-lexical
+	 (setf (cdr cons-lexical) new-var))
+	(cons-free
+	 (setf (cdr cons-free) new-var))
+	(t (error "Var ~S is neither in lexical nor in free namespace" symbol))))
+    (setf (walker:namespace-var (walker:parser-lexical-namespace ntiparser)) lexical-namespace
+	  (walker:namespace-var (walker:parser-free-namespace ntiparser)) free-namespace))
+  ntiparser)
+
+(defmethod set-userproperties ((ast walker:application-form) (parser-next ntiparser) parser-prev parent)
   ;; If this is a non-recursive call, then copy the FUN-BINDING and store the copy in USERPROPERTIES.
-  (let ((userproperties (make-userproperties :lexical-namespace (walker:parser-lexical-namespace ntiparser) :free-namespace (walker:parser-free-namespace ntiparser))))
+  (let ((userproperties (make-userproperties :parser-prev parser-next)))
     (cond
       ((not (find-builtin-function (walker:nso-name (walker:form-fun ast))))
        (cond
@@ -884,73 +927,87 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 		 (deparser (make-instance 'walker:deparser))
 		 (fun-source (walker:deparse deparser fun-ast))
 		 (labels-fun-source (list 'labels (list fun-source)))
-		 (labels-ast (walker:parse last-parser labels-fun-source parent))
+		 (labels-ast (walker:parse parser-prev labels-fun-source parent))
 		 (fun-binding-ast-copy (walker:form-binding-1 labels-ast)))
 	    (assert (typep fun-ast 'walker:fun-binding))
 	    ;; Note that (WALKER:FORM-FUN AST) is different from (WALKER:FORM-SYM FUN-BINDING-AST-COPY).
-	    (setf (userproperties-funbinding userproperties) fun-binding-ast-copy))))))
+	    (setf (userproperties-form userproperties) fun-binding-ast-copy))))))
     (setf (walker:user ast) userproperties)))
 
-(defun redefine-var! (ntiparser symbol new-var)
-  "Redefine the variable defined for SYMBOL in NTIPARSER to be NEW-VAR. Return NIL."
-  (let ((new-lexical-namespace (walker:namespace-var (walker:parser-lexical-namespace ntiparser)))
-	(new-free-namespace (walker:namespace-var (walker:parser-free-namespace ntiparser))))
-    (let ((cons-lexical (assoc symbol new-lexical-namespace :test #'equal))
-	  (cons-free (assoc symbol new-free-namespace :test #'equal)))
-      (cond
-	(cons-lexical
-	 (setf (cdr cons-lexical) new-var))
-	(cons-free
-	 (setf (cdr cons-free) new-var))
-	(t (error "Var ~S is neither in lexical nor in free namespace" symbol))))
-    (setf (walker:namespace-var (walker:parser-lexical-namespace ntiparser)) new-lexical-namespace
-	  (walker:namespace-var (walker:parser-free-namespace ntiparser)) new-free-namespace))
-  nil)
+(defun copy-var (parser var)
+  (walker:make-ast parser 'walker:var :name (walker:nso-name var) :freep (walker:nso-freep var) :definition (walker:nso-definition var) :sites (walker:nso-sites var) :declspecs (walker:nso-declspecs var) :macrop (walker:nso-macrop var))) ;slot USER is set by the overridden #'MAKE-AST
 
-(defun prepare-join-namespace! (ntiparser asts) ;the name NAMESPACE-PARSERS sucks
-  "Redefine in NTIPARSER the variables that are defined as different variables in the namespaces of ASTS. Return NIL."
-  (mapc-namespaces (lambda (ntiparser-acons &rest namespace-parsers-aconses)
-		     (prind ntiparser-acons namespace-parsers-aconses))
-		   (cons (mapcar #'cdr (walker:namespace-var (walker:parser-lexical-namespace ntiparser)))
-			 (loop for ast in asts collect
-			      (mapcar #'cdr (walker:namespace-var (ast-lexical-namespace ast))))))
-  nil)
+(defun prepare-frankensteined-parser! (parser)
+  "Modify PARSER in-place with its VAR-namespace deep-copied until aconses."
+  (let ((newparser (walker:copy-deep-parser parser)))
+    (setf (walker:parser-lexical-namespace parser) (walker:parser-lexical-namespace newparser)
+	  (walker:parser-free-namespace parser) (walker:parser-free-namespace newparser))))
 
-(defmethod set-userproperties ((ast walker:setq-form) (ntiparser ntiparser) last-parser parent)
-  (flet ((copy-var (var)
-	   (walker:make-ast ntiparser 'walker:var :name (walker:nso-name var) :freep (walker:nso-freep var) :definition (walker:nso-definition var) :sites (walker:nso-sites var) :declspecs (walker:nso-declspecs var) :macrop (walker:nso-macrop var)))) ;slot USER is set by the overridden #'MAKE-AST
-    (loop for var-rest on (walker:form-vars ast) do
-	 (let* ((var (walker:form-var (car var-rest)))
-		(new-var (copy-var var)))
-	   (redefine-var! ntiparser (walker:nso-name var) new-var)
-	   (setf (car var-rest) new-var))))
-  (setf (walker:user ast) (make-userproperties :lexical-namespace (walker:parser-lexical-namespace ntiparser) :free-namespace (walker:parser-free-namespace ntiparser))))
+(defun prepare-frankensteined-parser-deep! (parser)
+  "Modify PARSER in-place with its VAR-namespace deep-copied until VARs."
+  (let ((newparser (walker:copy-deep-parser parser)))
+    (setf (walker:parser-lexical-namespace parser) (walker:parser-lexical-namespace newparser)
+	  (walker:parser-free-namespace parser) (walker:parser-free-namespace newparser))))
 
-(defmethod set-userproperties (ast (ntiparser ntiparser) form parent)
-  (setf (walker:user ast) (make-userproperties :lexical-namespace (walker:parser-lexical-namespace ntiparser) :free-namespace (walker:parser-free-namespace ntiparser))))
+(defmethod set-userproperties ((ast walker:setq-form) (parser-next ntiparser) parser-prev parent)
+  ;; modify PARSER-NEXT in-place, because we want the changes to persist in the forms after the SETQ-FORM.
+  (prepare-frankensteined-parser! parser-next)
+  (loop for var-rest on (walker:form-vars ast) do
+       (let* ((var (walker:form-var (car var-rest)))
+	      (new-var (copy-var parser-next var)))
+	 (parser-redefine-var! parser-next (walker:nso-name var) new-var)
+	 (setf (car var-rest) new-var)))
+  (setf (walker:user ast) (make-userproperties :parser-prev parser-next :parser-next parser-next)))
 
-(defmethod set-userproperties :before ((ast walker:tag) (ntiparser ntiparser) last-parser parent)
-  ;;(setf (walker:parser-lexical-namespace ntiparser) (walker:parser-lexical-namespace (walker:copy-parser-deep-lexical-namespace ntiparser)))
-  )
+(defmethod set-userproperties (ast (parser-next ntiparser) parser-prev parent)
+  (setf (walker:user ast) (make-userproperties :parser-prev parser-prev :parser-next parser-next)))
 
-(defmethod set-userproperties :after ((ast walker:if-form) (ntiparser ntiparser) last-parser parent)
-  (prepare-join-namespace! ntiparser
-			   (append (list (walker:form-then ast))
-				   (list (if (walker:form-else ast)
-					     (walker:form-else ast)
-					     (walker:form-then ast))))))
+(defmethod set-userproperties ((ast walker:if-form) (parser-next ntiparser) parser-prev parent)
+  "Redefine in PARSER-NEXT the variables that are defined as different variables in the namespaces of the branches of AST. Return NIL."
+  ;; modify PARSER-NEXT in-place where some of its VAR-namespace may be frankensteined.
+  (flet ((prepare-namespaces! (parser branches-parsers)
+	   "Modify PARSER in-place so that a VAR differing in any of the parsers BRANCHES-PARSERS will be replaced by a new copy."
+	   (flet ((prepare-namespace! (parser ast-namespace branches-namespace)
+		    (mapc-vars-namespaces (lambda (new-var &rest branches-vars)
+					    (unless (loop for var in (cdr branches-vars) always (eql var (car branches-vars)))
+					      (let* ((name (walker:nso-name new-var))
+						     (new-var (copy-var parser new-var)))
+						(parser-redefine-var! parser name new-var))))
+					  (cons (mapcar #'cdr (walker:namespace-var ast-namespace))
+						(loop for ast in branches-namespace collect
+						     (mapcar #'cdr (walker:namespace-var ast)))))))
+	     (prepare-namespace! parser
+				 (walker:parser-lexical-namespace parser)
+				 (mapcar #'walker:parser-lexical-namespace branches-parsers))
+	     (prepare-namespace! parser
+				 (walker:parser-free-namespace parser)
+				 (mapcar #'walker:parser-free-namespace branches-parsers)))))
+    (let* ((test-exits (find-exits (make-instance 'exit-finder) (walker:form-test ast)))
+	   (then-exits (when (normal-exits test-exits) (find-exits (make-instance 'exit-finder) (walker:form-then ast))))
+	   (else-exits (when (and (normal-exits test-exits) (walker:form-else ast)) (find-exits (make-instance 'exit-finder) (walker:form-else ast))))
+	   (branches (cond
+		       ((not (normal-exits test-exits))
+			test-exits)
+		       ((walker:form-else ast)
+			(nconc then-exits else-exits))
+		       (t
+			then-exits))))
+      ;; Up to now, PARSER-NEXT of TEST-FORM is the same as PARSER-NEXT of AST(i.e. this IF-FORM). If we keep it this way, then updating PARSER-NEXT of AST will modify PARSER-NEXT of TEST. This would screw up VAR types. We have to make PARSER-NEXT of AST a new copy with completely new variables if any of them is different in the TEST-, THEN-, or ELSE-form.
+      (let ((parser-join (walker:copy-deep-parser parser-next)))
+	(prepare-frankensteined-parser! parser-join)
+	(prepare-namespaces! parser-join (cons parser-prev (mapcar #'ast-parser-next branches)))
+	(prepare-frankensteined-parser! parser-next)
+	(setf (walker:user ast) (make-userproperties :parser-prev parser-prev :parser-next parser-next :form parser-join))))))
 
 (defmethod walker:parse :around ((ntiparser ntiparser) form parent)
-  (let* ((last-parser (walker:copy-parser ntiparser))
+  (let* ((parser-prev (walker:copy-parser ntiparser))
 	 (ast (call-next-method ntiparser form parent)))
-    (set-userproperties ast ntiparser last-parser parent)
+    (set-userproperties ast ntiparser parser-prev parent)
     ast))
 
 (defmethod walker:make-ast :around ((ntiparser ntiparser) type &rest arguments)
   (let ((ast (apply #'call-next-method ntiparser type arguments)))
-    (let ((userproperties (make-userproperties :lexical-namespace (walker:parser-lexical-namespace ntiparser) :free-namespace (walker:parser-free-namespace ntiparser))))
-      ;;(setf (walker:user ast) userproperties)
-      )
+    (setf (walker:user ast) (make-userproperties :parser-prev ntiparser :parser-next ntiparser))
     ast))
 
 ;;; ANNOTATE
@@ -996,8 +1053,9 @@ NIL (no annotation)
 
 (defun results-format (deparser ast form)
   (nconc
-   (let* ((u (ast-upper ast))
-	  (l (ast-lower ast))
+   (let* ((bounds (ast-bounds ast))
+	  (u (bounds-upper bounds))
+	  (l (bounds-lower bounds))
 	  (m (max (results-nvalues u) (results-nvalues l))))
      (ecase (deparser-borders deparser)
        (:upper-lower
@@ -1042,6 +1100,11 @@ NIL (no annotation)
    (order :initarg :order :initform (make-clist) :accessor inferer-order :documentation "A CLIST containing the order the forms were evaluated in during the forward pass.")))
 
 ;; INFER AROUND METHODS: save the order the ASTs are evaluated in and track the liveness of ASTs.
+
+(defun set-ast-result (ast type)
+  (let ((type (make-results type)))
+    (setf (ast-upper ast) type
+	  (ast-lower ast) type)))
 
 (defun ast-exits-normal (ast)
   "Return normal exits of AST. Normal exits are defined as exits that do not jump."
@@ -1373,7 +1436,7 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
 
 ;; Forms (in the same order as exported from packages WALKER and WALKER-PLUS)
 
-(defmethod find-exits ((exit-finder exit-finder) (ast walker:var-read-form))
+(defmethod find-exits ((exit-finder exit-finder) (ast walker:var-reading))
   (list ast))
 
 (defmethod find-exits ((exit-finder exit-finder) (ast walker:object-form))
@@ -1618,7 +1681,7 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
 
 (defmacro capture (name form)
   "This macro is here just to aid in constructing test cases in #'TEST-FIND-EXITS."
-  ;; FIXME: Capturing a TAG form inside a TAGBODY-form doesn't work. It will create a VAR-READ-FORM.
+  ;; FIXME: Capturing a TAG form inside a TAGBODY-form doesn't work. It will create a VAR-READING.
   (declare (ignore name))
   form)
 
@@ -1712,3 +1775,91 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
 (test-find-exits)
 
 ;;TODO: I have to know which forms of the TAGBODY are the last form before a TAG and are alive, so that I can merge their namespaces in.
+
+;;; INFER THE FORWARD PASS.
+
+(defclass fwd-inferer ()
+  ((exit-finder :initarg :exit-finder :initform (make-instance 'exit-finder) :accessor inferer-exit-finder)))
+
+(defmethod fwd-infer ((fwd-inferer fwd-inferer) (ast walker:var-reading))
+  (setf (ast-bounds ast) (ast-bounds (walker:form-var ast))))
+
+(defmethod fwd-infer ((fwd-inferer fwd-inferer) (ast walker:object-form))
+  (let* ((type (etypecase (walker:form-object ast)
+		 (fixnum 'fixnum)
+		 (float 'single-float)
+		 (null 'null)
+		 (boolean 'boolean) ;must be after NULL
+		 (symbol 'symbol)
+		 (t t)))
+	 (upper (make-results type))
+	 (lower (make-results type)))
+    (setf (ast-bounds ast) (make-bounds upper lower))))
+
+(defun fwd-infer-list (fwd-inferer forms)
+  (loop for form in forms do
+       (let ((form-exits (find-exits (make-instance 'exit-finder) form)))
+	 (fwd-infer fwd-inferer form)
+	 (unless (normal-exits form-exits)
+	   (return)))))
+
+(defmethod fwd-infer ((fwd-inferer fwd-inferer) (ast walker:progn-form))
+  (fwd-infer-list fwd-inferer (walker:form-body ast)))
+
+(defmethod fwd-infer ((fwd-inferer fwd-inferer) (ast walker:var-bindings-form))
+  (loop for binding in (walker:form-bindings ast) do
+       (let ((var (walker:form-sym binding))
+	     (value (walker:form-value binding)))
+	 (fwd-infer fwd-inferer value)
+	 (setf (ast-bounds var) (ast-bounds value)))) ;TODO: meet (AST-BOUNDS VALUE) with the declared bounds of VAR. (This must be done also at MULTIPLE-VALUE-BIND, and everywhere where a variable is set.)
+  (fwd-infer-list fwd-inferer (walker:form-body ast)))
+
+(defmethod fwd-infer ((fwd-inferer fwd-inferer) (ast walker:setq-form))
+  (loop for var in (walker:form-vars ast) for value in (walker:form-values ast) do
+       (fwd-infer fwd-inferer value)
+       (setf (ast-bounds var) (ast-bounds value)))) ;TODO: meet (AST-BOUNDS VALUE) with the declared bounds of VAR. (This must be done also at MULTIPLE-VALUE-BIND, and everywhere where a variable is set.)
+
+(defmethod fwd-infer ((fwd-inferer fwd-inferer) (ast walker:if-form))
+  (let* ((test-exits (find-exits (inferer-exit-finder fwd-inferer) (walker:form-test ast)))
+	 (then-exits (when test-exits (find-exits (inferer-exit-finder fwd-inferer) (walker:form-then ast))))
+	 (else-exits (when (and test-exits (walker:form-else ast))
+		       (find-exits (inferer-exit-finder fwd-inferer) (walker:form-else ast))))
+	 (branches (if (normal-exits test-exits)
+		       (append then-exits (if else-exits else-exits test-exits))
+		       test-exits))
+	 (parser-join (userproperties-form (walker:user ast))))
+    (fwd-infer fwd-inferer (walker:form-test ast))
+    (when then-exits
+      (set-namespaces-prev-next! (walker:form-then ast) (walker:form-test ast))
+      (fwd-infer fwd-inferer (walker:form-then ast)))
+    (when else-exits
+      (set-namespaces-prev-next! (walker:form-else ast) (walker:form-test ast))
+      (fwd-infer fwd-inferer (walker:form-else ast)))
+    (join-namespaces! parser-join (mapcar #'ast-parser-next branches))
+    (set-namespaces! (ast-parser-next ast) parser-join)))
+
+;;; TEST INFER THE FORWARD PASS.
+
+(defun parse-and-infer (form)
+  (let* ((parser (make-instance 'ntiparser))
+	 (ast (walker:parse-with-namespace form :parser parser))
+	 (fwd-inferer (make-instance 'fwd-inferer)))
+    (fwd-infer fwd-inferer ast)
+    (annotate ast)))
+
+;;; TEST INFER THE FORWARD PASS.
+
+(defun test-fwd-infer ()
+  (flet ((assert-result (form desired-result)
+	   (let ((desired-result (list (car desired-result) (car desired-result))))
+	     (format t "form:~S~%actual-result:~S~%desired-result:~S~%"
+		     form (parse-and-infer form) desired-result))))
+    (assert-result '0 '(fixnum))
+    (assert-result '(let ((a 0)) a) '(fixnum))
+    (assert-result '(let ((a 0)) a (setq a 1.0) a) '(single-float))
+    (assert-result '(let ((a 0)) a (if 1 (setq a 1.0)) a) '(number))
+    (assert-result '(let ((a 0)) a (if 1 (setq a 1.0) a) a) '(number))
+    (assert-result '(let ((a 0)) a (if (setq a 1.0) a a)) '(single-float))
+    (assert-result '(let ((a 0)) a (if (setq a 1.0) (setq a 1.0)) a) '(single-float))
+    (assert-result '(let ((a 0)) a (if (setq a 1.0) (setq a 1.0) a) a) '(single-float))
+    (assert-result '(let ((a 0) (b 0.0)) a b (if 1 (setq a 2.0 b a)) b) '(single-float))))
