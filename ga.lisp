@@ -5,9 +5,12 @@
 (defvar *default-random-state* (make-random-state nil)) ;save default random state using DEFVAR, this way it will only be evaluated once. Then, when we want to reset the state, we can copy *DEFAULT-RANDOM-STATE* and use it as the new state.
 
 (load "/home/toni/quicklisp/setup.lisp")
+(ql:quickload :alexandria)
 (ql:quickload :sdl2)
 (ql:quickload :cl-heap)
 (ql:quickload :mru-cache)
+
+(declaim (optimize (debug 3)))
 
 (defmacro prind (&rest args)
   "Print args"
@@ -200,11 +203,13 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 (defvar *orgs* nil)
 (defvar *event-heap* nil)
 (defvar *world* nil)
+(defvar *world-sun* nil)
 (defvar *world-clouds* nil)
 (defvar *world-max-energy* 4000 "The energy at a coordinate in the world is truncated to this value")
 (defvar *world-tick* 0 "The number of elapsed world ticks")
 (defvar *orgap-min-wait* 200 "The minimum number of ticks between an organism's events")
-(defvar *cloud-drop-wait* 200 "The number of ticks between cloud events")
+(defvar *sun-drop-wait* 200 "The number of ticks between sun events")
+(defvar *clouds-drop-wait* 200 "The number of ticks between cloud events")
 ;; display variables
 (defvar *display-world* t)
 (defvar *print-statistics* nil)
@@ -216,39 +221,73 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
     (loop for i below num-barriers-horizontal do
 	 (let ((y (random h)) (x (random w)))
 	   (loop for i below barrier-width-horizontal do
-		(setf (aref world (mod (+ x i) w) y) -1))))
+		(setf (aref world (mod (+ x i) w) y 0) -1.0))))
     (loop for i below num-barriers-vertical do
 	 (let ((y (random h)) (x (random w)))
 	   (loop for i below barrier-width-vertical do
-		(setf (aref world x (mod (+ y i) h)) -1))))))
+		(setf (aref world x (mod (+ y i) h) 0) -1.0))))))
 
-(defun make-world (w h energy)
-  (let ((world (make-array (list w h) :initial-element energy)))
+(defun make-world (w h initial-energy num-instructions initial-instructions)
+  (let ((world (make-array (list w h (+ 1 num-instructions)) :element-type 'single-float)))
+    (loop for x below w do
+	 (loop for y below h do
+	      (setf (aref world x y 0) initial-energy)
+	      (loop for i below num-instructions do
+		   (setf (aref world x y (+ 1 i)) initial-instructions))))
     world))
-(defclass cloud ()
-  ((position-function :initarg :position-function :accessor cloud-position-function)
-   (edge :initarg :edge :accessor cloud-edge)
-   (drop-wait :initarg :drop-wait :accessor cloud-drop-wait)
-   (drop-amount :initarg :drop-amount :accessor cloud-drop-amount)
-   (nexttick :initform 0 :initarg :nexttick :accessor cloud-nexttick)
-   (energy-drop-sum :initform 0 :initarg :energy-drop-sum :accessor cloud-energy-drop-sum)
-   (energy-lost-sum :initform 0 :initarg :energy-lost-sum :accessor cloud-energy-lost-sum)))
 
-(defun make-cloud (energy-per-coordinate-per-tick fraction-covered world-w world-h position-function)
+(defclass nature-object ()
+  ((position-function :initarg :position-function :accessor nature-position-function)
+   (edge :initarg :edge :accessor natur-edge)
+   (drop-wait :initarg :drop-wait :accessor nature-drop-wait)
+   (drop-amount :initarg :drop-amount :accessor nature-drop-amount)
+   (nexttick :initform 0 :initarg :nexttick :accessor nature-nexttick)
+   (energy-drop-sum :initform 0 :initarg :energy-drop-sum :accessor nature-energy-drop-sum)
+   (energy-lost-sum :initform 0 :initarg :energy-lost-sum :accessor nature-energy-lost-sum)))
+
+(defclass sun (nature-object)
+  ((energy-index :initform 0 :initarg :energy-index :accessor nature-energy-index)))
+
+(defun make-sun (world-w world-h energy-per-coordinate-per-tick fraction-covered position-function)
   "ENERGY-PER-COORDINATE-PER-TICK is the average energy dropped per world coordinate per tick.
-FRACTION-COVERED is the fraction of the whole world covered with clouds.
+FRACTION-COVERED is the fraction of the whole world covered with sunlight.
 VELOCITY is the speed, i.e. position change per tick."
   (let* ((edge (round (sqrt (* world-w world-h fraction-covered))))
 	 (energy-per-tick (* world-w world-h energy-per-coordinate-per-tick))
-	 (drop-wait *CLOUD-DROP-WAIT*)
+	 (drop-wait *SUN-DROP-WAIT*)
 	 (drop-amount (round (* energy-per-tick drop-wait))))
-    (let* ((cloud (make-instance 'cloud
-				 :position-function position-function
-				 :edge edge
-				 :drop-wait drop-wait
-				 :drop-amount drop-amount)))
+    (let* ((sun (make-instance 'sun
+			       :position-function position-function
+			       :edge edge
+			       :drop-wait drop-wait
+			       :drop-amount drop-amount
+			       :energy-index 0)))
       (prind position-function drop-wait drop-amount edge)
-      cloud)))
+      sun)))
+
+(defclass cloud (nature-object)
+  ((pos-x :initarg :pos-x :accessor cloud-pos-x)
+   (pos-y :initarg :pos-y :accessor cloud-pos-y)
+   (vel-x :initarg :vel-x :accessor cloud-vel-x)
+   (vel-y :initarg :vel-y :accessor cloud-vel-y)
+   (energy-index :initarg :energy-index :accessor nature-energy-index)))
+
+(defun make-cloud (world-w world-h energy-index edge cloud-speed-per-tick position-function rain-per-coordinate-per-tick)
+  (let* ((angle (random (* 2 pi)))
+	 (energy-per-tick (* world-w world-h rain-per-coordinate-per-tick))
+	 (drop-wait *CLOUDS-DROP-WAIT*)
+	 (drop-amount (round (* energy-per-tick drop-wait))))
+    (prind position-function drop-wait drop-amount edge energy-index)
+    (make-instance 'cloud
+		   :position-function position-function
+		   :edge edge
+		   :drop-wait drop-wait
+		   :drop-amount drop-amount
+		   :pos-x (random world-w)
+		   :pos-y (random world-h)
+		   :vel-x (* cloud-speed-per-tick (sin angle))
+		   :vel-y (* cloud-speed-per-tick (cos angle))
+		   :energy-index energy-index)))
 
 (defclass orgcont () ;organism container
   ((orgap :initarg :orgap :accessor orgcont-orgap)
@@ -263,8 +302,8 @@ VELOCITY is the speed, i.e. position change per tick."
    (offspring-energy-sum :initform 0 :initarg :offspring-energy-sum :accessor orgcont-offspring-energy-sum)
    (walk-sum :initform 0.0 :initarg :walk-sum :accessor orgcont-walk-sum)
    (walk-count :initform 0 :initarg :walk-count :accessor orgcont-walk-count)
-   (energy-in-sum :initform 0 :initarg :energy-in-sum :accessor orgcont-energy-in-sum :documentation "The total energy taken in, excluding initial energy of organisms spawned in the world.")
-   (energy-out-sum :initform 0 :initarg :energy-out-sum :accessor orgcont-energy-out-sum :documentation "The total energy spent voluntarily or involutarily.")))
+   (energy-in-sum :initform (make-array *num-energies* :element-type 'integer :initial-element 0) :initarg :energy-in-sum :accessor orgcont-energy-in-sum :documentation "The total energy taken in, excluding initial energy of organisms spawned in the world.")
+   (energy-out-sum :initform (make-array *num-energies* :element-type 'integer :initial-element 0) :initarg :energy-out-sum :accessor orgcont-energy-out-sum :documentation "The total energy spent voluntarily or involutarily.")))
 (defun make-orgcont (&rest args)
   (apply #'make-instance 'orgcont args))
 
@@ -274,10 +313,11 @@ VELOCITY is the speed, i.e. position change per tick."
 ;; load organism implementation
 (load "~/lisp/gatest-orgap-lisp.lisp")
 ;;(load "~/lisp/gatest-orgap-lightning.lisp")
+(defvar *num-energies* (+ 1 *num-instructions*) "The total number of different energies at each world coordinate")
 
 (defun copy-orgcont (orgcont)
   (with-slots (orgap id lasttick nexttick age totage offspring-list offspring-count offspring-energy-sum walk-sum walk-count energy-in-sum energy-out-sum) orgcont
-    (make-orgcont :orgap (copy-orgap orgap) :id id :lasttick lasttick :nexttick nexttick :age age :totage totage :offspring-list offspring-list :offspring-count offspring-count :offspring-energy-sum offspring-energy-sum :walk-sum walk-sum :walk-count walk-count :energy-in-sum energy-in-sum :energy-out-sum energy-out-sum)))
+    (make-orgcont :orgap (copy-orgap orgap) :id id :lasttick lasttick :nexttick nexttick :age age :totage totage :offspring-list offspring-list :offspring-count offspring-count :offspring-energy-sum offspring-energy-sum :walk-sum walk-sum :walk-count walk-count :energy-in-sum (alexandria:copy-array energy-in-sum) :energy-out-sum (alexandria:copy-array energy-out-sum))))
 
 (defun orgs-add-org (orgcont)
   (setf (gethash (orgcont-id orgcont) *orgs*) orgcont))
@@ -290,21 +330,21 @@ VELOCITY is the speed, i.e. position change per tick."
        (orgs-add-org org)))
 
 (defun make-default-orgs (num energy &optional
-				       ;;(genes '(mrk0= set-bs-nil eat in-an-energy-left in-bn-energy-right sub-from-an-bn mrk1= read-as read-next write-as cmp-as-as-bs jne1= set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-an set-an-1 turn-cw-an set-as-nil set-bs-random cmp-as-as-bs jne0= jne0= jne0=))
-				       ;;(genes '(mrk0= set-bs-nil eat in-an-energy-left in-bn-energy-right sub-from-an-bn mrk1= read-as read-bs cmp-as-as-bs jne1= read-next write-bs set-as-nil cmp-as-as-bs jne1=    set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-an set-an-1 turn-cw-an set-as-nil set-bs-random cmp-as-as-bs jne0= jne0= jne0=))
-				       ;;(genes '(MRK0= SUB-FROM-BN-AN SET-BS-RANDOM MRK1= READ-BS READ-NEXT WRITE-BS CMP-AS-AS-BS JNE1= SET-ANGLE-TO-BN SET-AN-1 IN-BN-ENERGY-Y+ TURN-CW-BN ATTACK-TARGET SET-BN-1 SIGN-AN ADD-TO-BN-AN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN CMP-BS-GT-BN-AN MUL-TO-AN-BN MUL-TO-AN-BN SPLIT-CELL-AN WALK-AN WALK-AN SET-TARGET-NEAR SET-AS-NIL ATTACK-TARGET EAT WALK-BN EAT JNE0=))
-				       ;;(genes '(MRK1= READ-BS READ-NEXT WRITE-BS IN-BN-ENERGY-X+ CMP-AS-AS-BS IN-BN-ENERGY-Y- ADD-TO-AN-BN SET-AN-1 SET-BN-1 ADD-TO-BN-AN ADD-TO-AN-BN ADD-TO-AN-BN SET-BN-MAX-AN-BN ADD-TO-AN-BN WALK-BN WALK-BN EAT JNE1= MRK0= TURN-CCW-AN WALK-AN EAT WALK-AN IN-BN-ENERGY-Y- WALK-AN READ-AS WRITE-AS WALK-AN SET-AN-TO-ANGLE SPLIT-CELL-AN MUL-TO-BN-AN IN-BN-ENERGY-LEFT SET-AN-MAX-AN-BN EAT IN-BN-ENERGY-X+ JNE1= CMP-AS-GT-AN-BN MRK3= WAIT-AN TURN-CCW-AN))
-				       ;;(genes '(MRK1= READ-BS READ-NEXT WRITE-BS TURN-CCW-BN IN-BN-ENERGY-X+ CMP-AS-AS-BS EAT ADD-TO-AN-BN SET-AN-1 SET-BN-1 WRITE-AS ADD-TO-BN-AN ADD-TO-AN-BN ADD-TO-AN-BN SET-BN-MAX-AN-BN ADD-TO-AN-BN WALK-AN WALK-BN WALK-BN WALK-AN WALK-AN JNE1= MRK0= TURN-CCW-AN CMP-AS-AS-BS EAT WALK-AN IN-BN-ENERGY-Y- WALK-AN WRITE-AS SET-ANGLE-TO-BN WALK-AN SET-AN-TO-ANGLE SET-BN-TO-ANGLE SPLIT-CELL-AN MUL-TO-BN-AN IN-BN-ENERGY-LEFT SET-AN-MAX-AN-BN EAT IN-BN-ENERGY-X+ TURN-CW-AN JNE1= SET-AN-1 CMP-AS-GT-AN-BN MRK3= SET-ANGLE-DOWN TURN-CCW-AN IN-BN-ENERGY-LEFT))
-				       ;;(genes '(MRK1= READ-BS READ-NEXT WRITE-BS CMP-AS-AS-BS EAT SET-AN-1 SET-BN-1 ADD-TO-BN-AN MUL-TO-BN-AN ADD-TO-BN-AN ADD-TO-AN-BN ADD-TO-AN-BN SET-BN-MAX-AN-BN WALK-AN WALK-BN WALK-BN WALK-AN WALK-AN TURN-CCW-BN WALK-BN TURN-CW-BN JNE1= IN-BN-ENERGY-Y+ MRK0= WAIT-AN CMP-AS-AS-BS WRITE-BS WALK-AN IN-BN-ENERGY-Y- WALK-AN SPLIT-CELL-BN WRITE-AS SET-AN-1 WALK-AN SET-AN-TO-ANGLE SPLIT-CELL-AN MUL-TO-BN-AN SET-AN-TO-BN EAT IN-BN-ENERGY-X+ TURN-CW-AN JNE1= SET-AN-1 SET-ANGLE-DOWN SET-AS-RANDOM TURN-CCW-AN))
-				       ;;(genes '(MRK1= READ-BS READ-NEXT WRITE-BS CMP-AS-AS-BS EAT SET-AN-1 SET-BN-1 ADD-TO-BN-AN ADD-TO-BN-AN ADD-TO-AN-BN ADD-TO-AN-BN SET-BN-MAX-AN-BN WALK-AN WALK-BN SET-BS-NIL WALK-BN WALK-AN TURN-CCW-BN WALK-BN TURN-CW-BN JNE1= IN-BN-ENERGY-Y+ WAIT-AN CMP-AS-AS-BS WRITE-BS WALK-AN IN-BN-ENERGY-Y- SPLIT-CELL-BN WRITE-AS IN-AN-ENERGY-LEFT SET-AN-1 WALK-AN SET-AN-TO-ANGLE SPLIT-CELL-AN MUL-TO-BN-AN SUB-FROM-AN-BN EAT TURN-CW-AN IN-BN-ENERGY-Y- JNE1= SET-AN-1 SET-AN-TO-ANGLE CMP-BS-GT-BN-AN SET-AS-RANDOM TURN-CCW-AN SET-AN-TO-ENERGY))
-				       ;;(genes '(mrk0= set-an-1 set-bn-1 add-to-bn-an add-to-an-bn walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an mul-to-an-bn mul-to-bn-an mul-to-an-bn mul-to-bn-an mul-to-an-bn mul-to-bn-an wait-bn eat mrk1= read-as read-next write-as cmp-as-as-bs jne1= in-bn-energy-left split-cell-bn turn-cw-bn jmp0=))
-				       ;;(genes '(EAT MRK0= SET-AN-1 SET-BN-1 ADD-TO-BN-AN ADD-TO-AN-BN MUL-TO-AN-BN WALK-AN WALK-AN WALK-AN SIGN-BN WALK-AN WALK-AN WALK-AN WALK-AN EAT WALK-AN MUL-TO-AN-BN SET-AN--1 MUL-TO-BN-AN MUL-TO-AN-BN MUL-TO-BN-AN EAT MRK1= READ-AS READ-NEXT WRITE-AS CMP-AS-AS-BS JNE1= IN-BN-ENERGY-LEFT SPLIT-CELL-BN TURN-CW-BN JMP0= MRK1=))
-				       (GENES '(EAT MRK0= SET-BN-1 ADD-TO-BN-AN ADD-TO-AN-BN MUL-TO-AN-BN WALK-AN WALK-AN WALK-AN  SIGN-BN WALK-AN WALK-AN WALK-AN WALK-AN SET-AN--1 MUL-TO-BN-AN MUL-TO-AN-BN EAT READ-AS READ-NEXT WRITE-AS CMP-AS-AS-BS JNE1= IN-BN-ENERGY-LEFT SPLIT-CELL-BN IN-AN-ENERGY-X+-CSP TURN-CW-BN JMP0= MRK1=))
+				       ;;(genes '(mrk0= set-bs-nil eat in-an-as-energy-left in-bn-as-energy-right sub-from-an-bn mrk1= read-as read-next write-as cmp-as-as-bs jne1= set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-an set-an-1 turn-cw-an set-as-nil set-bs-random cmp-as-as-bs jne0= jne0= jne0=))
+				       ;;(genes '(mrk0= set-bs-nil eat in-an-as-energy-left in-bn-as-energy-right sub-from-an-bn mrk1= read-as read-bs cmp-as-as-bs jne1= read-next write-bs set-as-nil cmp-as-as-bs jne1=    set-an-1 set-bn-1 add-to-bn-an mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn mul-to-an-bn split-cell-an wait-an walk-an set-an-1 turn-cw-an set-as-nil set-bs-random cmp-as-as-bs jne0= jne0= jne0=))
+				       ;;(genes '(MRK0= SUB-FROM-BN-AN SET-BS-RANDOM MRK1= READ-BS READ-NEXT WRITE-BS CMP-AS-AS-BS JNE1= SET-ANGLE-TO-BN SET-AN-1 IN-BN-AS-ENERGY-Y+ TURN-CW-BN ATTACK-TARGET SET-BN-1 SIGN-AN ADD-TO-BN-AN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN MUL-TO-AN-BN CMP-BS-GT-BN-AN MUL-TO-AN-BN MUL-TO-AN-BN SPLIT-CELL-AN WALK-AN WALK-AN SET-TARGET-NEAR SET-AS-NIL ATTACK-TARGET EAT WALK-BN EAT JNE0=))
+				       ;;(genes '(MRK1= READ-BS READ-NEXT WRITE-BS IN-BN-AS-ENERGY-X+ CMP-AS-AS-BS IN-BN-AS-ENERGY-Y- ADD-TO-AN-BN SET-AN-1 SET-BN-1 ADD-TO-BN-AN ADD-TO-AN-BN ADD-TO-AN-BN SET-BN-MAX-AN-BN ADD-TO-AN-BN WALK-BN WALK-BN EAT JNE1= MRK0= TURN-CCW-AN WALK-AN EAT WALK-AN IN-BN-AS-ENERGY-Y- WALK-AN READ-AS WRITE-AS WALK-AN SET-AN-TO-ANGLE SPLIT-CELL-AN MUL-TO-BN-AN IN-BN-AS-ENERGY-LEFT SET-AN-MAX-AN-BN EAT IN-BN-AS-ENERGY-X+ JNE1= CMP-AS-GT-AN-BN MRK3= WAIT-AN TURN-CCW-AN))
+				       ;;(genes '(MRK1= READ-BS READ-NEXT WRITE-BS TURN-CCW-BN IN-BN-AS-ENERGY-X+ CMP-AS-AS-BS EAT ADD-TO-AN-BN SET-AN-1 SET-BN-1 WRITE-AS ADD-TO-BN-AN ADD-TO-AN-BN ADD-TO-AN-BN SET-BN-MAX-AN-BN ADD-TO-AN-BN WALK-AN WALK-BN WALK-BN WALK-AN WALK-AN JNE1= MRK0= TURN-CCW-AN CMP-AS-AS-BS EAT WALK-AN IN-BN-AS-ENERGY-Y- WALK-AN WRITE-AS SET-ANGLE-TO-BN WALK-AN SET-AN-TO-ANGLE SET-BN-TO-ANGLE SPLIT-CELL-AN MUL-TO-BN-AN IN-BN-AS-ENERGY-LEFT SET-AN-MAX-AN-BN EAT IN-BN-AS-ENERGY-X+ TURN-CW-AN JNE1= SET-AN-1 CMP-AS-GT-AN-BN MRK3= SET-ANGLE-DOWN TURN-CCW-AN IN-BN-AS-ENERGY-LEFT))
+				       ;;(genes '(MRK1= READ-BS READ-NEXT WRITE-BS CMP-AS-AS-BS EAT SET-AN-1 SET-BN-1 ADD-TO-BN-AN MUL-TO-BN-AN ADD-TO-BN-AN ADD-TO-AN-BN ADD-TO-AN-BN SET-BN-MAX-AN-BN WALK-AN WALK-BN WALK-BN WALK-AN WALK-AN TURN-CCW-BN WALK-BN TURN-CW-BN JNE1= IN-BN-AS-ENERGY-Y+ MRK0= WAIT-AN CMP-AS-AS-BS WRITE-BS WALK-AN IN-BN-AS-ENERGY-Y- WALK-AN SPLIT-CELL-BN WRITE-AS SET-AN-1 WALK-AN SET-AN-TO-ANGLE SPLIT-CELL-AN MUL-TO-BN-AN SET-AN-TO-BN EAT IN-BN-AS-ENERGY-X+ TURN-CW-AN JNE1= SET-AN-1 SET-ANGLE-DOWN SET-AS-RANDOM TURN-CCW-AN))
+				       ;;(genes '(MRK1= READ-BS READ-NEXT WRITE-BS CMP-AS-AS-BS EAT SET-AN-1 SET-BN-1 ADD-TO-BN-AN ADD-TO-BN-AN ADD-TO-AN-BN ADD-TO-AN-BN SET-BN-MAX-AN-BN WALK-AN WALK-BN SET-BS-NIL WALK-BN WALK-AN TURN-CCW-BN WALK-BN TURN-CW-BN JNE1= IN-BN-AS-ENERGY-Y+ WAIT-AN CMP-AS-AS-BS WRITE-BS WALK-AN IN-BN-AS-ENERGY-Y- SPLIT-CELL-BN WRITE-AS IN-AN-AS-ENERGY-LEFT SET-AN-1 WALK-AN SET-AN-TO-ANGLE SPLIT-CELL-AN MUL-TO-BN-AN SUB-FROM-AN-BN EAT TURN-CW-AN IN-BN-AS-ENERGY-Y- JNE1= SET-AN-1 SET-AN-TO-ANGLE CMP-BS-GT-BN-AN SET-AS-RANDOM TURN-CCW-AN SET-AN-TO-ENERGY))
+				       ;;(genes '(mrk0= set-an-1 set-bn-1 add-to-bn-an add-to-an-bn walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an walk-an mul-to-an-bn mul-to-bn-an mul-to-an-bn mul-to-bn-an mul-to-an-bn mul-to-bn-an wait-bn eat mrk1= read-as read-next write-as cmp-as-as-bs jne1= in-bn-as-energy-left split-cell-bn turn-cw-bn jmp0=))
+				       ;;(genes '(EAT MRK0= SET-AN-1 SET-BN-1 ADD-TO-BN-AN ADD-TO-AN-BN MUL-TO-AN-BN WALK-AN WALK-AN WALK-AN SIGN-BN WALK-AN WALK-AN WALK-AN WALK-AN EAT WALK-AN MUL-TO-AN-BN SET-AN--1 MUL-TO-BN-AN MUL-TO-AN-BN MUL-TO-BN-AN EAT MRK1= READ-AS READ-NEXT WRITE-AS CMP-AS-AS-BS JNE1= IN-BN-AS-ENERGY-LEFT SPLIT-CELL-BN TURN-CW-BN JMP0= MRK1=))
+				       (GENES '(EAT MRK0= SET-BN-1 ADD-TO-BN-AN ADD-TO-AN-BN MUL-TO-AN-BN WALK-AN WALK-AN WALK-AN  SIGN-BN WALK-AN WALK-AN WALK-AN WALK-AN SET-AN--1 MUL-TO-BN-AN MUL-TO-AN-BN EAT READ-AS READ-NEXT WRITE-AS CMP-AS-AS-BS JNE1= IN-BN-AS-ENERGY-LEFT SPLIT-CELL-BN IN-AN-AS-ENERGY-X+-CSP TURN-CW-BN JMP0= MRK1=))
 				       )
   (loop for i below num collect
        (let ((x (random (array-dimension *world* 0)))
 	     (y (random (array-dimension *world* 1))))
-	 (loop until (>= (aref *world* x y) 0) do
+	 (loop until (>= (aref *world* x y 0) 0) do
 	      (setf x (random (array-dimension *world* 0))
 		    y (random (array-dimension *world* 1))))
 	 (let* ((orgap (make-orgap genes x y (random (ceiling (* 2 pi 128))) energy))
@@ -313,33 +353,43 @@ VELOCITY is the speed, i.e. position change per tick."
 	     (error "Organism ~A has code length 0" orgap))
 	   orgcont))))
 
-(defmethod eventsource-nexttick ((org orgcont))
-  (orgcont-nexttick org))
+(defmethod eventsource-nexttick ((eventsource orgcont))
+  (orgcont-nexttick eventsource))
 
-(defmethod eventsource-nexttick ((cloud cloud))
-  (cloud-nexttick cloud))
+(defmethod eventsource-nexttick ((eventsource nature-object))
+  (nature-nexttick eventsource))
 
-(defun cloud-position-line (tick)
-  (values (* tick .00001 .707) (* tick .00001 .707)))
+(defun sun-position-line (tick)
+  (values (* tick .00001 .707)
+	  (* tick .00001 .707)))
 
-(defun cloud-position-circle (tick)
-  (values (+ (* 300 (cos (* tick .00000005)))) (+ (* 300 (sin (* tick .00000005))))))
+(defun sun-position-circle (sun tick)
+  (declare (ignore sun))
+  (values (+ (* 300 (cos (* tick .00000005))))
+	  (+ (* 300 (sin (* tick .00000005))))))
 
-(defun set-default-world (&key (w 400) (h 200) (world-energy 0) (orgs 250) (org-energy 4000) (reset-random-state t) (world-max-energy 4000) (rain-per-coordinate-per-tick .00001) (fraction-covered .01) (position-function #'cloud-position-circle) (num-barriers-horizontal 5) (barrier-width-horizontal 40) (num-barriers-vertical 5) (barrier-width-vertical 30))
+(defun cloud-position-line (cloud tick)
+  (with-slots (pos-x pos-y vel-x vel-y) cloud
+    (values (+ pos-x (* tick vel-x))
+	    (+ pos-y (* tick vel-y)))))
+
+(defun set-default-world (&key (w 400) (h 200) (world-energy 0.0) (world-instructions 16.0) (orgs 250) (org-energy 4000) (reset-random-state t) (world-max-energy 4000) (energy-per-coordinate-per-tick .00001) (fraction-covered .01) (position-function #'sun-position-circle) (num-barriers-horizontal 5) (barrier-width-horizontal 40) (num-barriers-vertical 5) (barrier-width-vertical 30) (clouds-edge 1) (clouds-speed-per-tick 1) (clouds-position-function #'cloud-position-line) (clouds-rain-per-coordinate-per-tick .00001))
   (when reset-random-state
     (reset-random-state))
   (setf *id* 0)
   (setf *world-tick* 0)
   (setf *world-max-energy* world-max-energy)
-  (setf *world* (make-world w h world-energy))
+  (setf *world* (make-world w h world-energy *num-instructions* world-instructions))
   (world-set-barriers! *world* num-barriers-horizontal barrier-width-horizontal num-barriers-vertical barrier-width-vertical)
-  (setf *world-clouds* (list (make-cloud rain-per-coordinate-per-tick fraction-covered (array-dimension *world* 0) (array-dimension *world* 1) position-function)))
+  (setf *world-sun* (list (make-sun (array-dimension *world* 0) (array-dimension *world* 1) energy-per-coordinate-per-tick fraction-covered position-function)))
+  (setf *world-clouds* (loop for instruction-index below *num-instructions* collect (make-cloud (array-dimension *world* 0) (array-dimension *world* 1) (+ 1 instruction-index) clouds-edge clouds-speed-per-tick clouds-position-function clouds-rain-per-coordinate-per-tick)))
   (let ((orgs (make-default-orgs orgs org-energy)))
     (setf *orgs* (make-hash-table))
     (orgs-add-orgs orgs)
     (setf *event-heap*
 	  (let ((heap (make-instance 'cl-heap:fibonacci-heap :key #'eventsource-nexttick :sort-fun #'<)))
 	    (cl-heap:add-all-to-heap heap orgs)
+	    (cl-heap:add-all-to-heap heap *world-sun*)
 	    (cl-heap:add-all-to-heap heap *world-clouds*)
 	    heap)))
   (setf *cursor* nil)
@@ -356,17 +406,29 @@ VELOCITY is the speed, i.e. position change per tick."
     (format t "~A length:~S hash:~S~%" genes (length genes) (mru-cache:lsxhash genes))))
 
 (defun compute-fitness (org &optional (fitness-function #'orgcont-energy-out-sum))
-  (if (> (orgap-energy (orgcont-orgap org)) 0)
+  (if (> (aref (orgap-energy (orgcont-orgap org)) 0) 0)
       (+ (funcall fitness-function org) (apply #'+ (mapcar (lambda (org) (compute-fitness org fitness-function)) (orgcont-offspring-list org))))
       0))
 
 (defun print-orgcont (orgcont)
   (with-slots (orgap id age totage offspring-count offspring-energy-sum walk-sum walk-count) orgcont
-    (format t "org id:~5A wait:~5A energy:~4A(~5Ain,~5Aout) age:~3A/~A tage/off(~2A):~6F fitness(~3A,~3A):~A~%"
-	    id (orgap-wait orgap) (orgap-energy orgap) (orgcont-energy-in-sum orgcont) (orgcont-energy-out-sum orgcont) age totage
-	    offspring-count (when (> offspring-count 0) (float (/ totage offspring-count))) (compute-fitness orgcont (constantly 1)) (compute-fitness orgcont #'orgcont-offspring-count) (compute-fitness orgcont))
+    (format t "org id:~5A wait:~5A energy:~4A age:~3A/~A tage/off(~2A):~6F fitness(~3A,~3A):~A~%"
+	    id
+	    (orgap-wait orgap)
+	    (orgap-energy orgap)
+	    age
+	    totage
+	    offspring-count
+	    (when (> offspring-count 0) (float (/ totage offspring-count)))
+	    (compute-fitness orgcont (constantly 1))
+	    (compute-fitness orgcont #'orgcont-offspring-count)
+	    (compute-fitness orgcont))
     (format t "org x:~3,2F y:~3,2F angle:~7,2E speed avg:~1,3F off-energy avg:~4A~%"
-	    (orgap-x orgap) (orgap-y orgap) (float (orgap-angle orgap)) (when (> walk-count 0) (/ walk-sum walk-count)) (when (> offspring-count 0) (round offspring-energy-sum offspring-count))))
+	    (orgap-x orgap)
+	    (orgap-y orgap)
+	    (float (orgap-angle orgap))
+	    (when (> walk-count 0) (/ walk-sum walk-count))
+	    (when (> offspring-count 0) (round offspring-energy-sum offspring-count))))
   (print-orgap orgcont))
 
 (defun compute-raw-edit-distance (org1-genes org2-genes)
@@ -424,24 +486,24 @@ VELOCITY is the speed, i.e. position change per tick."
 	   (compute-fitness org #'orgcont-offspring-count)))
     (format t "fitness min:~A avg:~A max:~A fitness-1 min:~A avg:~A max:~A fitness-offspring min:~A avg:~A max:~A~%" (min-hash-table *orgs* #'compute-fitness) (float (avg-hash-table *orgs* #'compute-fitness)) (max-hash-table *orgs* #'compute-fitness) (min-hash-table *orgs* #'compute-fitness-1) (float (avg-hash-table *orgs* #'compute-fitness-1)) (max-hash-table *orgs* #'compute-fitness-1) (min-hash-table *orgs* #'compute-fitness-offspring) (float (avg-hash-table *orgs* #'compute-fitness-offspring)) (max-hash-table *orgs* #'compute-fitness-offspring))))
 
-(let ((last-clouds-energy-used-sum 0)
-      (last-clouds-energy-drop-sum 0))
+(let ((last-nature-energy-used-sum 0)
+      (last-nature-energy-drop-sum 0))
   (defun print-world-stats (ticks loop-start-real-time total-ins-count)
     (declare (optimize (debug 3)))
     (let* ((length-orgs (hash-table-count *orgs*))
-	   (max-org-energy (max-hash-table *orgs* (lambda (org) (orgap-energy (orgcont-orgap org)))))
-	   (avg-org-energy (avg-hash-table *orgs* (lambda (org) (orgap-energy (orgcont-orgap org)))))
+	   (max-org-energy (max-hash-table *orgs* (lambda (org) (aref (orgap-energy (orgcont-orgap org)) 0))))
+	   (avg-org-energy (avg-hash-table *orgs* (lambda (org) (aref (orgap-energy (orgcont-orgap org)) 0))))
 	   (avg-org-tage/noff (avg-hash-table *orgs* (lambda (org) (if (> (orgcont-offspring-count org) 0) (float (/ (orgcont-totage org) (orgcont-offspring-count org))) (values nil t)))))
 	   (max-totage (max-hash-table *orgs* #'orgcont-totage))
-	   (clouds-energy-drop-sum (loop for cloud in *world-clouds* sum (cloud-energy-drop-sum cloud)))
-	   (clouds-energy-unused-sum (+ (loop for cloud in *world-clouds* sum (cloud-energy-lost-sum cloud))
+	   (nature-energy-drop-sum (apply #'+ (mapcar #'nature-energy-drop-sum (append *world-sun* *world-clouds*))))
+	   (nature-energy-unused-sum (+ (loop for sun in *world-sun* sum (nature-energy-lost-sum sun))
 					(loop for i below (apply #'* (array-dimensions *world*)) sum (row-major-aref *world* i))))
-	   (clouds-energy-used-sum (- clouds-energy-drop-sum clouds-energy-unused-sum)))
+	   (nature-energy-used-sum (- nature-energy-drop-sum nature-energy-unused-sum)))
       (let* ((ins/s (round total-ins-count (max 0.0001 (/ (- (get-internal-real-time) loop-start-real-time) internal-time-units-per-second)))))
 	(format t "i ~A+~A ~8Ains/s (org num:~4A energy avg:~5A max:~5A used:~4,3FA(li~4,2F) tage/noff avg:~6F totage max:~6A)~%"
-		*world-tick* ticks ins/s length-orgs (if avg-org-energy (round avg-org-energy) nil) max-org-energy (float (/ clouds-energy-used-sum clouds-energy-drop-sum)) (let ((ds (- clouds-energy-drop-sum last-clouds-energy-drop-sum))) (if (= ds 0) nil (float (/ (- clouds-energy-used-sum last-clouds-energy-used-sum) ds)))) avg-org-tage/noff max-totage))
-      (setf last-clouds-energy-used-sum clouds-energy-used-sum)
-      (setf last-clouds-energy-drop-sum clouds-energy-drop-sum))))
+		*world-tick* ticks ins/s length-orgs (if avg-org-energy (round avg-org-energy) nil) max-org-energy (float (/ nature-energy-used-sum nature-energy-drop-sum)) (let ((ds (- nature-energy-drop-sum last-nature-energy-drop-sum))) (if (= ds 0) nil (float (/ (- nature-energy-used-sum last-nature-energy-used-sum) ds)))) avg-org-tage/noff max-totage))
+      (setf last-nature-energy-used-sum nature-energy-used-sum)
+      (setf last-nature-energy-drop-sum nature-energy-drop-sum))))
 
 (defmethod idleloop-event ((org orgcont))
   (declare (optimize (debug 3)))
@@ -451,7 +513,7 @@ VELOCITY is the speed, i.e. position change per tick."
 	 (iters (- nexttick lasttick)))
     (incf (orgcont-age org) iters)
     (incf (orgcont-totage org) iters)
-    ;;(prind (orgcont-id org) lasttick iters (orgap-energy orgap))
+    ;;(prind (orgcont-id org) lasttick iters (aref (orgap-energy orgap) 0))
     (flet ((add-offspring (off-orgap)
 	     (incf (orgcont-offspring-count org))
 	     (setf (orgcont-age org) 0)
@@ -471,28 +533,36 @@ VELOCITY is the speed, i.e. position change per tick."
 	   (cl-heap:add-to-heap *event-heap* org)
 	   (orgs-add-org org))
 	  (t
-	   ;;(prind "kill" (orgcont-id org) status (orgcont-age org) (orgap-energy orgap))
+	   ;;(prind "kill" (orgcont-id org) status (orgcont-age org) (aref (orgap-energy orgap) 0))
 	   (orgs-del-org org)))
 	ins-count))))
 
-(defmethod idleloop-event ((cloud cloud))
+(defun nature-event (nature-object position-function edge drop-wait drop-amount energy-index)
   (declare (optimize (debug 3)))
   (let ((world-w (array-dimension *world* 0))
 	(world-h (array-dimension *world* 1)))
-    (with-slots (position-function edge drop-wait drop-amount nexttick) cloud
-      (multiple-value-bind (x y) (funcall position-function nexttick)
-	(let* ((rx (mod (+ (floor x) (floor (* edge (random-gaussian)))) world-w))
-	       (ry (mod (+ (floor y) (floor (* edge (random-gaussian)))) world-h))
-	       (e (aref *world* rx ry)))
-	  (when (>= e 0)
-	    (let* ((new-e (+ e drop-amount))
-		   (actual-e (min *world-max-energy* new-e))
-		   (lost-e (- new-e actual-e)))
-	      (setf (aref *world* rx ry) actual-e)
-	      (incf (cloud-energy-drop-sum cloud) drop-amount)
-	      (incf (cloud-energy-lost-sum cloud) lost-e)))))
-      (incf nexttick drop-wait)
-      (cl-heap:add-to-heap *event-heap* cloud)))
+    (multiple-value-bind (x y) (funcall position-function nature-object (nature-nexttick nature-object))
+      (let* ((rx (mod (+ (floor x) (floor (* edge (random-gaussian)))) world-w))
+	     (ry (mod (+ (floor y) (floor (* edge (random-gaussian)))) world-h))
+	     (e (aref *world* rx ry energy-index)))
+	(when (>= e 0)
+	  (let* ((new-e (+ e drop-amount))
+		 (actual-e (min *world-max-energy* new-e))
+		 (lost-e (- new-e actual-e)))
+	    (setf (aref *world* rx ry energy-index) actual-e)
+	    (incf (nature-energy-drop-sum nature-object) drop-amount)
+	    (incf (nature-energy-lost-sum nature-object) lost-e)))))
+    (cl-heap:add-to-heap *event-heap* nature-object))
+  drop-wait)
+
+(defmethod idleloop-event ((sun sun))
+  (with-slots (position-function edge drop-wait drop-amount energy-index) sun
+    (incf (nature-nexttick sun) (nature-event sun position-function edge drop-wait drop-amount energy-index)))
+  nil)
+
+(defmethod idleloop-event ((cloud cloud))
+  (with-slots (position-function edge drop-wait drop-amount energy-index) cloud
+    (incf (nature-nexttick cloud) (nature-event cloud position-function edge drop-wait drop-amount energy-index)))
   nil)
 
 (let ((lastloop nil))
@@ -500,7 +570,7 @@ VELOCITY is the speed, i.e. position change per tick."
     (declare (optimize (debug 3)))
     (let ((loop-start-real-time (get-internal-real-time))
 	  (total-ins-count 0))
-      ;; clouds and organisms conceptually are event sources that have an #'EVENTSOURCE-NEXTTICK.
+      ;; sun, clouds and organisms conceptually are event sources that have an #'EVENTSOURCE-NEXTTICK.
       (loop until (let* ((org (cl-heap:peep-at-heap *event-heap*))) (or (null org) (> (eventsource-nexttick org) lasttick))) do
 	 ;;(prind *world-tick* *orgs* *event-heap*)
 	   (let* ((org (cl-heap:pop-heap *event-heap*)))
@@ -657,13 +727,13 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 		     (let* ((w (sdl-surface-get-w sur))
 			    (h (sdl-surface-get-h sur)))
 		       (loop for y below h do
-			    (loop for x below w do
-				 (let* ((c (min 255 (ash (aref *world* x y) -2)))
-					(color (cond ((>= c 0) (color-to-argb8888 255 c c c))
-						     (t (color-to-argb8888 255 0 0 255)))))
-				   (set-pixel x y color))))
-		       (loop for cloud in *world-clouds* do
-			    (multiple-value-bind (x y) (funcall (cloud-position-function cloud) *world-tick*)
+		       	    (loop for x below w do
+		       		 (let* ((c (min 255 (ash (floor (aref *world* x y 0)) -2)))
+		       			(color (cond ((>= c 0) (color-to-argb8888 255 c c c))
+		       				     (t (color-to-argb8888 255 0 0 255)))))
+		       		   (set-pixel x y color))))
+		       (loop for sun in *world-sun* do
+			    (multiple-value-bind (x y) (funcall (nature-position-function sun) sun *world-tick*)
 			      (let ((c (+ 128 (random 128))))
 				(set-pixel (mod (round x) w) (mod (round y) h) (color-to-argb8888 255 c c 0))
 				(set-pixel (mod (round (1+ x)) w) (mod (round y) h) (color-to-argb8888 255 c c 0))
@@ -676,7 +746,7 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 			      (ecase display-mode
 				((:energy)
 				 (set-pixel x y
-					    (let* ((e (max 0 (orgap-energy orgap)))
+					    (let* ((e (max 0 (aref (orgap-energy orgap) 0)))
 						   (c (min (ash e -1) 255)))
 					      (if (= (orgcont-age org) 0)
 						  (color-to-argb8888 255 255 0 0)
@@ -695,7 +765,7 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 		   (let ((*random-state* display-random-state))
 		     (sdl2-ffi.functions::sdl-set-render-draw-color wrend 255 (random 256) (random 256) 255))
 		   (cond
-		     ((and (not (null *cursor*)) (> (orgap-energy (orgcont-orgap *cursor*)) 0))
+		     ((and (not (null *cursor*)) (> (aref (orgap-energy (orgcont-orgap *cursor*)) 0) 0))
 		      (print-orgcont *cursor*)
 		      (let* ((orgap (orgcont-orgap *cursor*))
 			     (x (floor (orgap-x orgap))) (y (floor (orgap-y orgap)))
@@ -744,5 +814,4 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 	     (idleloop (+ *world-tick* ticks))
 	     (print-orgcont (argmax-hash-table *orgs* #'compute-fitness)))))))
 
-;;(set-default-world :w 400 :h 200 :rain-per-coordinate 0.01 :fraction-covered 0.15 :num-barriers-horizontal 120 :orgs 100)
 ;;(software-render-texture)
