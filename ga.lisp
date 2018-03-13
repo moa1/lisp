@@ -221,14 +221,14 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
     (loop for i below num-barriers-horizontal do
 	 (let ((y (random h)) (x (random w)))
 	   (loop for i below barrier-width-horizontal do
-		(setf (aref world (mod (+ x i) w) y 0) -1.0))))
+		(setf (aref world (mod (+ x i) w) y 0) -1))))
     (loop for i below num-barriers-vertical do
 	 (let ((y (random h)) (x (random w)))
 	   (loop for i below barrier-width-vertical do
-		(setf (aref world x (mod (+ y i) h) 0) -1.0))))))
+		(setf (aref world x (mod (+ y i) h) 0) -1))))))
 
 (defun make-world (w h initial-energy num-instructions initial-instructions)
-  (let ((world (make-array (list w h (+ 1 num-instructions)) :element-type 'single-float)))
+  (let ((world (make-array (list w h (+ 1 num-instructions)) :element-type 'fixnum)))
     (loop for x below w do
 	 (loop for y below h do
 	      (setf (aref world x y 0) initial-energy)
@@ -302,8 +302,8 @@ VELOCITY is the speed, i.e. position change per tick."
    (offspring-energy-sum :initform 0 :initarg :offspring-energy-sum :accessor orgcont-offspring-energy-sum)
    (walk-sum :initform 0.0 :initarg :walk-sum :accessor orgcont-walk-sum)
    (walk-count :initform 0 :initarg :walk-count :accessor orgcont-walk-count)
-   (energy-in-sum :initform (make-array *num-energies* :element-type 'integer :initial-element 0) :initarg :energy-in-sum :accessor orgcont-energy-in-sum :documentation "The total energy taken in, excluding initial energy of organisms spawned in the world.")
-   (energy-out-sum :initform (make-array *num-energies* :element-type 'integer :initial-element 0) :initarg :energy-out-sum :accessor orgcont-energy-out-sum :documentation "The total energy spent voluntarily or involutarily.")))
+   (energy-in-sum :initform (make-energy 0) :initarg :energy-in-sum :accessor orgcont-energy-in-sum :documentation "The total energy taken in, excluding initial energy of organisms spawned in the world.")
+   (energy-out-sum :initform (make-energy 0) :initarg :energy-out-sum :accessor orgcont-energy-out-sum :documentation "The total energy spent voluntarily or involutarily.")))
 (defun make-orgcont (&rest args)
   (apply #'make-instance 'orgcont args))
 
@@ -373,7 +373,7 @@ VELOCITY is the speed, i.e. position change per tick."
     (values (+ pos-x (* tick vel-x))
 	    (+ pos-y (* tick vel-y)))))
 
-(defun set-default-world (&key (w 400) (h 200) (world-energy 0.0) (world-instructions 16.0) (orgs 250) (org-energy 4000) (reset-random-state t) (world-max-energy 4000) (energy-per-coordinate-per-tick .00001) (fraction-covered .01) (position-function #'sun-position-circle) (num-barriers-horizontal 5) (barrier-width-horizontal 40) (num-barriers-vertical 5) (barrier-width-vertical 30) (clouds-edge 1) (clouds-speed-per-tick 1) (clouds-position-function #'cloud-position-line) (clouds-rain-per-coordinate-per-tick .00001))
+(defun set-default-world (&key (w 400) (h 200) (world-energy 0) (world-instructions 16) (orgs 250) (org-energy 4000) (reset-random-state t) (world-max-energy 4000) (energy-per-coordinate-per-tick .00001) (fraction-covered .01) (position-function #'sun-position-circle) (num-barriers-horizontal 5) (barrier-width-horizontal 40) (num-barriers-vertical 5) (barrier-width-vertical 30) (clouds-edge 1) (clouds-speed-per-tick 1) (clouds-position-function #'cloud-position-line) (clouds-rain-per-coordinate-per-tick .00001))
   (when reset-random-state
     (reset-random-state))
   (setf *id* 0)
@@ -382,7 +382,9 @@ VELOCITY is the speed, i.e. position change per tick."
   (setf *world* (make-world w h world-energy *num-instructions* world-instructions))
   (world-set-barriers! *world* num-barriers-horizontal barrier-width-horizontal num-barriers-vertical barrier-width-vertical)
   (setf *world-sun* (list (make-sun (array-dimension *world* 0) (array-dimension *world* 1) energy-per-coordinate-per-tick fraction-covered position-function)))
-  (setf *world-clouds* (loop for instruction-index below *num-instructions* collect (make-cloud (array-dimension *world* 0) (array-dimension *world* 1) (+ 1 instruction-index) clouds-edge clouds-speed-per-tick clouds-position-function clouds-rain-per-coordinate-per-tick)))
+  ;;(setf *world-clouds* (loop for instruction-index below *num-instructions* collect (make-cloud (array-dimension *world* 0) (array-dimension *world* 1) (+ 1 instruction-index) clouds-edge clouds-speed-per-tick clouds-position-function clouds-rain-per-coordinate-per-tick)))
+  ;;(setf *world-clouds* (list (make-cloud (array-dimension *world* 0) (array-dimension *world* 1) -1 clouds-edge clouds-speed-per-tick clouds-position-function clouds-rain-per-coordinate-per-tick)))
+  (setf *world-clouds* nil)
   (let ((orgs (make-default-orgs orgs org-energy)))
     (setf *orgs* (make-hash-table))
     (orgs-add-orgs orgs)
@@ -406,7 +408,7 @@ VELOCITY is the speed, i.e. position change per tick."
     (format t "~A length:~S hash:~S~%" genes (length genes) (mru-cache:lsxhash genes))))
 
 (defun compute-fitness (org &optional (fitness-function #'orgcont-energy-out-sum))
-  (if (> (aref (orgap-energy (orgcont-orgap org)) 0) 0)
+  (if (> (get-energy (orgap-energy (orgcont-orgap org)) 0) 0)
       (+ (funcall fitness-function org) (apply #'+ (mapcar (lambda (org) (compute-fitness org fitness-function)) (orgcont-offspring-list org))))
       0))
 
@@ -491,8 +493,8 @@ VELOCITY is the speed, i.e. position change per tick."
   (defun print-world-stats (ticks loop-start-real-time total-ins-count)
     (declare (optimize (debug 3)))
     (let* ((length-orgs (hash-table-count *orgs*))
-	   (max-org-energy (max-hash-table *orgs* (lambda (org) (aref (orgap-energy (orgcont-orgap org)) 0))))
-	   (avg-org-energy (avg-hash-table *orgs* (lambda (org) (aref (orgap-energy (orgcont-orgap org)) 0))))
+	   (max-org-energy (max-hash-table *orgs* (lambda (org) (get-energy (orgap-energy (orgcont-orgap org)) 0))))
+	   (avg-org-energy (avg-hash-table *orgs* (lambda (org) (get-energy (orgap-energy (orgcont-orgap org)) 0))))
 	   (avg-org-tage/noff (avg-hash-table *orgs* (lambda (org) (if (> (orgcont-offspring-count org) 0) (float (/ (orgcont-totage org) (orgcont-offspring-count org))) (values nil t)))))
 	   (max-totage (max-hash-table *orgs* #'orgcont-totage))
 	   (nature-energy-drop-sum (apply #'+ (mapcar #'nature-energy-drop-sum (append *world-sun* *world-clouds*))))
@@ -513,7 +515,7 @@ VELOCITY is the speed, i.e. position change per tick."
 	 (iters (- nexttick lasttick)))
     (incf (orgcont-age org) iters)
     (incf (orgcont-totage org) iters)
-    ;;(prind (orgcont-id org) lasttick iters (aref (orgap-energy orgap) 0))
+    ;;(prind (orgcont-id org) lasttick iters (get-energy (orgap-energy orgap) 0))
     (flet ((add-offspring (off-orgap)
 	     (incf (orgcont-offspring-count org))
 	     (setf (orgcont-age org) 0)
@@ -533,12 +535,14 @@ VELOCITY is the speed, i.e. position change per tick."
 	   (cl-heap:add-to-heap *event-heap* org)
 	   (orgs-add-org org))
 	  (t
-	   ;;(prind "kill" (orgcont-id org) status (orgcont-age org) (aref (orgap-energy orgap) 0))
+	   ;;(prind "kill" (orgcont-id org) status (orgcont-age org) (get-energy (orgap-energy orgap) 0))
 	   (orgs-del-org org)))
 	ins-count))))
 
 (defun nature-event (nature-object position-function edge drop-wait drop-amount energy-index)
   (declare (optimize (debug 3)))
+  (when (typep nature-object 'cloud)
+    (setf energy-index (1+ (random *num-instructions*))))
   (let ((world-w (array-dimension *world* 0))
 	(world-h (array-dimension *world* 1)))
     (multiple-value-bind (x y) (funcall position-function nature-object (nature-nexttick nature-object))
@@ -746,7 +750,7 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 			      (ecase display-mode
 				((:energy)
 				 (set-pixel x y
-					    (let* ((e (max 0 (aref (orgap-energy orgap) 0)))
+					    (let* ((e (max 0 (get-energy (orgap-energy orgap) 0)))
 						   (c (min (ash e -1) 255)))
 					      (if (= (orgcont-age org) 0)
 						  (color-to-argb8888 255 255 0 0)
@@ -765,7 +769,7 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 		   (let ((*random-state* display-random-state))
 		     (sdl2-ffi.functions::sdl-set-render-draw-color wrend 255 (random 256) (random 256) 255))
 		   (cond
-		     ((and (not (null *cursor*)) (> (aref (orgap-energy (orgcont-orgap *cursor*)) 0) 0))
+		     ((and (not (null *cursor*)) (> (get-energy (orgap-energy (orgcont-orgap *cursor*)) 0) 0))
 		      (print-orgcont *cursor*)
 		      (let* ((orgap (orgcont-orgap *cursor*))
 			     (x (floor (orgap-x orgap))) (y (floor (orgap-y orgap)))
