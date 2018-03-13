@@ -228,12 +228,14 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 		(setf (aref world x (mod (+ y i) h) 0) -1))))))
 
 (defun make-world (w h initial-energy num-instructions initial-instructions)
-  (let ((world (make-array (list w h (+ 1 num-instructions)) :element-type 'fixnum)))
+  ;;(let ((world (make-array (list w h (+ 1 num-instructions)) :element-type 'fixnum)))
+  (let ((world (make-array (list w h 1) :element-type 'fixnum)))
     (loop for x below w do
 	 (loop for y below h do
 	      (setf (aref world x y 0) initial-energy)
-	      (loop for i below num-instructions do
-		   (setf (aref world x y (+ 1 i)) initial-instructions))))
+	      ;; (loop for i below num-instructions do
+	      ;; 	   (setf (aref world x y (+ 1 i)) initial-instructions))
+	      ))
     world))
 
 (defclass nature-object ()
@@ -289,6 +291,31 @@ VELOCITY is the speed, i.e. position change per tick."
 		   :vel-y (* cloud-speed-per-tick (cos angle))
 		   :energy-index energy-index)))
 
+#|
+(defun make-energy (initial-energy-0)
+  (let ((energy (make-array *num-energies* :element-type 'fixnum :initial-element 0)))
+    (setf (aref energy 0) initial-energy-0)
+    energy))
+(defun get-energy (energy energy-index)
+  (aref energy energy-index))
+(defun (setf get-energy) (value energy energy-index)
+  (setf (aref energy energy-index) value))
+|#
+;; the program is still slow with the following, which is equivalent to the situation in commit 0d9cf2 where an organism had only one energy value, so the slowness must come from somewhere else.
+(defmacro make-energy (initial-energy-0)
+  `,initial-energy-0)
+(defmacro get-energy (energy energy-index)
+  `,energy)
+(define-setf-expander get-energy (energy energy-index &environment env)
+  "Set the last element in a list to the given value."
+  (let ((store (gensym)))
+    (values `()
+	    `()
+	    `(,store)
+	    `(setf ,energy ,store)
+	    `,energy)))
+
+
 (defclass orgcont () ;organism container
   ((orgap :initarg :orgap :accessor orgcont-orgap)
    (id :initform (incf *id*) :initarg :id :accessor orgcont-id)
@@ -313,7 +340,8 @@ VELOCITY is the speed, i.e. position change per tick."
 ;; load organism implementation
 (load "~/lisp/gatest-orgap-lisp.lisp")
 ;;(load "~/lisp/gatest-orgap-lightning.lisp")
-(defvar *num-energies* (+ 1 *num-instructions*) "The total number of different energies at each world coordinate")
+;;(defvar *num-energies* (+ 1 *num-instructions*) "The total number of different energies at each world coordinate")
+(defvar *num-energies* 1 "The total number of different energies at each world coordinate")
 
 (defun copy-orgcont (orgcont)
   (with-slots (orgap id lasttick nexttick age totage offspring-list offspring-count offspring-energy-sum walk-sum walk-count energy-in-sum energy-out-sum) orgcont
