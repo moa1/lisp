@@ -1,3 +1,5 @@
+;; TODO: implement optimizing out IF-forms in favor of computing both branches and selecting the result of the whole IF-form by logical AND and OR: for example, the Lisp-code (SETQ A (IF S Y Z)) could be optimized to the c-code: "int a = (y & -s) | (z & -(!s));".
+
 ;;;; Lisp to C Compiler
 
 (load "~/quicklisp/setup.lisp")
