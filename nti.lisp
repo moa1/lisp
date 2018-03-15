@@ -882,7 +882,7 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
   "Join the common namespaces of PARSERS and set the result to TARGET-PARSER."
   (flet ((join! (target-var &rest join-vars)
 	   ;; it should be correct to set (AST-UPPER TARGET-VAR) directly to the join instead of the meet of TARGET-VAR with the join of the new namespaces? If it isn't then how does an IF-FORM prevent only being able to calculate subtypes of the variable types (of variables in the namespace) before the IF-FORM?
-	   (setf (ast-bounds target-var) (apply #'join-bounds (mapcar #'ast-bounds join-vars))))) ;TODO: meet the joined bounds with the declared bounds of TARGET-VAR. (This must be done also at MULTIPLE-VALUE-BIND, and everywhere where a variable is set.)
+	   (setf (ast-bounds target-var) (apply #'join-bounds (mapcar #'ast-bounds join-vars))))) ;TODO: meet the joined bounds with the declared bounds of TARGET-VAR. (This must be done also at MULTIPLE-VALUE-BIND, and everywhere a variable is set.)
     (mapc-namespaces #'join! (cons (walker:parser-lexical-namespace target-parser)
 				   (mapcar #'walker:parser-lexical-namespace parsers)))
     (mapc-namespaces #'join! (cons (walker:parser-free-namespace target-parser)
@@ -914,6 +914,15 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 	  (walker:namespace-var (walker:parser-free-namespace ntiparser)) free-namespace))
   ntiparser)
 
+(defun copy-var (parser var)
+  (walker:make-ast parser 'walker:var :name (walker:nso-name var) :freep (walker:nso-freep var) :definition (walker:nso-definition var) :sites (walker:nso-sites var) :declspecs (walker:nso-declspecs var) :macrop (walker:nso-macrop var))) ;slot USER is set by the overridden #'MAKE-AST
+
+(defun prepare-frankensteined-parser! (parser)
+  "Modify PARSER in-place with its VAR-namespace deep-copied until aconses."
+  (let ((newparser (walker:copy-deep-parser parser)))
+    (setf (walker:parser-lexical-namespace parser) (walker:parser-lexical-namespace newparser)
+	  (walker:parser-free-namespace parser) (walker:parser-free-namespace newparser))))
+
 (defmethod set-userproperties ((ast walker:application-form) (parser-next ntiparser) parser-prev parent)
   ;; If this is a non-recursive call, then copy the FUN-BINDING and store the copy in USERPROPERTIES.
   (let ((userproperties (make-userproperties :parser-prev parser-next)))
@@ -934,20 +943,10 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 	    (setf (userproperties-form userproperties) fun-binding-ast-copy))))))
     (setf (walker:user ast) userproperties)))
 
-(defun copy-var (parser var)
-  (walker:make-ast parser 'walker:var :name (walker:nso-name var) :freep (walker:nso-freep var) :definition (walker:nso-definition var) :sites (walker:nso-sites var) :declspecs (walker:nso-declspecs var) :macrop (walker:nso-macrop var))) ;slot USER is set by the overridden #'MAKE-AST
-
-(defun prepare-frankensteined-parser! (parser)
-  "Modify PARSER in-place with its VAR-namespace deep-copied until aconses."
-  (let ((newparser (walker:copy-deep-parser parser)))
-    (setf (walker:parser-lexical-namespace parser) (walker:parser-lexical-namespace newparser)
-	  (walker:parser-free-namespace parser) (walker:parser-free-namespace newparser))))
-
-(defun prepare-frankensteined-parser-deep! (parser)
-  "Modify PARSER in-place with its VAR-namespace deep-copied until VARs."
-  (let ((newparser (walker:copy-deep-parser parser)))
-    (setf (walker:parser-lexical-namespace parser) (walker:parser-lexical-namespace newparser)
-	  (walker:parser-free-namespace parser) (walker:parser-free-namespace newparser))))
+;; (defmethod set-userproperties ((ast walker:var-writing) (parser-next ntiparser) parser-prev parent)
+;;   (let* ((var (walker:form-var ast))
+;; 	 (new-var (copy-var parser-next var)))
+;;     (parser-redefine-var! parser-next (walker:nso-name var) new-var)))
 
 (defmethod set-userproperties ((ast walker:setq-form) (parser-next ntiparser) parser-prev parent)
   ;; modify PARSER-NEXT in-place, because we want the changes to persist in the forms after the SETQ-FORM.
@@ -958,9 +957,6 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 	 (parser-redefine-var! parser-next (walker:nso-name var) new-var)
 	 (setf (car var-rest) new-var)))
   (setf (walker:user ast) (make-userproperties :parser-prev parser-next :parser-next parser-next)))
-
-(defmethod set-userproperties (ast (parser-next ntiparser) parser-prev parent)
-  (setf (walker:user ast) (make-userproperties :parser-prev parser-prev :parser-next parser-next)))
 
 (defmethod set-userproperties ((ast walker:if-form) (parser-next ntiparser) parser-prev parent)
   "Redefine in PARSER-NEXT the variables that are defined as different variables in the namespaces of the branches of AST. Return NIL."
@@ -999,6 +995,9 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 	(prepare-frankensteined-parser! parser-next)
 	(setf (walker:user ast) (make-userproperties :parser-prev parser-prev :parser-next parser-next :form parser-join))))))
 
+(defmethod set-userproperties (ast (parser-next ntiparser) parser-prev parent)
+  (setf (walker:user ast) (make-userproperties :parser-prev parser-prev :parser-next parser-next)))
+
 (defmethod walker:parse :around ((ntiparser ntiparser) form parent)
   (let* ((parser-prev (walker:copy-parser ntiparser))
 	 (ast (call-next-method ntiparser form parent)))
@@ -1006,8 +1005,14 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
     ast))
 
 (defmethod walker:make-ast :around ((ntiparser ntiparser) type &rest arguments)
-  (let ((ast (apply #'call-next-method ntiparser type arguments)))
+  (declare (optimize (debug 3)))
+  (let ((ast (apply #'call-next-method ntiparser type arguments))
+	(parent (let ((tail (member :parent arguments)))
+		  (assert (or (null tail) (consp (cdr tail))))
+		  (cadr tail))))
     (setf (walker:user ast) (make-userproperties :parser-prev ntiparser :parser-next ntiparser))
+    ;; (when (subtypep type (or 'walker:var-writing))
+    ;;   (set-userproperties ast ntiparser ntiparser parent))
     ast))
 
 ;;; ANNOTATE
@@ -1811,13 +1816,13 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
        (let ((var (walker:form-sym binding))
 	     (value (walker:form-value binding)))
 	 (fwd-infer fwd-inferer value)
-	 (setf (ast-bounds var) (ast-bounds value)))) ;TODO: meet (AST-BOUNDS VALUE) with the declared bounds of VAR. (This must be done also at MULTIPLE-VALUE-BIND, and everywhere where a variable is set.)
+	 (setf (ast-bounds var) (ast-bounds value)))) ;TODO: meet (AST-BOUNDS VALUE) with the declared bounds of VAR. (This must be done also at MULTIPLE-VALUE-BIND, and everywhere a variable is set.)
   (fwd-infer-list fwd-inferer (walker:form-body ast)))
 
 (defmethod fwd-infer ((fwd-inferer fwd-inferer) (ast walker:setq-form))
   (loop for var in (walker:form-vars ast) for value in (walker:form-values ast) do
        (fwd-infer fwd-inferer value)
-       (setf (ast-bounds var) (ast-bounds value)))) ;TODO: meet (AST-BOUNDS VALUE) with the declared bounds of VAR. (This must be done also at MULTIPLE-VALUE-BIND, and everywhere where a variable is set.)
+       (setf (ast-bounds var) (ast-bounds value)))) ;TODO: meet (AST-BOUNDS VALUE) with the declared bounds of VAR. (This must be done also at MULTIPLE-VALUE-BIND, and everywhere a variable is set.)
 
 (defmethod fwd-infer ((fwd-inferer fwd-inferer) (ast walker:if-form))
   (let* ((test-exits (find-exits (inferer-exit-finder fwd-inferer) (walker:form-test ast)))
