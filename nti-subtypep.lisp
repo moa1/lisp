@@ -446,7 +446,10 @@ Return the type relations of the supertypes."
 
 (defun join-type (type1 type2 typehash)
   "Return the common minimal ancestor of TYPE1 and TYPE2 in the typegraph stored in TYPEHASH."
-  (join-typelist (join-types type1 type2 typehash) typehash))
+  (cond
+    ((null type1) type2)
+    ((null type2) type1)
+    (t (join-typelist (join-types type1 type2 typehash) typehash))))
 
 (defun is-subtypep (type1 type2 typehash)
   (cond
@@ -468,4 +471,43 @@ Return the type relations of the supertypes."
 	      ;;(prind t1 t2)
 	      (if (not (eq (is-subtypep t1 t2 typehash) (subtypep t1 t2)))
 		  (format t "(IS-SUBTYPEP '~A '~A)=~A but (SUBTYPEP '~A '~A)=~A~%" t1 t2 (is-subtypep t1 t2 typehash) t1 t2 (subtypep t1 t2)))))))
-(test1)
+;;(test1)
+
+#|
+NIMBLE-TYPE-INFERENCER> (SUBTYPES-OF-ALL +builtin-types+ :PRINT T)
+(ARRAY SINGLE-FLOAT) is a supertype of (NIL)
+(ARRAY FIXNUM) is a supertype of (NIL)
+ARRAY is a supertype of (NIL (ARRAY FIXNUM) (ARRAY SINGLE-FLOAT))
+V4S-FLOAT is a supertype of (NIL)
+SYMBOL is a supertype of (NIL NULL BOOLEAN)
+(AND UNSIGNED-BYTE FIXNUM) is a supertype of (NIL)
+SINGLE-FLOAT is a supertype of (NIL)
+UNSIGNED-BYTE is a supertype of (NIL (AND UNSIGNED-BYTE FIXNUM))
+FIXNUM is a supertype of (NIL (AND UNSIGNED-BYTE FIXNUM))
+INTEGER is a supertype of (NIL FIXNUM UNSIGNED-BYTE (AND UNSIGNED-BYTE FIXNUM))
+NUMBER is a supertype of (NIL INTEGER FIXNUM UNSIGNED-BYTE SINGLE-FLOAT
+                          (AND UNSIGNED-BYTE FIXNUM))
+LIST is a supertype of (NIL NULL)
+BOOLEAN is a supertype of (NIL NULL)
+NULL is a supertype of (NIL)
+T is a supertype of (NIL NULL BOOLEAN LIST NUMBER INTEGER FIXNUM UNSIGNED-BYTE
+                     SINGLE-FLOAT (AND UNSIGNED-BYTE FIXNUM) SYMBOL V4S-FLOAT
+                     ARRAY (ARRAY FIXNUM) (ARRAY SINGLE-FLOAT))
+NIL is a supertype of NIL
+
+implies the following graph:
+
+                           T
+                   _______/|\___________________________________________
+                  /       /               \                     | \     \
+              NUMBER  SYMBOL            ARRAY                   |  \  V4S-FLOAT
+            _/     \     |              /   |                   |  |    |
+SINGLE-FLOAT     INTEGER \  (ARRAY FIXNUM) (ARRAY SINGLE-FLOAT) |  |    |
+ |              /     \   \             |   |                   |  |    |
+ | UNSIGNED-BYTE  FIXNUM   \__         /    |             BOOLEAN  LIST |
+ |             \ /            \       /    /                    | /    /
+ |  (AND UNSIGNED-BYTE FIXNUM) \     /    /                    NULL   /
+  \             |              |    /    /                    /      /
+   \____________\_____________ | __/____/____________________/______/
+                              NIL
+|#
