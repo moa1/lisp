@@ -252,6 +252,12 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 (defun is-results-0 (results)
   (= (results-nvalues results) 0))
 
+(defun is-results (results1 results2)
+  "Return non-NIL if RESULTS1 is equal to RESULTS2, NIL otherwise."
+  (and (= (results-nvalues results1) (results-nvalues results2))
+       (equal (results-finite results1) (results-finite results2))
+       (eql (results-infinite results1) (results-infinite results2))))
+
 (defun most-significant-bit (n)
   "Returns the number of the most significant bit, which is set in N. N must be an unsigned number. Returns -1 if N is 0."
   (declare (type unsigned-byte n))
@@ -303,9 +309,16 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 (defmethod print-object ((object results) stream)
   (print-unreadable-object (object stream :type t)
     (format stream "[~S]" (results-nvalues object))
-    (loop for type in (append (results-finite object) (list (results-infinite object))) do
-	 (format stream " ~A" type))
-    (format stream "...")))
+    (cond
+      ((= (results-nvalues object) -1)
+       (loop for type in (append (results-finite object) (list (results-infinite object))) do
+	    (format stream " ~A" type))
+       (format stream "..."))
+      (t
+       (loop for i below (most-significant-bit (results-nvalues object)) do
+	    (format stream " ~A" (if (< i (length (results-finite object)))
+				     (elt (results-finite object) i)
+				     (results-infinite object))))))))
 
 (let ((r (make-results* :nvalues -1 :finite nil :infinite nil)))
   (setf (resultn r 0) 1)
@@ -347,14 +360,24 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 					    (elt (results-finite results2) i))))
 				(funcall function t1 t2)))))
 	 (infinite (funcall function (results-infinite results1) (results-infinite results2)))
-	 (finite-cropped (let* ((last 0))
-			   (loop for i from (1- (length finite)) downto 0 do
-				(when (not (equal (elt finite i) infinite)) (setf last (1+ i)) (return)))
-			   (subseq finite 0 last)))
 	 (nv1 (results-nvalues results1))
 	 (nv2 (results-nvalues results2))
 	 (nv (funcall nvalues-function nv1 nv2)))
-    (make-results* :nvalues nv :finite finite-cropped :infinite infinite)))
+    (flet ((crop-finite (finite)
+	     (let* ((last 0))
+	       (loop for i from (1- (length finite)) downto 0 do
+		    (when (not (equal (elt finite i) infinite)) (setf last (1+ i)) (return)))
+	       (subseq finite 0 last))))
+      (setf finite (crop-finite finite))
+      ;; hack to make (JOIN-RESULTS (MAKE-RESULTS 'FIXNUM) (MAKE-RESULTS-NIL)) == (MAKE-RESULTS 'FIXNUM). This is legal, because (NTH-VALUE X 1) == NULL for X > 0.
+      (when (and (< nv 0) (eql infinite 'null))
+	(assert (= nv -1) () "If this happens, try to find out what is correct for the next expression instead of (SETF NV (EXPT 2 (LENGTH FINITE))). (SETF NV (LOGXOR NV -1)) doesn't work.")
+	(setf nv (expt 2 (length finite))))
+      (cond
+	((or (and (null finite) (null infinite)) (some #'null finite))
+	 (make-results-nil))
+	(t
+	 (make-results* :nvalues nv :finite finite :infinite infinite))))))
 
 (defun meet-results (results1 results2)
   "RESULTS1 and RESULTS2 are each of type RESULTS. Meet them and return the new RESULTS."
@@ -363,6 +386,41 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 (defun join-results (results1 results2)
   "RESULTS1 and RESULTS2 are each of type RESULTS. Join them and return the new RESULTS."
   (process-results results1 results2 #'join #'logior))
+
+(defun test-meet-join-results ()
+  (assert (is-results (meet-results (make-results 'fixnum) (make-results 'single-float))
+		      (make-results-nil)))
+  (assert (is-results (join-results (make-results 'fixnum) (make-results 'single-float))
+		      (make-results 'number)))
+  (assert (is-results (meet-results (make-results 'fixnum) (make-results 'number))
+		      (make-results 'fixnum)))
+  (assert (is-results (join-results (make-results 'fixnum) (make-results 'number))
+		      (make-results 'number)))
+  (assert (is-results (meet-results (make-results 'fixnum) (make-results-t))
+		      (make-results 'fixnum)))
+  (assert (is-results (join-results (make-results 'fixnum) (make-results-t))
+		      (make-results-t)))
+  (assert (is-results (meet-results (make-results 'fixnum) (make-results-nil))
+		      (make-results-nil)))
+  (assert (is-results (join-results (make-results 'fixnum) (make-results-nil))
+		      (make-results 'fixnum)))
+  (assert (is-results (meet-results (make-results-t) (make-results-nil))
+		      (make-results-nil)))
+  (assert (is-results (join-results (make-results-t) (make-results-nil))
+		      (make-results-t)))
+  (assert (is-results (meet-results (make-results 'fixnum) (make-results-0))
+		      (make-results-nil)))
+  (assert (is-results (join-results (make-results 'fixnum) (make-results-0))
+		      (make-results 'fixnum)))
+  (assert (is-results (meet-results (make-results-t) (make-results-0))
+		      (make-results-nil)))
+  (assert (is-results (meet-results (make-results-nil) (make-results-0))
+		      (make-results-nil)))
+  (assert (is-results (join-results (make-results-t) (make-results-0))
+		      (make-results-t)))
+  (assert (is-results (join-results (make-results-nil) (make-results-0))
+		      (make-results-nil))))
+(test-meet-join-results)
 
 (defun fun-result-lookup-upper (fun arg-types)
   "ARG-TYPES is the list of types of (arg1-type arg2-type ...)"
