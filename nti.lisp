@@ -219,28 +219,34 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
   (infinite nil :type (or symbol list))) ;the infinite part of the values list of the result
 
 (defun make-results (&rest results)
-  (let ((results-head (nreverse (member-if (lambda (result) (not (eql 'null result))) (reverse results)))))
+  (let ((results-head (nreverse (member-if (lambda (result) (not (eql 'null result)))
+					   (reverse results)))))
     (make-results* :nvalues (expt 2 (length results)) :finite (copy-list results-head) :infinite 'null)))
 
 (defun make-results-infinite (result-type)
   (make-results* :nvalues -1 :finite nil :infinite result-type))
 
 (defun is-results-infinite (results infinite-part)
-  (and (= (results-nvalues results) -1) (eql (results-finite results) nil) (eql (results-infinite results) infinite-part)))
+  (and (= (results-nvalues results) -1)
+       (eql (results-finite results) nil)
+       (eql (results-infinite results) infinite-part)))
 
 (defun make-results-t ()
+  "Return a RESULTS instantiation meaning the function returns any number of values, all of type T."
   (make-results-infinite t))
 
 (defun is-results-t (results)
   (is-results-infinite results t))
 
 (defun make-results-nil ()
+  "Return a RESULTS instantiation meaning the function returns any number of values, all of type NIL." ;where NIL can legally be only a lower bound. If a function returns NIL, its return type is NULL, not NIL.
   (make-results-infinite nil))
 
 (defun is-results-nil (results)
   (is-results-infinite results nil))
 
 (defun make-results-0 ()
+  "Return a RESULTS instantiation meaning that the function does not return."
   (make-results* :nvalues 0))
 
 (defun is-results-0 (results)
@@ -327,11 +333,18 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 	 (nf2 (length (results-finite results2)))
 	 (min-nf (max 0 (min nf1 nf2)))
 	 (max-nf (max nf1 nf2))
-	 (finite (append (loop for i below min-nf for t1 in (results-finite results1) for t2 in (results-finite results2) collect
+	 (finite (append (loop
+			    for i below min-nf
+			    for t1 in (results-finite results1)
+			    for t2 in (results-finite results2) collect
 			      (funcall function t1 t2))
 			 (loop for i from min-nf below max-nf collect
-			      (let ((t1 (if (>= i nf1) (results-infinite results1) (elt (results-finite results1) i)))
-				    (t2 (if (>= i nf2) (results-infinite results2) (elt (results-finite results2) i))))
+			      (let ((t1 (if (>= i nf1)
+					    (results-infinite results1)
+					    (elt (results-finite results1) i)))
+				    (t2 (if (>= i nf2)
+					    (results-infinite results2)
+					    (elt (results-finite results2) i))))
 				(funcall function t1 t2)))))
 	 (infinite (funcall function (results-infinite results1) (results-infinite results2)))
 	 (finite-cropped (let* ((last 0))
