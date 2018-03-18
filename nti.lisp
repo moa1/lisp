@@ -877,6 +877,8 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
   (userproperties-bounds (walker:user ast)))
 (defmethod ast-bounds ((ast walker:var-reading))
   (userproperties-bounds (walker:user ast)))
+(defmethod ast-bounds ((ast walker:var-writing))
+  (userproperties-bounds (walker:user ast)))
 
 (defmethod (setf ast-bounds) (value (ast walker:form))
   (setf (userproperties-bounds (walker:user ast)) value))
@@ -885,6 +887,8 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 (defmethod (setf ast-bounds) (value (ast walker:var-binding))
   (setf (userproperties-bounds (walker:user ast)) value))
 (defmethod (setf ast-bounds) (value (ast walker:var-reading))
+  (setf (userproperties-bounds (walker:user ast)) value))
+(defmethod (setf ast-bounds) (value (ast walker:var-writing))
   (setf (userproperties-bounds (walker:user ast)) value))
 
 (defun mapc-vars-namespaces (function namespaces)
@@ -1014,19 +1018,28 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 	    (setf (userproperties-form userproperties) fun-binding-ast-copy))))))
     (setf (walker:user ast) userproperties)))
 
-;; (defmethod set-userproperties ((ast walker:var-writing) (parser-next ntiparser) parser-prev parent)
-;;   (let* ((var (walker:form-var ast))
-;; 	 (new-var (copy-var parser-next var)))
-;;     (parser-redefine-var! parser-next (walker:nso-name var) new-var)))
+(defmethod walker:make-ast :around ((ntiparser ntiparser) (type (eql 'walker:var-writing)) &rest args)
+  (declare (optimize (debug 3)))
+  ;; modify NTIPARSER in-place, because we want the changes to persist in the forms after the VAR-WRITING.
+  (let* ((var-tail (member :var args))
+	 (old-var (cadr var-tail))
+	 (new-var (copy-var ntiparser old-var)))
+    (assert (not (null var-tail)))
+    (parser-redefine-var! ntiparser (walker:nso-name old-var) new-var)
+    (setf (cadr var-tail) new-var)
+    (let* ((ast (apply #'call-next-method ntiparser type args)))
+      (setf (walker:user ast)
+	    (make-userproperties :parser-prev ntiparser :parser-next ntiparser :form old-var))
+      ast)))
 
 (defmethod set-userproperties ((ast walker:setq-form) (parser-next ntiparser) parser-prev parent)
-  ;; modify PARSER-NEXT in-place, because we want the changes to persist in the forms after the SETQ-FORM.
   (prepare-frankensteined-parser! parser-next)
-  (loop for var-rest on (walker:form-vars ast) do
-       (let* ((var (walker:form-var (car var-rest)))
-	      (new-var (copy-var parser-next var)))
-	 (parser-redefine-var! parser-next (walker:nso-name var) new-var)
-	 (setf (car var-rest) new-var)))
+  (loop for write-var in (walker:form-vars ast) do
+       (let* ((new-var (walker:form-var write-var))
+	      (old-var (userproperties-form (walker:user write-var))))
+	 ;; correct the NSO-SITES.
+	 (setf (walker:nso-sites old-var) (remove ast (walker:nso-sites old-var)))
+	 (push ast (walker:nso-sites new-var))))
   (setf (walker:user ast) (make-userproperties :parser-prev parser-next :parser-next parser-next)))
 
 (defmethod set-userproperties ((ast walker:if-form) (parser-next ntiparser) parser-prev parent)
@@ -1077,13 +1090,9 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
 
 (defmethod walker:make-ast :around ((ntiparser ntiparser) type &rest arguments)
   (declare (optimize (debug 3)))
-  (let ((ast (apply #'call-next-method ntiparser type arguments))
-	(parent (let ((tail (member :parent arguments)))
-		  (assert (or (null tail) (consp (cdr tail))))
-		  (cadr tail))))
+  (declare (ignore arguments))
+  (let ((ast (call-next-method)))
     (setf (walker:user ast) (make-userproperties :parser-prev ntiparser :parser-next ntiparser))
-    ;; (when (subtypep type (or 'walker:var-writing))
-    ;;   (set-userproperties ast ntiparser ntiparser parent))
     ast))
 
 ;;; ANNOTATE
@@ -1858,7 +1867,7 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
   ((exit-finder :initarg :exit-finder :initform (make-instance 'exit-finder) :accessor inferer-exit-finder)))
 
 (defmethod fwd-infer ((fwd-inferer fwd-inferer) (ast walker:var-reading))
-  (setf (ast-bounds ast) (ast-bounds (walker:form-var ast))))
+  (ast-bounds (walker:form-var ast)))
 
 (defmethod fwd-infer ((fwd-inferer fwd-inferer) (ast walker:object-form))
   (let* ((type (etypecase (walker:form-object ast)
@@ -1870,49 +1879,72 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
 		 (t t)))
 	 (upper (make-results type))
 	 (lower (make-results type)))
-    (setf (ast-bounds ast) (make-bounds upper lower))))
+    (make-bounds upper lower)))
 
 (defun fwd-infer-list (fwd-inferer forms)
-  (loop for form in forms do
-       (let ((form-exits (find-exits (make-instance 'exit-finder) form)))
-	 (fwd-infer fwd-inferer form)
-	 (unless (normal-exits form-exits)
-	   (return)))))
+  (let ((value (make-bounds (make-results 'null) (make-results 'null))))
+    (loop for form in forms do
+	 (let ((form-exits (find-exits (inferer-exit-finder fwd-inferer) form)))
+	   (setf value (fwd-infer fwd-inferer form))
+	   (unless (normal-exits form-exits)
+	     (return))))
+    value))
 
 (defmethod fwd-infer ((fwd-inferer fwd-inferer) (ast walker:progn-form))
   (fwd-infer-list fwd-inferer (walker:form-body ast)))
 
 (defmethod fwd-infer ((fwd-inferer fwd-inferer) (ast walker:var-bindings-form))
-  (loop for binding in (walker:form-bindings ast) do
-       (let ((var (walker:form-sym binding))
-	     (value (walker:form-value binding)))
-	 (fwd-infer fwd-inferer value)
-	 (setf (ast-bounds var) (ast-bounds value)))) ;TODO: meet (AST-BOUNDS VALUE) with the declared bounds of VAR. (This must be done also at MULTIPLE-VALUE-BIND, and everywhere a variable is set.)
-  (fwd-infer-list fwd-inferer (walker:form-body ast)))
+  (if (loop for binding in (walker:form-bindings ast) do
+	   (let* ((var (walker:form-sym binding))
+		  (value (walker:form-value binding))
+		  (value-exits (find-exits (inferer-exit-finder fwd-inferer) value)))
+	     (if (normal-exits value-exits)
+		 (setf (ast-bounds var) (fwd-infer fwd-inferer value)) ;TODO: meet (AST-BOUNDS VALUE) with the declared bounds of VAR. (This must be done also at MULTIPLE-VALUE-BIND, and everywhere a variable is set.)
+		 (progn (fwd-infer fwd-inferer value)
+			(return nil))))
+	 finally (return t))
+      (fwd-infer-list fwd-inferer (walker:form-body ast))
+      (make-bounds (make-results-0) (make-results-0))))
 
 (defmethod fwd-infer ((fwd-inferer fwd-inferer) (ast walker:setq-form))
-  (loop for var in (walker:form-vars ast) for value in (walker:form-values ast) do
-       (fwd-infer fwd-inferer value)
-       (setf (ast-bounds var) (ast-bounds value)))) ;TODO: meet (AST-BOUNDS VALUE) with the declared bounds of VAR. (This must be done also at MULTIPLE-VALUE-BIND, and everywhere a variable is set.)
+  (loop for write-var in (walker:form-vars ast) for value in (walker:form-values ast) do
+       (let ((var (walker:form-var write-var))
+	     (value-exits (find-exits (inferer-exit-finder fwd-inferer) value)))
+	 (if (normal-exits value-exits)
+	     (setf (ast-bounds var) (fwd-infer fwd-inferer value)) ;TODO: meet (AST-BOUNDS VALUE) with the declared bounds of VAR. (This must be done also at MULTIPLE-VALUE-BIND, and everywhere a variable is set.)
+	     (progn (fwd-infer fwd-inferer value)
+		    (return (make-bounds (make-results-0) (make-results-0))))))
+     finally (return (ast-bounds (walker:form-var (last1 (walker:form-vars ast)))))))
 
 (defmethod fwd-infer ((fwd-inferer fwd-inferer) (ast walker:if-form))
   (let* ((test-exits (find-exits (inferer-exit-finder fwd-inferer) (walker:form-test ast)))
-	 (then-exits (when test-exits (find-exits (inferer-exit-finder fwd-inferer) (walker:form-then ast))))
-	 (else-exits (when (and test-exits (walker:form-else ast))
-		       (find-exits (inferer-exit-finder fwd-inferer) (walker:form-else ast))))
-	 (branches (if (normal-exits test-exits)
-		       (append then-exits (if else-exits else-exits test-exits))
-		       test-exits))
-	 (parser-join (userproperties-form (walker:user ast))))
+	 (then-exits (when (normal-exits test-exits) (find-exits (inferer-exit-finder fwd-inferer) (walker:form-then ast))))
+	 (else-exits (when (and (normal-exits test-exits) (walker:form-else ast)) (find-exits (inferer-exit-finder fwd-inferer) (walker:form-else ast))))
+	 (parser-join (userproperties-form (walker:user ast)))
+	 (then-bounds (make-bounds (make-results-0) (make-results-0)))
+	 (else-bounds (make-bounds (make-results-0) (make-results-0))))
     (fwd-infer fwd-inferer (walker:form-test ast))
-    (when then-exits
+    (when (normal-exits test-exits)
       (set-namespaces-prev-next! (walker:form-then ast) (walker:form-test ast))
-      (fwd-infer fwd-inferer (walker:form-then ast)))
-    (when else-exits
-      (set-namespaces-prev-next! (walker:form-else ast) (walker:form-test ast))
-      (fwd-infer fwd-inferer (walker:form-else ast)))
-    (join-namespaces! parser-join (mapcar #'ast-parser-next branches))
-    (set-namespaces! (ast-parser-next ast) parser-join)))
+      (setf then-bounds (fwd-infer fwd-inferer (walker:form-then ast))))
+    (if (walker:form-else ast)
+	(when (and (normal-exits test-exits))
+	  (set-namespaces-prev-next! (walker:form-else ast) (walker:form-test ast))
+	  (setf else-bounds (fwd-infer fwd-inferer (walker:form-else ast))))
+	(setf else-bounds (make-bounds (make-results 'null) (make-results 'null))))
+    (let ((branches (if (normal-exits test-exits)
+			(append then-exits (if else-exits else-exits test-exits))
+			test-exits)))
+      (join-namespaces! parser-join (mapcar #'ast-parser-next branches)))
+    (set-namespaces! (ast-parser-next ast) parser-join)
+    (if (normal-exits test-exits)
+	(join-bounds then-bounds else-bounds)
+	(make-bounds (make-results-0) (make-results-0)))))
+
+(defmethod fwd-infer :around ((fwd-inferer fwd-inferer) ast)
+  (let ((bounds (call-next-method)))
+    (setf (ast-bounds ast) bounds)
+    bounds))
 
 ;;; TEST INFER THE FORWARD PASS.
 
@@ -1926,11 +1958,15 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
 ;;; TEST INFER THE FORWARD PASS.
 
 (defun test-fwd-infer ()
-  (flet ((assert-result (form desired-result)
-	   (let ((desired-result (list (car desired-result) (car desired-result))))
-	     (format t "form:~S~%actual-result:~S~%desired-result:~S~%"
-		     form (parse-and-infer form) desired-result))))
+  (flet ((assert-result (form desired-upper)
+	   (let* ((ast (walker:parse-with-namespace form :parser (make-instance 'ntiparser)))
+		  (actual-bounds (fwd-infer (make-instance 'fwd-inferer) ast))
+		  (actual-upper (loop for i below (length desired-upper) collect
+				     (resultn (bounds-upper actual-bounds) i))))
+	     (assert (equal desired-upper actual-upper) () "form:~S~%desired-upper:~S~%actual-upper:~S~%"
+		     (parse-and-infer form) desired-upper actual-upper))))
     (assert-result '0 '(fixnum))
+    (assert-result '(let ()) '(null))
     (assert-result '(let ((a 0)) a) '(fixnum))
     (assert-result '(let ((a 0)) a (setq a 1.0) a) '(single-float))
     (assert-result '(let ((a 0)) a (if 1 (setq a 1.0)) a) '(number))
@@ -1938,4 +1974,5 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
     (assert-result '(let ((a 0)) a (if (setq a 1.0) a a)) '(single-float))
     (assert-result '(let ((a 0)) a (if (setq a 1.0) (setq a 1.0)) a) '(single-float))
     (assert-result '(let ((a 0)) a (if (setq a 1.0) (setq a 1.0) a) a) '(single-float))
-    (assert-result '(let ((a 0) (b 0.0)) a b (if 1 (setq a 2.0 b a)) b) '(single-float))))
+    (assert-result '(let ((a 0) (b 0.0)) a b (if 1 (setq a 2.0 b a)) b) '(single-float))
+    (assert-result '(let ((a 0) (b 0.0)) (setq a 2.0 b a) b) '(single-float))))
