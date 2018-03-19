@@ -1682,44 +1682,64 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
 
 ;; MACROAPPLICATION-FORM, SYMBOL-MACROLET-FORM, and MACROLET-FORM don't have to be implemented, since evaluation of the program starts after all macros have been expanded.
 
-(defmethod find-exits ((exit-finder exit-finder) (ast walker:tag))
+(defmethod find-exits ((exit-finder exit-finder) (ast walker:tagpoint))
   (list ast))
+
+(defun go-form-jumps-inside-ast (form ast)
+  (and (typep form 'walker:go-form)
+       (find (walker:form-tag form) (walker:form-tags ast))))
+
+(defun go-form-jumps-outside-ast (form ast)
+  (and (typep form 'walker:go-form)
+       (not (find (walker:form-tag form) (walker:form-tags ast)))))
+
+(defun process-tagbody-form-exits (exit-finder ast form-function)
+  "Visits the alive forms of AST and calls FORM-FUNCTION on them.
+EXIT-FINDER must be an instance of class EXIT-FINDER.
+FORM-FUNCTION must be a function of two parameters FORM, the currently processed form, and FORM-EXITS, its exits.
+Returns the list of exits of AST's last form, or NIL if this form cannot ever be executed (is dead)."
+  (declare (optimize (debug 3)))
+  (let ((goforms (list (walker:form-body ast))) ;a list of list of forms inside AST that are jumped to.
+	(visited (make-hash-table))
+	(last-form (walker:form-body-last ast)))
+    (loop while (not (null goforms)) do
+	 (let* ((goforms0 (pop goforms)))
+	   (loop for form in goforms0 do
+		(when (gethash form visited) ;prevent infinite loops
+		  (return))
+		(setf (gethash form visited) t)
+		(unless (typep form 'walker:tagpoint)
+		  (let* ((form-exits (find-exits exit-finder form)))
+		    (loop for exit in form-exits do
+			 (when (go-form-jumps-inside-ast exit ast)
+			   (push (walker:nso-gopoint (walker:form-tag exit)) goforms)))
+		    (funcall form-function form form-exits)
+		    (unless (normal-exits form-exits) ;skip the rest of GOFORMS0
+		      (return)))))))
+    (loop for form in (walker:form-body ast) do
+	 (unless (gethash form visited nil)
+	   (warn-dead-form form)))
+    (and (gethash last-form visited) (find-exits exit-finder last-form))))
 
 (defmethod find-exits ((exit-finder exit-finder) (ast walker:tagbody-form))
   (declare (optimize (debug 3)))
-  (let ((ast-exits nil) ;the list of forms in AST that jump outside AST
-	(goforms (list (walker:form-body ast))) ;a list of list of forms inside AST that are jumped to.
-	(visited (make-hash-table))
-	(last-form (walker:form-body-last ast)))
-    (flet ((go-form-jumps-inside-ast (goform)
-	     (and (typep goform 'walker:go-form)
-		  (find (walker:form-tag goform) (walker:form-tags ast)))))
-      (loop while (not (null goforms)) do
-	   (let* ((goforms0 (pop goforms))
-		  (last-goform (last1 goforms0)))
-	     (loop for form in goforms0 do
-		  (when (gethash form visited nil) ;prevent infinite loops
-		    (return))
-		  (setf (gethash form visited) t)
-		  (let* ((form-exits (find-exits exit-finder form)))
-		    (pushend ast-exits
-			     (remove-if (lambda (exit)
-					  (if (go-form-jumps-inside-ast exit)
-					      (push (walker:nso-gopoint (walker:form-tag exit)) goforms)
-					      nil))
-					form-exits))
-		    (unless (normal-exits form-exits) ;skip the rest of GOFORMS0
-		      (return))
-		    (unless (eql form last-goform)
-		      (setf ast-exits (remove-if (lambda (x)
-						   (or (typep x 'walker:tag) (walker:ast-inside-ast-p x form)))
-						 ast-exits)))))))
-      (when (or (null last-form) (normal-exits ast-exits))
-	(setf ast-exits (nconc (jumping-exits ast-exits) (list ast))))
-      (loop for form in (walker:form-body ast) do
-	   (unless (gethash form visited nil)
-	     (warn-dead-form form))))
-    ast-exits))
+  (let ((ast-exits nil)) ;the list of forms in AST that jump outside AST
+    (flet ((form-function (form form-exits)
+	     (declare (ignore form))
+	     (pushend ast-exits
+		      (remove-if (lambda (exit) ;keep exits that jump outside AST
+				   (cond
+				     ((go-form-jumps-inside-ast exit ast)
+				      t)
+				     ((not (null (jumping-exits (list exit))))
+				      nil) ;this includes GO-forms jumping to a tag outside AST.
+				     (t
+				      t)))
+				 form-exits))))
+      (let ((last-form-exits (process-tagbody-form-exits exit-finder ast #'form-function)))
+	(when (or (null (walker:form-body ast)) (normal-exits last-form-exits))
+	  (pushend ast-exits (list ast)))
+	ast-exits))))
 
 (defmethod find-exits ((exit-finder exit-finder) (ast walker:go-form))
   (list ast))
@@ -1836,6 +1856,9 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
     (assert-find-exit '(tagbody (if 1 (capture a (go a)) (capture b (go a)))) '(a b))
     (assert-find-exit '(tagbody (capture a (go e)) (capture b (progn 2))) '(a) '(b))
     (assert-find-exit '(tagbody (progn (capture a (go e))) (capture b (progn 1))) '(a) '(b))
+    (assert-find-exit '(capture a (tagbody (if 1 (go a) (if 2 (go b))) (capture z (go z)) a b)) '(z a))
+    (assert-find-exit '(tagbody (if 1 (go a) (if 2 (go b))) (capture z (go z)) a b (go a)) '(z))
+    (assert-find-exit '(tagbody (if 1 (go a) (if 2 (go b))) (capture z (return-from z)) a b (go a)) '(z))
     (assert-find-exit '(capture a (block nil (return-from nil))) '(a))
     (assert-find-exit '(capture a (block nil)) '(a))
     (assert-find-exit '(block nil (capture a (return-from x))) '(a))
