@@ -1513,6 +1513,8 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
   ())
 (define-condition dead-form-warning (simple-warning nti-condition)
   ((form :initarg :form :accessor condition-form :type walker:form))
+  (:report (lambda (condition stream)
+	     (format stream "Form ~A cannot ever be reached." (condition-form condition))))
   (:documentation "Warning that FORM will not be evaluated."))
 (defmacro warn-dead-form (form)
   `(restart-case (warn (make-condition 'dead-form-warning :form ,form))
