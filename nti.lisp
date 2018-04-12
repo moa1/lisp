@@ -73,49 +73,49 @@ What about GOs out of functions? (TAGBODY (FLET ((F1 () (GO L))) (F1)) L) We kno
   "Concatenate all LISTS and LIST-LAST, using #'NCONC, and set LIST-LAST to the resulting list."
   `(setf ,list-last (apply #'nconc ,@lists (list ,list-last))))
 
-(defun vars-difference (list1 list2 &key (test #'eql))
+(defun vars-difference (list1 list2 &key (test #'eql) (key1 #'identity) (key2 #'identity))
   "Return the list of elements in LIST1 that are not also in LIST2. The comparison of the elements is done using TEST.
 Note that this is the same function performed as #'SET-DIFFERENCE, but it computes the set difference in linear time."
   (let ((ht2 (make-hash-table :test test :size (length list2))))
     (loop for element in list2 do
-	 (setf (gethash element ht2) nil))
+	 (setf (gethash (funcall key2 element) ht2) nil))
     (let* ((result (cons nil nil))
 	   (tail result))
       (loop for element in list1 do
-	   (when (gethash element ht2 t)
+	   (when (gethash (funcall key1 element) ht2 t)
 	     (setf (cdr tail) (cons element nil)
 		   tail (cdr tail))))
       (cdr result))))
 
-(defun nvars-difference (list1 list2 &key (test #'eql))
+(defun nvars-difference (list1 list2 &key (test #'eql) (key1 #'identity) (key2 #'identity))
   "Return the list of elements in LIST1 that are not also in LIST2, while destructively modifying LIST1. The comparison of the elements is done using TEST.
 Note that this is the same function performed as #'NSET-DIFFERENCE, but it computes the set difference in linear time of (+ (LENGTH LIST1) (LENGTH LIST2))."
   (let ((ht2 (make-hash-table :test test :size (length list2))))
     (loop for element in list2 do
-	 (setf (gethash element ht2) nil))
+	 (setf (gethash (funcall key2 element) ht2) nil))
     (do ((list1cdr list1 (cdr list1cdr))) ((null list1cdr) list1)
-      (unless (gethash (car list1cdr) ht2 t)
+      (unless (gethash (funcall key1 (car list1cdr)) ht2 t)
 	(setf (car list1cdr) (cadr list1cdr)
 	      (cdr list1cdr) (cddr list1cdr))))))
 
-(defun vars-union (list1 list2 &key (test #'eql) (modify nil))
+(defun vars-union (list1 list2 &key (test #'eql) (modify nil) (key1 #'identity) (key2 #'identity))
   "Assuming that LIST1 and LIST2 are lists that only contain unique values, compute the list consisting of the union of both sets. This function preserves the order of LIST2. If MODIFY is NIL, LIST1 is not modified, otherwise (the default), LIST1 is modified."
   (let ((ht1 (make-hash-table :test test :size (length list1))))
     (loop for element in list1 do
-	 (setf (gethash element ht1) nil))
+	 (setf (gethash (funcall key1 element) ht1) nil))
     (funcall (if modify #'nconc #'append)
 	     list1
 	     (let* ((result (cons nil nil))
 		    (tail result))
 	       (loop for element in list2 do
-		    (when (gethash element ht1 t)
+		    (when (gethash (funcall key2 element) ht1 t)
 		      (setf (cdr tail) (cons element nil)
 			    tail (cdr tail))))
 	       (cdr result)))))
 
-(defun nvars-union (list1 list2 &key (test #'eql))
+(defun nvars-union (list1 list2 &key (test #'eql) (key1 #'identity) (key2 #'identity))
   "Assuming that LIST1 and LIST2 are lists that only contain unique values, compute the list consisting of the union of both sets. This function preserves the order of LIST2. LIST1 is not modified."
-  (vars-union list1 list2 :test test :modify t))
+  (vars-union list1 list2 :test test :modify t :key1 key1 :key2 key2))
 
 ;;; BUILT-IN FUNCTIONS
 
@@ -2056,7 +2056,7 @@ ACCESSES-FINDER is an instance of class ACCESSES-FINDER and stores information s
 ;; Forms (in the same order as exported from packages WALKER and WALKER-PLUS)
 
 (defmethod find-accesses ((finder accesses-finder) (ast walker:var-reading))
-  (values (list (walker:form-var ast)) nil))
+  (values (list ast) nil))
 
 (defmethod find-accesses ((finder accesses-finder) (ast walker:object-form))
   (values nil nil))
@@ -2065,7 +2065,7 @@ ACCESSES-FINDER is an instance of class ACCESSES-FINDER and stores information s
   (no-exits (find-accesses-forms-list finder nil nil (walker:form-body ast))))
 
 (defmethod find-accesses ((finder accesses-finder) (ast walker:function-form))
-  (values (list (walker:form-object ast)) nil))
+  (values (list ast) nil))
 
 ;; PROGN-FORM is handled by BODY-FORM.
 
@@ -2078,7 +2078,8 @@ ACCESSES-FINDER is an instance of class ACCESSES-FINDER and stores information s
 	((normal-exits exits)
 	 (find-accesses-forms-list! finder read written (walker:form-body ast))
 	 (let ((init-vars (mapcar #'walker:form-sym (walker:form-bindings ast))))
-	   (values (vars-difference read init-vars) (vars-difference written init-vars))))
+	   (values (vars-difference read init-vars :key1 #'walker:form-var)
+		   (vars-difference written init-vars :key1 #'walker:form-var))))
 	(t
 	 (values read written))))))
 
@@ -2099,8 +2100,8 @@ ACCESSES-FINDER is an instance of class ACCESSES-FINDER and stores information s
 	      (written nil))
 	 (flet ((return-values (read written)
 		  (let* ((arg-vars (mapcar #'car arg-alist))
-			 (read0 (vars-difference read arg-vars))
-			 (written0 (vars-difference written arg-vars)))
+			 (read0 (vars-difference read arg-vars :key1 #'walker:form-var))
+			 (written0 (vars-difference written arg-vars :key1 #'walker:form-var)))
 		    (return-from find-accesses-functiondef (values read0 written0)))))
 	   (loop for acons in arg-alist for acons-rest on arg-alist do
 		(let* ((form (cdr acons))
@@ -2156,13 +2157,10 @@ ACCESSES-FINDER is an instance of class ACCESSES-FINDER and stores information s
 	     ((normal-exits exits)
 	      (multiple-value-bind (value-read value-written) (find-accesses finder value)
 		(find-accesses-update! read0 written0 value-read value-written))
-	      (setf written0 (vars-union written0 (list (walker:form-var var-writing)))))
+	      (setf written0 (vars-union written0 (list var-writing))))
 	     (t
 	      (return-from find-accesses (values read0 written0))))))
     (values read0 written0)))
-
-(defmethod find-accesses ((finder accesses-finder) (ast walker:var-writing))
-  (values nil (list (walker:form-var ast))))
 
 (defmethod find-accesses ((finder accesses-finder) (ast walker:catch-form))
   (find-accesses finder (walker:form-values ast)))
@@ -2230,8 +2228,10 @@ ACCESSES-FINDER is an instance of class ACCESSES-FINDER and stores information s
 	     (find-accesses-forms-list finder nil nil (walker:form-body ast))
 	   (declare (ignore exits1))
 	   (let ((locals (mapcar #'walker:form-var (walker:form-vars ast))))
-	     (values (vars-union read0 (vars-difference read1 locals))
-		     (vars-union written0 (vars-difference written1 locals))))))))))
+	     (values (vars-union read0
+				 (vars-difference read1 locals :key1 #'walker:form-var))
+		     (vars-union written0
+				 (vars-difference written1 locals :key1 #'walker:form-var))))))))))
 
 (defmethod find-accesses ((finder accesses-finder) (ast walker-plus:values-form))
   (no-exits (find-accesses-forms-list finder nil nil (walker:form-values ast))))
@@ -2264,7 +2264,7 @@ ACCESSES-FINDER is an instance of class ACCESSES-FINDER and stores information s
 
 (defun test-find-accesses ()
   (flet ((assert-find-accesses (form desired-read desired-written)
-	   (labels ((lookup (name parser)
+	   (labels ((lookup-desired (name parser)
 		      (flet ((sym-lookup (type name parser)
 			       (let ((free-namespace (walker:parser-free-namespace parser)))
 				 (if (walker:namespace-boundp type name free-namespace)
@@ -2272,15 +2272,22 @@ ACCESSES-FINDER is an instance of class ACCESSES-FINDER and stores information s
 				     (error "Free variable ~S does not occur in ~S" name form)))))
 			(if (symbolp name)
 			    (sym-lookup 'walker:var name parser)
-			    (sym-lookup 'walker:fun (cadr name) parser)))))
+			    (sym-lookup 'walker:fun (cadr name) parser))))
+		    (lookup-actual (sym)
+		      (etypecase sym
+			(walker:var-reading (walker:form-var sym))
+			(walker:var-writing (walker:form-var sym))
+			(walker:function-form (walker:form-object sym)))))
 	     (let* ((parser (make-instance 'walker-plus:parser-plus))
 		    (ast (walker:parse-with-namespace form :parser parser))
-		    (desired-read-1 (loop for name in desired-read collect (lookup name parser)))
-		    (desired-written-1 (loop for name in desired-written collect (lookup name parser)))
+		    (desired-read-1 (loop for name in desired-read collect
+					 (lookup-desired name parser)))
+		    (desired-written-1 (loop for name in desired-written collect
+					    (lookup-desired name parser)))
 		    (finder (make-instance 'accesses-finder :exit-finder (make-instance 'exit-finder :warn-dead nil))))
 	       (multiple-value-bind (actual-read actual-written) (find-accesses finder ast)
-		 (assert (equal actual-read desired-read-1) () "(FIND-ACCESSES ~S)~%returned read ~S,~%but expected ~S~%" form actual-read desired-read-1)
-		 (assert (equal actual-written desired-written-1) () "(FIND-ACCESSES ~S)~%returned written ~S,~%but expected ~S~%" form actual-written desired-written-1))))))
+		 (assert (equal (mapcar #'lookup-actual actual-read) desired-read-1) () "(FIND-ACCESSES ~S)~%returned read ~S,~%but expected ~S~%" form actual-read desired-read-1)
+		 (assert (equal (mapcar #'lookup-actual actual-written) desired-written-1) () "(FIND-ACCESSES ~S)~%returned written ~S,~%but expected ~S~%" form actual-written desired-written-1))))))
     (assert-find-accesses '1 '() '())
     (assert-find-accesses 'a '(a) '())
     (assert-find-accesses '#'+ '(#'+) '())
