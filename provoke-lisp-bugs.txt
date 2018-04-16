@@ -37,3 +37,9 @@
        (x+28 (+ x 28)))
   (values (format nil "~16,100/floating:floating/ x" x)
 	  (format nil "~16,100/floating:floating/ x+28" x+28)))
+
+;; on SBCL 1.4.4.debian,
+(progv '(x y) (list 1 2) (list x y))
+;; works, but
+(progv (list x y) (list 1 2) (list x y))
+;; doesn't. Is this a bug, or expected behavior?
