@@ -14,7 +14,7 @@ TODO: Implement Flow Control Analysis. What about the following program:
      (NULL A))
   A)
 The IF-form has two exits: tag L and the second (NULL A) form. After the first #'DEDUCE-FORWARD, in the first (NULL A), A has type FIXNUM. After the second #'DEDUCE-FORWARD, in the first (NULL A), A has type NUMBER. In the second (NULL A), A is INTEGER after every iteration, because the only entrypoint to the second (NULL A) is the second branch (SETQ A 1) of the IF-form.
-I could implement the non-standard exit of the first branch by setting FROM-UPPER and FORM-LOWER of the PROGN-form to (MAKE-RESULTS* :NVALUES 0). The IF-form could detect this and use only the namespace during the second branch in its merging of branch namespaces. Consider the following program that extends the first example, and shows how to evaluate the body of a form:
+I could implement the non-standard exit of the first branch by setting FORM-UPPER and FORM-LOWER of the PROGN-form to (MAKE-RESULTS* :NVALUES 0). The IF-form could detect this and use only the namespace during the second branch in its merging of branch namespaces. Consider the following program that extends the first example, and shows how to evaluate the body of a form:
 (PROGN
   (BLOCK B
     (LET ((A 1))
@@ -1989,10 +1989,10 @@ Returns the list of exits of AST's last form, or NIL if this form cannot ever be
   ((exit-finder :initarg :exit-finder :initform (make-instance 'exit-finder) :accessor finder-exit-finder :documentation "The exit-finder used to compute dead and alive forms.")
    (callstack :initarg :callstack :initform nil :accessor finder-callstack :documentation "A call stack used to abort recursive APPLICATION-FORMs.")))
 
-(defgeneric find-accesses (accesses-finder ast)
+(defgeneric find-accesses (finder ast)
   (:documentation "Return two values: the list of read variables defined outside AST that determine the evaluation (computation) of AST, and the list of written variables defined outside AST that are changed as a result of evaluating AST.
 Note that a variable can be in both lists, for example as in (+ A (SETQ A 2)). The variable A is defined outside the AST, its state before the AST influences the result of the AST (it is read), and it is changed (written) in the process. In the following example, however, A is only in the list of written variables: (+ (SETQ A 2) A). Although A is read from, its state before the AST does not influence the computation of the AST, because its value is first overwritten. (For the implementor of #'FIND-ACCESSES, this means that if a variable A is already in the written-to list, and a subform of the current AST returns that A is read from, A is not included in the ASTs read-from list.) (This also applies when two variables are swapped, because a variable's values must first be read, as in (SETQ T A A B B T). #'FIND-ACCESSES here returns A and B as both read and written to, and T only written to.)
-ACCESSES-FINDER is an instance of class ACCESSES-FINDER and stores information shared between the forms."))
+FINDER is an instance of class ACCESSES-FINDER and stores information shared between the forms."))
 
 (defmacro find-accesses-update! (read0 written0 read1 written1)
   (declare (type symbol read0 written0))
@@ -2317,8 +2317,79 @@ ACCESSES-FINDER is an instance of class ACCESSES-FINDER and stores information s
 
 (test-find-accesses)
 
+;; What I need is that a SETQ-FORM assigns the variables written in the SETQ to new variables which have a different set of type specifiers than the written-to variables.
+
+(defclass deparser-find-last-var-writing (walker:deparser-map-ast walker:deparser)
+  ())
+
+(defmethod deparse ((deparser deparser-find-last-var-writing) (ast walker:flet-form))
+  (list* 'flet
+	 nil ;omit bindings, they will be deparsed in the APPLICATION-FORM.
+	 (walker:deparse-body deparser ast t nil)))
+(defmethod deparse ((deparser deparser-find-last-var-writing) (ast walker:labels-form))
+  (list* 'labels
+	 nil ;omit bindings, they will be deparsed in the APPLICATION-FORM.
+	 (walker:deparse-body deparser ast t nil)))
+(defmethod deparse ((deparser deparser-find-last-var-writing) (ast walker:lambda-form))
+  nil ;TODO FIXME: must be evaluated when the FUNCALL or APPLY-call evaluates the LAMBDA-FORM.
+  )
+
+(defun find-last-var-writing (var-reading)
+  "VAR-READING must be a WALKER:VAR-READING instance. SYM is the WALKER:VAR instance that is read in VAR-READING-FORM.
+Return the last VAR-WRITING instance before VAR-READING where SYM is modified."
+  (declare (type walker:var-reading var-reading))
+  (let* ((sym (walker:form-var var-reading))
+	 (def-form (walker:nso-definition sym))
+	 (last-setq def-form)
+	 (call-stack nil))
+    (assert (typep sym 'walker:sym))
+    (labels ((visit (ast)
+	       (cond
+		 ((and (typep ast 'walker:var-writing)
+		       (eql sym (walker:form-var ast)))
+		  (setf last-setq ast))
+		 ((eql ast var-reading)
+		  (return-from find-last-var-writing last-setq))
+		 ;;((typep ast 'walker:fun-bindings-form)
+		 ;;is handled by the DEPARSER-FIND-LAST-VAR-WRITING.
+		 ;;)
+		 ((typep ast 'walker:application-form)
+		  (unless (find ast call-stack)
+		    (push ast call-stack)
+		    (let* ((parser (make-instance 'walker:parser))
+			   (fun-binding (walker:nso-definition (walker:form-fun ast)))
+			   (llist (walker:form-llist fun-binding))
+			   (args (walker:form-arguments ast))
+			   (alist (walker-plus:arguments-assign-to-lambda-list parser llist args)))
+		      (loop for acons in alist do
+			 ;; TODO: when implementing variable bindings: bind result to (CAR ACONS).
+			   (visit (cdr acons)))
+		      (loop for form in (walker:form-body fun-binding) do
+			   (walker:map-ast #'visit form :deparser-class 'deparser-find-last-var-writing)))
+		    (pop call-stack))))))
+      (walker:map-ast #'visit (walker:form-parent def-form) :deparser-class 'deparser-find-last-var-writing)))
+  (error "this cannot happen since VAR-READING must be within (WALKER:FORM-PARENT DEF-FORM)."))
+
+(defun test-find-last-var-writing ()
+  (let* ((form '(let ((a 1)) (setq a 2) a))
+	 (ast (walker:parse-with-namespace form)))
+    (assert (eql (find-last-var-writing (walker:form-body-2 ast)) (first (walker:form-vars (walker:form-body-1 ast))))))
+  (let* ((form '(let ((a 1)) a))
+	 (ast (walker:parse-with-namespace form)))
+    (assert (eql (find-last-var-writing (walker:form-body-1 ast)) (walker:form-binding-1 ast))))
+  (let* ((form '(let ((a 1)) (labels ((f (&optional (a (setq a nil))) (if 1 (f) a))) (f 2)) a))
+	 (ast (walker:parse-with-namespace form))
+	 (llist (walker:form-llist (walker:form-binding-1 (walker:form-body-1 ast)))))
+    (assert (eql (find-last-var-writing (walker:form-body-2 ast)) (first (walker:form-vars (walker:argument-init (first (walker:llist-optional llist))))))))
+  (let* ((form '(let ((a 1)) (labels ((f (&optional (a (setq a nil))) (if 1 (f) a)) (g (a) (f a))) (g 2)) a))
+	 (ast (walker:parse-with-namespace form))
+	 (llist (walker:form-llist (walker:form-binding-1 (walker:form-body-1 ast)))))
+    (assert (eql (find-last-var-writing (walker:form-body-2 ast)) (first (walker:form-vars (walker:argument-init (first (walker:llist-optional llist)))))))))
+(test-find-last-var-writing)
+
 ;;TODO: I have to know which forms of the TAGBODY are the last form before a TAG and are alive, so that I can merge their namespaces in.
 
+#|
 ;;; INFER THE FORWARD PASS.
 
 (defclass fwd-inferer ()
@@ -2489,6 +2560,10 @@ ACCESSES-FINDER is an instance of class ACCESSES-FINDER and stores information s
   (let ((bounds (call-next-method)))
     (setf (ast-bounds ast) bounds)
     bounds))
+
+|#
+
+
 
 ;;; TEST INFER THE FORWARD PASS.
 
