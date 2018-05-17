@@ -1,3 +1,7 @@
+;; TODO: make computation instructions have an energy cost of 0. To avoid piling up trash instructions, implement the utilization/pruning-waves described below. (The pruning phase should get rid of superfluous computation instructions.)
+
+;; quicklisp packages interesting for persistence: clache, clsql, hu.dwim.perec, hyperluminal, manardb, marshal, rucksack, submarine. On zweihorn and on average, 13 new organisms are created per second. An approximation of the size of structure ORGAP is (+ (* 29 2) 4 4 4 4 4 4 4 4 4 4 (* 29 2) 4 2 2 2 4 4 (* 4 2) (* 4 2) 4) bytes == 194 bytes =~ 256 bytes. That means that one hour of logging all born organisms takes up (* 256 13 60 60) bytes == 11980800 bytes =~ 12 MB.
+
 ;; TODO (high priority): implent world persistence between different programming sessions. This should be implemented by separating the simulation part (of ga.lisp and gatest-orgap-lisp.lisp) into a simulation program that stores the world to a sqlite database from time to time, including the state of the random number generator. The sqlite database should also be committed to git. A different lisp program implements the graphical display (of ga.lisp) by reading the current state from the sqlite database and rendering it to the screen. Whenever the sqlite database format changes, the display program must be adapted.
 
 ;; IDEA (low priority): below idea of COS/SIN-waves for utilizing/pruning instructions could be used for communication between organisms. This could make communication without cost, i.e. with an energy-cost per communication-instruction of 0, not fill the genome with useless instructions. Die Grundlage der Idee ist, dass es in Bayern vor nicht allzu langer Zeit Raiffeisen(?)-Höfe gab, an denen u.a. Baumaterial, Saatgut und Abfälle in einem Kreislauf ausgetauscht wurden. Dabei war der Lager-Puffer der einzelnen Materialien groß (da die Höfe im Prinzip Lagerhäuser waren). Danach wurde der Kreislauf aufgegeben, und der Puffer wurde immer kleiner, da es immer weniger Lagerhöfe gab. Inzwischen gibt es (z.B. durch die Abfallwirtschaft München (AWM)) wieder größere Puffer durch mehr Lagerhöfe. Um zurück zu ga.lisp zu kommen, könnten verschiedene Kommunikationsinstruktionen implementiert werden, die sich voneinander unterscheiden. Z.B. könnte Instruktion A peer-to-peer-Kommuniktion (á la Internet-Protocol) implementieren und eine andere, redundante, Instruktion B könnte asynchrone Kommunikation (á la Email) implementieren. Die Utilization/Pruning-Phasenverschiebung zwischen Instruktionen A und B könnte sich um 90 Grad unterscheiden.
@@ -857,8 +861,12 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 		     :report-function
 		     (lambda (stream)
 		       (format stream "Quit #'WITHOUT-GRAPHICS after finishing the current loop."))))
-      (let ((ticks (if total-ticks total-ticks 1000000)))
-	(loop until (or total-ticks quit-without-graphics) do
+      (let ((initial-tick *world-tick*)
+	    (ticks (if total-ticks total-ticks 1000000)))
+	(loop until (if total-ticks
+			(>= *world-tick* (+ initial-tick total-ticks))
+			quit-without-graphics)
+	   do
 	     (idleloop (+ *world-tick* ticks))
 	     (print-orgcont (argmax-hash-table *orgs* #'compute-fitness)))))))
 
