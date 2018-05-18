@@ -32,6 +32,7 @@
 (ql:quickload :cl-heap)
 (ql:quickload :mru-cache)
 (ql:quickload :clsql)
+(ql:quickload :xorshift)
 
 (declaim (optimize (debug 3)))
 
@@ -50,30 +51,6 @@
 		       (prin1 ,i)
 		       (princ " ")))))
        (format t "~%"))))
-
-(defun random-gaussian-2 ()
-  "Return two with mean 0 and standard deviation 1 normally distributed random v
-ariables."
-  (declare (optimize (speed 3) (compilation-speed 0) (debug 3) (safety 3) (space 0)))
-  (flet ((xinit ()
-           (the single-float (- (* 2.0 (random 1.0)) 1))))
-    (do* ((x1 (xinit) (xinit))
-          (x2 (xinit) (xinit))
-          (w (+ (* x1 x1) (* x2 x2)) (+ (* x1 x1) (* x2 x2))))
-         ((< w 1.0)
-          (let* ((wlog (the single-float (log (the (single-float 0.0 *) w))))
-                 (v (the single-float (sqrt (the (single-float 0.0 *) (/ (* -2.0 wlog) w))))))
-	    (declare (type single-float wlog))
-            (values (* x1 v) (* x2 v)))))))
-
-(let ((temp nil))
-  (defun random-gaussian ()
-    (if temp
-	(prog1 temp
-	  (setf temp nil))
-	(multiple-value-bind (a b) (random-gaussian-2)
-	  (setf temp b)
-	  a))))
 
 (defun argmax-hash-table (hash-table function &key (exclude nil))
   (let ((best-score nil)
@@ -208,11 +185,9 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 
 (defun reset-random-state ()
   "Set the random state to the default random state."
-  (setf *random-state* (make-random-state *default-random-state*)))
-
-(defun sample (seq)
-  (let ((l (length seq)))
-    (elt seq (random l))))
+  (setf *random-state* (make-random-state *default-random-state*))
+  ;; init random number generator to defined state
+  (setf xorshift:*xorshift1024*-random-state* (xorshift:make-xorshift1024*-random-state)))
 
 (defun arefd (array default &rest subscripts)
   (loop
@@ -524,15 +499,51 @@ VELOCITY is the speed, i.e. position change per tick."
 					 (gethash id orgs))))))
     orgs-list))
 
+(defun xorshift-create-database-table ()
+  (clsql:create-table (clsql:sql-expression :table 'xorshift1024star)
+		      `((,(clsql:sql-expression :attribute 'tick) integer :not-null)
+			(,(clsql:sql-expression :attribute 'i) integer :not-null)
+			(,(clsql:sql-expression :attribute 'value) integer :not-null))
+		      :constraints '("PRIMARY KEY (tick,i)")))
+
+(defun store-xorshift-random-number-generator (tick)
+  "Store the xorshift default random number generator state."
+  (let ((s (xorshift:xorshift1024*-random-state-s xorshift:*xorshift1024*-random-state*))
+	(p (xorshift:xorshift1024*-random-state-q xorshift:*xorshift1024*-random-state*))
+	(i -1))
+    (flet ((store-64bit (v)
+	     (clsql:insert-records :into (clsql:sql-expression :table 'xorshift1024star)
+				   :attributes '(tick i value)
+				   :values (list tick (incf i) (mod v (expt 2 32))))
+	     (clsql:insert-records :into (clsql:sql-expression :table 'xorshift1024star)
+				   :attributes '(tick i value)
+				   :values (list tick (incf i) (ash v -32)))))
+      (loop for i below 16 do
+	   (store-64bit (aref s i)))
+      (clsql:insert-records :into (clsql:sql-expression :table 'xorshift1024star)
+			    :attributes '(tick i value)
+			    :values (list tick (incf i) p)))))
+
+(defun restore-xorshift-random-number-generator (tick)
+  "Restore the xorshift random number generator state stored at tick TICK."
+  (let ((s (loop repeat 16 collect 0))
+	(i -1))
+    (flet ((restore-64bit ()
+	     (let ((a (car (clsql:select (clsql:sql-expression :attribute 'value) :from (clsql:sql-expression :table 'xorshift1024star) :where (clsql:sql-operation 'and (clsql:sql-operation '== (clsql:sql-expression :attribute 'tick) tick) (clsql:sql-operation '== (clsql:sql-expression :attribute 'i) (incf i))) :flatp t)))
+		   (b (car (clsql:select (clsql:sql-expression :attribute 'value) :from (clsql:sql-expression :table 'xorshift1024star) :where (clsql:sql-operation 'and (clsql:sql-operation '== (clsql:sql-expression :attribute 'tick) tick) (clsql:sql-operation '== (clsql:sql-expression :attribute 'i) (incf i))) :flatp t))))
+	       (+ a (ash b 32)))))
+      (loop for i below 16 do
+	   (setf (elt s i) (restore-64bit)))
+      (let ((p (car (clsql:select (clsql:sql-expression :attribute 'value) :from (clsql:sql-expression :table 'xorshift1024star) :where (clsql:sql-operation 'and (clsql:sql-operation '== (clsql:sql-expression :attribute 'tick) tick) (clsql:sql-operation '== (clsql:sql-expression :attribute 'i) (incf i))) :flatp t))))
+	(setf xorshift:*xorshift1024*-random-state* (xorshift:make-xorshift1024*-random-state s p))))))
+
 (defun restore-last-world (world-max-energy &key (database-name *default-database-name*))
   (when clsql:*default-database* ;useful for developing
     (clsql:disconnect))
   (clsql:connect (list database-name) :database-type :sqlite3 :encoding :UTF-8)
   (let ((tick (car (clsql:select (clsql:sql-operation 'max (clsql:sql-expression :attribute 'tick)) :from (clsql:sql-expression :table 'sun) :flatp t))))
     (format t "Restoring world from tick ~A~%" tick)
-    ;; TODO FIXME: save and restore random number generator state!
-    ;;(when reset-random-state
-    ;;  (reset-random-state))
+    (restore-xorshift-random-number-generator tick)
     (let ((orgs (restore-orgs tick)))
       (setf *id* (reduce #'max orgs :key #'orgcont-id :initial-value (orgcont-id (car orgs))))
       (setf *world-tick* tick)
@@ -641,6 +652,7 @@ VELOCITY is the speed, i.e. position change per tick."
     ;;  (delete-file database-name))
     (unless (probe-file database-name)
       (clsql:connect (list database-name) :database-type :sqlite3 :encoding :UTF-8)
+      (xorshift-create-database-table)
       (org-create-database-table)
       (sun-create-database-table)
       (world-create-database-table)
@@ -823,12 +835,12 @@ VELOCITY is the speed, i.e. position change per tick."
 (defun nature-event (nature-object position-function edge drop-wait drop-amount energy-index)
   (declare (optimize (debug 3)))
   (when (typep nature-object 'cloud)
-    (setf energy-index (1+ (random *num-instructions*))))
+    (setf energy-index (1+ (xorshift:random *num-instructions*))))
   (let ((world-w (array-dimension *world* 0))
 	(world-h (array-dimension *world* 1)))
     (multiple-value-bind (x y) (funcall position-function nature-object (nature-nexttick nature-object))
-      (let* ((rx (mod (+ (floor x) (floor (* edge (random-gaussian)))) world-w))
-	     (ry (mod (+ (floor y) (floor (* edge (random-gaussian)))) world-h))
+      (let* ((rx (mod (+ (floor x) (floor (* edge (xorshift:random-gaussian)))) world-w))
+	     (ry (mod (+ (floor y) (floor (* edge (xorshift:random-gaussian)))) world-h))
 	     (e (aref *world* rx ry energy-index)))
 	(when (>= e 0)
 	  (let* ((new-e (+ e drop-amount))
@@ -857,6 +869,7 @@ VELOCITY is the speed, i.e. position change per tick."
     (clsql:connect (list database-name) :database-type :sqlite3 :encoding :UTF-8)
     (clsql:with-transaction ()
       (format t "Storing the world to database ~A at tick ~A.~%" database-name nexttick)
+      (store-xorshift-random-number-generator nexttick)
       (let ((orgs (loop for val being the hash-value of *orgs* collect val)))
 	(store-orgs nexttick orgs))
       (loop for sun in *world-sun* do
@@ -1037,7 +1050,7 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 		       		   (set-pixel x y color))))
 		       (loop for sun in *world-sun* do
 			    (multiple-value-bind (x y) (funcall (nature-position-function sun) sun *world-tick*)
-			      (let ((c (+ 128 (random 128))))
+			      (let ((c (+ 128 (random 128 display-random-state))))
 				(set-pixel (mod (round x) w) (mod (round y) h) (color-to-argb8888 255 c c 0))
 				(set-pixel (mod (round (1+ x)) w) (mod (round y) h) (color-to-argb8888 255 c c 0))
 				(set-pixel (mod (round x) w) (mod (round (1+ y)) h) (color-to-argb8888 255 c c 0))
@@ -1064,8 +1077,7 @@ See SDL-wiki/MigrationGuide.html#If_your_game_just_wants_to_get_fully-rendered_f
 		   (sdl2:update-texture tex (plus-c:c-ref sur SDL2-FFI:SDL-SURFACE :pixels) :width (* 4 tex-w))
 		   ;;TODO: call SDL_RenderClear(sdlRenderer);
 		   (sdl2:render-copy wrend tex)
-		   (let ((*random-state* display-random-state))
-		     (sdl2-ffi.functions::sdl-set-render-draw-color wrend 255 (random 256) (random 256) 255))
+		   (sdl2-ffi.functions::sdl-set-render-draw-color wrend 255 (random 256 display-random-state) (random 256 display-random-state) 255)
 		   (cond
 		     ((and (not (null *cursor*)) (> (get-energy (orgap-energy *cursor*) 0) 0))
 		      (print-orgcont *cursor*)
