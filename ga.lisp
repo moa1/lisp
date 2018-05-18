@@ -1,3 +1,5 @@
+;; TODO FIXME: save and restore random number generator state!
+
 ;; TODO: make computation instructions have an energy cost of 0. To avoid piling up trash instructions, implement the utilization/pruning-waves described below. (The pruning phase should get rid of superfluous computation instructions.)
 
 ;; quicklisp packages interesting for persistence: clache, clsql, hu.dwim.perec, hyperluminal, manardb, marshal, rucksack, submarine. On zweihorn and on average, 13 new organisms are created per second. An approximation of the size of structure ORGAP is (+ (* 29 2) 4 4 4 4 4 4 4 4 4 4 (* 29 2) 4 2 2 2 4 4 (* 4 2) (* 4 2) 4) bytes == 194 bytes =~ 256 bytes. That means that one hour of logging all born organisms takes up (* 256 13 60 60) bytes == 11980800 bytes =~ 12 MB.
@@ -29,6 +31,7 @@
 (ql:quickload :sdl2)
 (ql:quickload :cl-heap)
 (ql:quickload :mru-cache)
+(ql:quickload :clsql)
 
 (declaim (optimize (debug 3)))
 
@@ -230,10 +233,17 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 (defvar *orgap-min-wait* 200 "The minimum number of ticks between an organism's events")
 (defvar *sun-drop-wait* 200 "The number of ticks between sun events")
 (defvar *clouds-drop-wait* 200 "The number of ticks between cloud events")
+(defvar *default-database-name* "ga-world.sqlite3" "The name of the database where the world is kept persistent")
+;;(defvar *database-store-world-wait* 100000000 "The number of ticks between storing the world to the database")
+(defvar *database-store-world-wait* 1000000 "The number of ticks between storing the world to the database")
 ;; display variables
 (defvar *display-world* t)
 (defvar *print-statistics* nil)
 (defparameter *cursor* nil)
+
+(defclass database-store ()
+  ((nexttick :initform 0 :initarg :nexttick :type integer :accessor database-store-nexttick :documentation "The next tick at which the world will be stored in the database.")
+   (database-name :initform *default-database-name* :initarg :database-name :accessor database-store-database-name :documentation "The name of the database where the world will be stored.")))
 
 (defun world-set-barriers! (world num-barriers-horizontal barrier-width-horizontal num-barriers-vertical barrier-width-vertical)
   (let ((w (array-dimension world 0))
@@ -259,9 +269,53 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 	      ))
     world))
 
+(defun world-create-database-table ()
+  "Create the table where the world is stored."
+  (clsql:create-table (clsql:sql-expression :table 'world)
+		      `((,(clsql:sql-expression :attribute 'tick) integer :not-null)
+			(,(clsql:sql-expression :attribute 'x) integer :not-null)
+			(,(clsql:sql-expression :attribute 'y) integer :not-null)
+			(,(clsql:sql-expression :attribute 'energy) integer :not-null))
+		      :constraints '("PRIMARY KEY (tick,x,y)")))
+
+(defun store-world (tick world)
+  "Store the world WORLD."
+  (format t "World width ~A: " (array-dimension world 0))
+  (loop for x below (array-dimension world 0) do
+       (when (= 0 (mod x 10))
+	 (format t "~A " x))
+       (loop for y below (array-dimension world 1) do
+	    (let ((energy (aref world x y 0)))
+	      (clsql:insert-records :into (clsql:sql-expression :table 'world)
+				    :attributes '(tick x y energy)
+				    :values (list tick x y energy)))))
+  (format t "~%"))
+
+(defun restore-world (tick)
+  "Restore the world stored for tick TICK and return it."
+  (let* ((w (1+ (car (clsql:select (clsql:sql-operation 'max (clsql:sql-expression :attribute 'x))
+				   :from (clsql:sql-expression :table 'world)
+				   :where (clsql:sql-operation '== (clsql:sql-expression :attribute 'tick) tick) :flatp t))))
+	 (h (1+ (car (clsql:select (clsql:sql-operation 'max (clsql:sql-expression :attribute 'y))
+				   :from (clsql:sql-expression :table 'world)
+				   :where (clsql:sql-operation '== (clsql:sql-expression :attribute 'tick) tick) :flatp t))))
+	 (world (make-array (list w h 1) :element-type 'fixnum)))
+    (format t "World width ~A: " w)
+    (let ((db-world (clsql:select (clsql:sql-expression :attribute 'x) (clsql:sql-expression :attribute 'y) (clsql:sql-expression :attribute 'energy)
+				  :from (clsql:sql-expression :table 'world)
+				  :where (clsql:sql-operation '== (clsql:sql-expression :attribute 'tick) tick))))
+      (loop for tuple in db-world do
+	   (destructuring-bind (x y energy) tuple
+	     (when (and (= y 0) (= 0 (mod x 10)))
+	       (format t "~A " x))
+	     (setf (aref world x y 0) energy))))
+    (format t "~%")
+    world))
+
 (defclass nature-object ()
-  ((position-function :initarg :position-function :accessor nature-position-function)
-   (edge :initarg :edge :accessor natur-edge)
+  ((id :initarg :id :accessor nature-id)
+   (position-function :initarg :position-function :accessor nature-position-function)
+   (edge :initarg :edge :accessor nature-edge)
    (drop-wait :initarg :drop-wait :accessor nature-drop-wait)
    (drop-amount :initarg :drop-amount :accessor nature-drop-amount)
    (nexttick :initform 0 :initarg :nexttick :accessor nature-nexttick)
@@ -271,7 +325,7 @@ SET-PIXEL-SYMBOL must be a symbol (say, SET-PIXEL) and will be set to a function
 (defclass sun (nature-object)
   ((energy-index :initform 0 :initarg :energy-index :accessor nature-energy-index)))
 
-(defun make-sun (world-w world-h energy-per-coordinate-per-tick fraction-covered position-function)
+(defun make-sun (id world-w world-h energy-per-coordinate-per-tick fraction-covered position-function)
   "ENERGY-PER-COORDINATE-PER-TICK is the average energy dropped per world coordinate per tick.
 FRACTION-COVERED is the fraction of the whole world covered with sunlight.
 VELOCITY is the speed, i.e. position change per tick."
@@ -280,6 +334,7 @@ VELOCITY is the speed, i.e. position change per tick."
 	 (drop-wait *SUN-DROP-WAIT*)
 	 (drop-amount (round (* energy-per-tick drop-wait))))
     (let* ((sun (make-instance 'sun
+			       :id id
 			       :position-function position-function
 			       :edge edge
 			       :drop-wait drop-wait
@@ -288,6 +343,39 @@ VELOCITY is the speed, i.e. position change per tick."
       (prind position-function drop-wait drop-amount edge)
       sun)))
 
+(defun sun-create-database-table ()
+  "Create the table where the world is stored."
+  (clsql:create-table (clsql:sql-expression :table 'sun)
+		      `((,(clsql:sql-expression :attribute 'tick) integer :not-null)
+			(,(clsql:sql-expression :attribute 'id) integer :not-null)
+			;;(,(clsql:sql-expression :attribute 'position-function) string :not-null) ;TODO FIXME
+			(,(clsql:sql-expression :attribute 'edge) integer)
+			(,(clsql:sql-expression :attribute 'drop-wait) integer)
+			(,(clsql:sql-expression :attribute 'drop-amount) integer)
+			(,(clsql:sql-expression :attribute 'nexttick) integer)
+			(,(clsql:sql-expression :attribute 'energy-drop-sum) integer)
+			(,(clsql:sql-expression :attribute 'energy-lost-sum) integer))
+		      :constraints '("PRIMARY KEY (tick,id)")))
+
+(defun store-sun (tick sun)
+  "Store the sun SUN."
+  (with-slots (id position-function edge drop-wait drop-amount nexttick energy-drop-sum energy-lost-sum energy-index) sun
+    (clsql:insert-records :into (clsql:sql-expression :table 'sun)
+			  :attributes '(tick id edge drop-wait drop-amount nexttick energy-drop-sum energy-lost-sum)
+			  :values (list tick id edge drop-wait drop-amount nexttick energy-drop-sum energy-lost-sum))))
+
+(defun restore-sun (tick id)
+  "Restore the sun with id ID stored for tick TICK and return it."
+  (let ((sun (make-instance 'sun :id id)))
+    (loop for slot in '(#|position-function|# edge drop-wait drop-amount nexttick energy-drop-sum energy-lost-sum) do
+	 (let ((value (car (clsql:select (clsql:sql-expression :attribute slot)
+					 :from (clsql:sql-expression :table 'sun)
+					 :where (clsql:sql-operation 'and (clsql:sql-operation '== (clsql:sql-expression :attribute 'tick) tick) (clsql:sql-operation '== (clsql:sql-expression :attribute 'id) id))
+					 :flatp t))))
+	   (setf (slot-value sun slot) value)))
+    (setf (nature-position-function sun) #'sun-position-circle) ;TODO FIXME: load from database
+    sun))
+
 (defclass cloud (nature-object)
   ((pos-x :initarg :pos-x :accessor cloud-pos-x)
    (pos-y :initarg :pos-y :accessor cloud-pos-y)
@@ -295,13 +383,14 @@ VELOCITY is the speed, i.e. position change per tick."
    (vel-y :initarg :vel-y :accessor cloud-vel-y)
    (energy-index :initarg :energy-index :accessor nature-energy-index)))
 
-(defun make-cloud (world-w world-h energy-index edge cloud-speed-per-tick position-function rain-per-coordinate-per-tick)
+(defun make-cloud (id world-w world-h energy-index edge cloud-speed-per-tick position-function rain-per-coordinate-per-tick)
   (let* ((angle (random (* 2 pi)))
 	 (energy-per-tick (* world-w world-h rain-per-coordinate-per-tick))
 	 (drop-wait *CLOUDS-DROP-WAIT*)
 	 (drop-amount (round (* energy-per-tick drop-wait))))
     (prind position-function drop-wait drop-amount edge energy-index)
     (make-instance 'cloud
+		   :id id
 		   :position-function position-function
 		   :edge edge
 		   :drop-wait drop-wait
@@ -338,48 +427,136 @@ VELOCITY is the speed, i.e. position change per tick."
 	    `(setf ,energy ,store)
 	    `,energy)))
 
+(defun list-to-string (l)
+  (write-to-string l))
+(defun string-to-list (s)
+  (read-from-string s))
+(defun vector-to-string (v)
+  (write-to-string v))
+(defun string-to-vector (s)
+  (read-from-string s))
 
-(defclass org ()
+(clsql:def-view-class org ()
   (;; organism program start: contains the actually interpreted slots.
-   (genes :initarg :genes :type list :accessor orgap-genes :documentation "genes of the organism")
-   (code :initarg :code :type vector :accessor orgap-code :documentation "compiled code")
-   (markers :initarg :markers :type alist :accessor orgap-markers :documentation "ALIST of IPs by marker number")
-   (functions :initarg :functions :type alist :accessor orgap-functions :documentation "ALIST of IPs by function number")
+   ;; TODO: replace #'READ-FROM-STRING and #'WRITE-TO-STRING with serialization package functions.
+   (genes :initarg :genes :type list :accessor orgap-genes :documentation "genes of the organism" :db-kind :base :db-type "VARCHAR(65536)" :db-reader string-to-list :db-writer list-to-string)
+   (code :initarg :code :type vector :accessor orgap-code :documentation "compiled code" :db-kind :virtual)
+   (markers :initarg :markers :type alist :accessor orgap-markers :documentation "ALIST of IPs by marker number" :db-kind :virtual)
+   (functions :initarg :functions :type alist :accessor orgap-functions :documentation "ALIST of IPs by function number" :db-kind :virtual)
    (ip :initform 0 :initarg :ip :type integer :accessor orgap-ip)
    (wait :initform 0 :initarg :wait :type integer :accessor orgap-wait)
-   (angle :initarg :angle :type single-float :accessor orgap-angle)
-   (target :initform nil :initarg :target :type (or null org) :accessor orgap-target)
-   (targeter :initform nil :initarg :targeter :type (or null org) :accessor orgap-targeter)
-   (x :initarg :x :type single-float :accessor orgap-x)
-   (y :initarg :y :type single-float :accessor orgap-y)
+   (angle :initarg :angle :type float :accessor orgap-angle)
+   (target :initform nil :initarg :target :type (or null org) :accessor orgap-target :db-kind :virtual)
+   (db-target :type integer :accessor org-db-target :db-kind :base)
+   (targeter :initform nil :initarg :targeter :type (or null org) :accessor orgap-targeter :db-kind :virtual)
+   (db-targeter :type integer :accessor org-db-targeter :db-kind :base)
+   (x :initarg :x :type float :accessor orgap-x)
+   (y :initarg :y :type float :accessor orgap-y)
    (total-energy :initarg :total-energy :type integer :accessor orgap-total-energy)
    (energy :initarg :energy :type integer :accessor orgap-energy)
    (skin :initform 1 :initarg :skin :type integer :accessor orgap-skin)
-   (off-genes :initform nil :initarg :off-genes :type list :accessor orgap-off-genes)
+   (off-genes :initform nil :initarg :off-genes :type list :accessor orgap-off-genes :db-kind :base :db-type "VARCHAR(65536)" :db-reader string-to-list :db-writer list-to-string)
    (off-length :initform 0 :initarg :off-length :type integer :accessor orgap-off-length)
-   (as :initform nil :initarg :as :type symbol :accessor orgap-as)
-   (bs :initform nil :initarg :bs :type symbol :accessor orgap-bs)
-   (cs :initform nil :initarg :cs :type symbol :accessor orgap-cs)
-   (an :initform 0 :initarg :an :type integer :accessor orgap-an)
-   (bn :initform 0 :initarg :bn :type integer :accessor orgap-bn)
-   (memory :initform (make-array 2 :initial-element 0) :initarg :memory :type vector :accessor orgap-memory)
-   (stack :initform (make-array 2 :initial-element 0) :initarg :stack :type vector :accessor orgap-stack)
+   (as :initform nil :initarg :as :type symbol :accessor orgap-as :column ras)
+   (bs :initform nil :initarg :bs :type symbol :accessor orgap-bs :column rbs)
+   (cs :initform nil :initarg :cs :type symbol :accessor orgap-cs :column rcs)
+   (an :initform 0 :initarg :an :type integer :accessor orgap-an :column ran)
+   (bn :initform 0 :initarg :bn :type integer :accessor orgap-bn :column rbn)
+   (memory :initform (make-array 2 :initial-element 0) :initarg :memory :type vector :accessor orgap-memory :db-kind :base :db-type "VARCHAR(255)" :db-reader string-to-vector :db-writer vector-to-string)
+   (stack :initform (make-array 2 :initial-element 0) :initarg :stack :type vector :accessor orgap-stack :db-kind :base :db-type "VARCHAR(255)" :db-reader string-to-vector :db-writer vector-to-string)
    (sp :initform 0 :initarg :sp :type integer :accessor orgap-sp)
-   (genesx :initarg :genesx :type list :accessor orgap-genesx :documentation "rest of the genes to be read")
+   (genesx :initarg :genesx :type list :accessor orgap-genesx :documentation "rest of the genes to be read" :db-kind :base :db-type "VARCHAR(65536)" :db-reader string-to-list :db-writer list-to-string)
    ;; organism container start: contains management and statistics slots.
-   (id :initform (incf *id*) :initarg :id :accessor orgcont-id)
-   (lasttick :initform 0 :initarg :lasttick :accessor orgcont-lasttick)
-   (nexttick :initform 0 :initarg :nexttick :accessor orgcont-nexttick)
+   (id :initform (incf *id*) :initarg :id :type integer :accessor orgcont-id :db-kind :key)
+   (db-tick :type integer :accessor org-db-tick :db-kind :key)
+   (lasttick :initform 0 :initarg :lasttick :type integer :accessor orgcont-lasttick)
+   (nexttick :initform 0 :initarg :nexttick :type integer :accessor orgcont-nexttick)
    ;;statistics
-   (age :initform 0 :initarg :age :accessor orgcont-age)
-   (totage :initform 0 :initarg :totage :accessor orgcont-totage)
-   (offspring-list :initform nil :initarg :offspring-list :accessor orgcont-offspring-list)
-   (offspring-count :initform 0 :initarg :offspring-count :accessor orgcont-offspring-count)
-   (offspring-energy-sum :initform 0 :initarg :offspring-energy-sum :accessor orgcont-offspring-energy-sum)
-   (walk-sum :initform 0.0 :initarg :walk-sum :accessor orgcont-walk-sum)
-   (walk-count :initform 0 :initarg :walk-count :accessor orgcont-walk-count)
-   (energy-in-sum :initform (make-energy 0) :initarg :energy-in-sum :accessor orgcont-energy-in-sum :documentation "The total energy taken in, excluding initial energy of organisms spawned in the world.")
-   (energy-out-sum :initform (make-energy 0) :initarg :energy-out-sum :accessor orgcont-energy-out-sum :documentation "The total energy spent voluntarily or involuntarily.")))
+   (age :initform 0 :initarg :age :type integer :accessor orgcont-age)
+   (totage :initform 0 :initarg :totage :type integer :accessor orgcont-totage)
+   (offspring-list :initform nil :initarg :offspring-list :type list :accessor orgcont-offspring-list :db-kind :virtual)
+   (db-offspring-list :type string :accessor org-db-offspring-list :db-kind :base)
+   (offspring-count :initform 0 :initarg :offspring-count :type integer :accessor orgcont-offspring-count)
+   (offspring-energy-sum :initform 0 :initarg :offspring-energy-sum :type integer :accessor orgcont-offspring-energy-sum)
+   (walk-sum :initform 0.0 :initarg :walk-sum :type float :accessor orgcont-walk-sum)
+   (walk-count :initform 0 :initarg :walk-count :type integer :accessor orgcont-walk-count)
+   (energy-in-sum :initform (make-energy 0) :initarg :energy-in-sum :type integer :accessor orgcont-energy-in-sum :documentation "The total energy taken in, excluding initial energy of organisms spawned in the world.")
+   (energy-out-sum :initform (make-energy 0) :initarg :energy-out-sum :type integer :accessor orgcont-energy-out-sum :documentation "The total energy spent voluntarily or involuntarily.")))
+
+(defun org-create-database-table ()
+  "Create the table where the organisms are stored."
+  (clsql:create-view-from-class 'org))
+
+(defun store-orgs (tick orgs)
+  "Store the organisms ORGS."
+  (format t "Number of organisms is ~S: " (length orgs))
+  (loop for org in orgs for i from 0 do
+       (when (= (mod i 10) 0)
+	 (format t "~A " i))
+       (let ((org (copy-org org))) ;we have to copy the instance, otherwise CLSQL doesn't save to database
+	 (with-slots (target db-target targeter db-targeter db-tick offspring-list db-offspring-list) org
+	   (setf db-target (if (null target) nil (orgcont-id target))
+		 db-targeter (if (null targeter) nil (orgcont-id targeter))
+		 db-tick tick
+		 db-offspring-list (list-to-string (mapcar #'orgcont-id (remove-if (lambda (org) (<= (orgap-energy org) 0)) offspring-list))))) ;only store alive offspring. Note that this does not affect fitness calculations, as all of them are defined only on alive offspring (see #'COMPUTE-FITNESS).
+	 (clsql:update-records-from-instance org)))
+  (format t "Done.~%"))
+
+(defun restore-orgs (tick)
+  "Restore the organisms stored as alive at tick TICK and return them as a list."
+  (let* ((orgs-list (clsql:select 'org :where (clsql:sql-operation '== (clsql:sql-expression :attribute 'db-tick) tick) :flatp t :refresh t :caching nil))
+	 (orgs (make-hash-table)))
+    (loop for org in orgs-list do
+	 (multiple-value-bind (genes code markers functions genesx) (make-orgap (orgap-genes org))
+	   (declare (ignore genesx)) ;GENESX has to be the loaded database value
+	   (setf (orgap-genes org) genes
+		 (orgap-code org) code
+		 (orgap-markers org) markers
+		 (orgap-functions org) functions))
+	 (setf (gethash (orgcont-id org) orgs) org))
+    (loop for org in orgs-list do
+	 (with-slots (target db-target targeter db-targeter offspring-list db-offspring-list) org
+	   (setf target (gethash db-target orgs)
+		 targeter (gethash db-targeter orgs)
+		 offspring-list (if (null db-offspring-list)
+				    nil
+				    (loop for id in (string-to-list db-offspring-list) collect
+					 (gethash id orgs))))))
+    orgs-list))
+
+(defun restore-last-world (world-max-energy &key (database-name *default-database-name*))
+  (when clsql:*default-database* ;useful for developing
+    (clsql:disconnect))
+  (clsql:connect (list database-name) :database-type :sqlite3 :encoding :UTF-8)
+  (let ((tick (car (clsql:select (clsql:sql-operation 'max (clsql:sql-expression :attribute 'tick)) :from (clsql:sql-expression :table 'sun) :flatp t))))
+    (format t "Restoring world from tick ~A~%" tick)
+    ;; TODO FIXME: save and restore random number generator state!
+    ;;(when reset-random-state
+    ;;  (reset-random-state))
+    (let ((orgs (restore-orgs tick)))
+      (setf *id* (reduce #'max orgs :key #'orgcont-id :initial-value (orgcont-id (car orgs))))
+      (setf *world-tick* tick)
+      (setf *world-max-energy* world-max-energy)
+      (setf *world* (restore-world tick))
+      (let ((sun-ids (clsql:select (clsql:sql-expression :attribute 'id)
+				   :from (clsql:sql-expression :table 'sun)
+				   :where (clsql:sql-operation '== (clsql:sql-expression :attribute 'tick) tick))))
+	(setf *world-sun* (loop for id in sun-ids collect
+			       (restore-sun tick id))))
+      (setf *world-clouds* nil) ;TODO: When I add clouds, store/restore them as well
+      (let ((store (make-instance 'database-store :database-name database-name :nexttick (+ tick *database-store-world-wait*))))
+	(setf *orgs* (make-hash-table))
+	(orgs-add-orgs orgs)
+	(setf *event-heap*
+	      (let ((heap (make-instance 'cl-heap:fibonacci-heap :key #'eventsource-nexttick :sort-fun #'<)))
+		(cl-heap:add-all-to-heap heap orgs)
+		(cl-heap:add-all-to-heap heap *world-sun*)
+		(cl-heap:add-all-to-heap heap *world-clouds*)
+		(cl-heap:add-to-heap heap store)
+		heap)))
+      (setf *cursor* nil)))
+  (clsql:disconnect)
+  nil)
 
 ;; load edit-distance functions
 (load "edit-distance.lisp")
@@ -390,9 +567,9 @@ VELOCITY is the speed, i.e. position change per tick."
 ;;(defvar *num-energies* (+ 1 *num-instructions*) "The total number of different energies at each world coordinate")
 (defvar *num-energies* 1 "The total number of different energies at each world coordinate")
 
-(defun copy-orgcont (org)
+(defun copy-org (org)
   (with-slots (genes code markers functions ip wait angle target targeter x y total-energy energy skin off-genes off-length as bs cs an bn memory stack sp genesx id lasttick nexttick age totage offspring-list offspring-count offspring-energy-sum walk-sum walk-count energy-in-sum energy-out-sum) org
-    (make-instance 'org :genes genes :code code :markers markers :functions functions :ip ip :wait wait :angle angle :target target :targeter targeter :x x :y y :total-energy total-energy :energy energy :skin skin :off-genes off-genes :off-length off-length :as as :bs bs :cs cs :an an :bn bn :memory memory :stack stack :sp sp :genesx genesx :id id :lasttick lasttick :nexttick nexttick :age age :totage totage :offspring-list offspring-list :offspring-count offspring-count :offspring-energy-sum offspring-energy-sum :walk-sum walk-sum :walk-count walk-count :energy-in-sum (alexandria:copy-array energy-in-sum) :energy-out-sum (alexandria:copy-array energy-out-sum))))
+    (make-instance 'org :genes genes :code code :markers markers :functions functions :ip ip :wait wait :angle angle :target target :targeter targeter :x x :y y :total-energy total-energy :energy energy :skin skin :off-genes off-genes :off-length off-length :as as :bs bs :cs cs :an an :bn bn :memory memory :stack stack :sp sp :genesx genesx :id id :lasttick lasttick :nexttick nexttick :age age :totage totage :offspring-list offspring-list :offspring-count offspring-count :offspring-energy-sum offspring-energy-sum :walk-sum walk-sum :walk-count walk-count :energy-in-sum #|(alexandria:copy-array energy-in-sum)|#energy-in-sum :energy-out-sum #|(alexandria:copy-array energy-out-sum)|#energy-out-sum)))
 
 (defun orgs-add-org (org)
   (setf (gethash (orgcont-id org) *orgs*) org))
@@ -417,22 +594,28 @@ VELOCITY is the speed, i.e. position change per tick."
 				       (GENES '(EAT MRK0= SET-BN-1 ADD-TO-BN-AN ADD-TO-AN-BN MUL-TO-AN-BN WALK-AN WALK-AN WALK-AN  SIGN-BN WALK-AN WALK-AN WALK-AN WALK-AN SET-AN--1 MUL-TO-BN-AN MUL-TO-AN-BN EAT READ-AS READ-NEXT WRITE-AS CMP-AS-AS-BS JNE1= IN-BN-AS-ENERGY-LEFT SPLIT-CELL-BN IN-AN-AS-ENERGY-X+-CSP TURN-CW-BN JMP0= MRK1=))
 				       )
   (loop for i below num collect
-       (let ((x (random (array-dimension *world* 0)))
-	     (y (random (array-dimension *world* 1))))
-	 (loop until (>= (aref *world* x y 0) 0) do
-	      (setf x (random (array-dimension *world* 0))
-		    y (random (array-dimension *world* 1))))
-	 (let* ((org (make-orgap genes x y (random (ceiling (* 2 pi 128))) energy)))
-	   (setf (orgcont-nexttick org) *orgap-min-wait*)
-	   (when (= 0 (orgap-code-length org))
-	     (error "Organism ~A has code length 0" org))
-	   org))))
+       (let* ((maxx (float (array-dimension *world* 0)))
+	      (maxy (float (array-dimension *world* 1)))
+	      (x (random maxx))
+	      (y (random maxy)))
+	 (loop until (>= (aref *world* (floor x) (floor y) 0) 0) do
+	      (setf x (random maxx)
+		    y (random maxy)))
+	 (multiple-value-bind (genes code markers functions genesx) (make-orgap genes)
+	   (let ((org (make-instance 'org :genes genes :code code :markers markers :functions functions :x x :y y :angle (random (* 2 pi 128)) :total-energy 0 :energy energy :genesx genesx)))
+	     (setf (orgcont-nexttick org) *orgap-min-wait*)
+	     (when (= 0 (orgap-code-length org))
+	       (error "Organism ~A has code length 0" org))
+	     org)))))
 
 (defmethod eventsource-nexttick ((eventsource org))
   (orgcont-nexttick eventsource))
 
 (defmethod eventsource-nexttick ((eventsource nature-object))
   (nature-nexttick eventsource))
+
+(defmethod eventsource-nexttick ((eventsource database-store))
+  (database-store-nexttick eventsource))
 
 (defun sun-position-line (tick)
   (values (* tick .00001 .707)
@@ -448,7 +631,23 @@ VELOCITY is the speed, i.e. position change per tick."
     (values (+ pos-x (* tick vel-x))
 	    (+ pos-y (* tick vel-y)))))
 
-(defun set-default-world (&key (w 400) (h 200) (world-energy 0) (world-instructions 16) (orgs 250) (org-energy 4000) (reset-random-state t) (world-max-energy 4000) (energy-per-coordinate-per-tick .00001) (fraction-covered .01) (position-function #'sun-position-circle) (num-barriers-horizontal 5) (barrier-width-horizontal 40) (num-barriers-vertical 5) (barrier-width-vertical 30) (clouds-edge 1) (clouds-speed-per-tick 1) (clouds-position-function #'cloud-position-line) (clouds-rain-per-coordinate-per-tick .00001))
+(defun create-database-store (database-name nexttick)
+  (let* ((store (make-instance 'database-store :database-name database-name :nexttick nexttick))
+	 (database-name (database-store-database-name store)))
+    (when clsql:*default-database* ;useful for developing
+      (clsql:disconnect))
+    ;; this was useful for developing, but now we really want to keep the database file save.
+    ;;(when (probe-file database-name)
+    ;;  (delete-file database-name))
+    (unless (probe-file database-name)
+      (clsql:connect (list database-name) :database-type :sqlite3 :encoding :UTF-8)
+      (org-create-database-table)
+      (sun-create-database-table)
+      (world-create-database-table)
+      (clsql:disconnect))
+    store))
+
+(defun set-default-world (&key (w 400) (h 200) (world-energy 0) (world-instructions 16) (orgs 250) (org-energy 4000) (reset-random-state t) (world-max-energy 4000) (energy-per-coordinate-per-tick .00001) (fraction-covered .01) (position-function #'sun-position-circle) (num-barriers-horizontal 5) (barrier-width-horizontal 40) (num-barriers-vertical 5) (barrier-width-vertical 30) (clouds-edge 1) (clouds-speed-per-tick 1) (clouds-position-function #'cloud-position-line) (clouds-rain-per-coordinate-per-tick .00001) (database-name *default-database-name*))
   (when reset-random-state
     (reset-random-state))
   (setf *id* 0)
@@ -456,11 +655,12 @@ VELOCITY is the speed, i.e. position change per tick."
   (setf *world-max-energy* world-max-energy)
   (setf *world* (make-world w h world-energy *num-instructions* world-instructions))
   (world-set-barriers! *world* num-barriers-horizontal barrier-width-horizontal num-barriers-vertical barrier-width-vertical)
-  (setf *world-sun* (list (make-sun (array-dimension *world* 0) (array-dimension *world* 1) energy-per-coordinate-per-tick fraction-covered position-function)))
-  ;;(setf *world-clouds* (loop for instruction-index below *num-instructions* collect (make-cloud (array-dimension *world* 0) (array-dimension *world* 1) (+ 1 instruction-index) clouds-edge clouds-speed-per-tick clouds-position-function clouds-rain-per-coordinate-per-tick)))
-  ;;(setf *world-clouds* (list (make-cloud (array-dimension *world* 0) (array-dimension *world* 1) -1 clouds-edge clouds-speed-per-tick clouds-position-function clouds-rain-per-coordinate-per-tick)))
+  (setf *world-sun* (list (make-sun 0 (array-dimension *world* 0) (array-dimension *world* 1) energy-per-coordinate-per-tick fraction-covered position-function)))
+  ;;(setf *world-clouds* (loop for instruction-index below *num-instructions* collect (make-cloud (1+ instruction-index) (array-dimension *world* 0) (array-dimension *world* 1) (+ 1 instruction-index) clouds-edge clouds-speed-per-tick clouds-position-function clouds-rain-per-coordinate-per-tick)))
+  ;;(setf *world-clouds* (list (make-cloud 1 (array-dimension *world* 0) (array-dimension *world* 1) -1 clouds-edge clouds-speed-per-tick clouds-position-function clouds-rain-per-coordinate-per-tick)))
   (setf *world-clouds* nil)
-  (let ((orgs (make-default-orgs orgs org-energy)))
+  (let ((store (create-database-store database-name *world-tick*))
+	(orgs (make-default-orgs orgs org-energy)))
     (setf *orgs* (make-hash-table))
     (orgs-add-orgs orgs)
     (setf *event-heap*
@@ -468,11 +668,15 @@ VELOCITY is the speed, i.e. position change per tick."
 	    (cl-heap:add-all-to-heap heap orgs)
 	    (cl-heap:add-all-to-heap heap *world-sun*)
 	    (cl-heap:add-all-to-heap heap *world-clouds*)
+	    (cl-heap:add-to-heap heap store)
 	    heap)))
   (setf *cursor* nil)
   nil)
+
 (when (null *orgs*)
-  (set-default-world))
+  (if (probe-file *default-database-name*)
+      (restore-last-world *world-max-energy*)
+      (set-default-world)))
 
 (defun print-orgap (org)
   (with-slots (ip genes off-genes as bs cs an bn stack) org
@@ -482,10 +686,13 @@ VELOCITY is the speed, i.e. position change per tick."
 	    stack)
     (format t "~A length:~S hash:~S~%" genes (length genes) (mru-cache:lsxhash genes))))
 
-(defun compute-fitness (org &optional (fitness-function #'orgcont-energy-out-sum))
-  (if (> (get-energy (orgap-energy org) 0) 0)
-      (+ (funcall fitness-function org) (apply #'+ (mapcar (lambda (org) (compute-fitness org fitness-function)) (orgcont-offspring-list org))))
-      0))
+(defun compute-fitness (org &optional fitness-function)
+  (with-slots (offspring-list) org
+    ;; permanently remove dead offspring from offspring list.
+    (setf offspring-list (delete-if (lambda (org) (<= (orgap-energy org) 0)) offspring-list))
+    (if (> (get-energy (orgap-energy org) 0) 0)
+	(+ (funcall fitness-function org) (apply #'+ (mapcar (lambda (org) (compute-fitness org fitness-function)) offspring-list)))
+	0)))
 
 (defun print-orgcont (org)
   (with-slots (wait energy x y angle id age totage offspring-count offspring-energy-sum walk-sum walk-count) org
@@ -499,7 +706,7 @@ VELOCITY is the speed, i.e. position change per tick."
 	    (when (> offspring-count 0) (float (/ totage offspring-count)))
 	    (compute-fitness org (constantly 1))
 	    (compute-fitness org #'orgcont-offspring-count)
-	    (compute-fitness org))
+	    (compute-fitness org #'orgcont-energy-out-sum))
     (format t "org x:~3,2F y:~3,2F angle:~7,2E speed avg:~1,3F off-energy avg:~4A~%"
 	    x
 	    y
@@ -643,17 +850,37 @@ VELOCITY is the speed, i.e. position change per tick."
     (incf (nature-nexttick cloud) (nature-event cloud position-function edge drop-wait drop-amount energy-index)))
   nil)
 
+(defmethod idleloop-event ((store database-store))
+  (with-slots (database-name nexttick) store
+    (when clsql:*default-database* ;useful for developing
+      (clsql:disconnect))
+    (clsql:connect (list database-name) :database-type :sqlite3 :encoding :UTF-8)
+    (clsql:with-transaction ()
+      (format t "Storing the world to database ~A at tick ~A.~%" database-name nexttick)
+      (let ((orgs (loop for val being the hash-value of *orgs* collect val)))
+	(store-orgs nexttick orgs))
+      (loop for sun in *world-sun* do
+	   (store-sun nexttick sun))
+      (store-world nexttick *world*)
+      (format t "Done storing the world.~%"))
+    (clsql:disconnect)
+    (incf (database-store-nexttick store) *database-store-world-wait*)
+    (cl-heap:add-to-heap *event-heap* store))
+  nil)
+
 (let ((lastloop nil))
   (defun idleloop (lasttick)
     (declare (optimize (debug 3)))
     (let ((loop-start-real-time (get-internal-real-time))
 	  (total-ins-count 0))
       ;; sun, clouds and organisms conceptually are event sources that have an #'EVENTSOURCE-NEXTTICK.
-      (loop until (let* ((org (cl-heap:peep-at-heap *event-heap*))) (or (null org) (> (eventsource-nexttick org) lasttick))) do
+      (loop until (let* ((eventsource (cl-heap:peep-at-heap *event-heap*)))
+		    (or (null eventsource) (> (eventsource-nexttick eventsource) lasttick)))
+	 do
 	 ;;(prind *world-tick* *orgs* *event-heap*)
-	   (let* ((org (cl-heap:pop-heap *event-heap*)))
-	     (let ((ins-count (idleloop-event org)))
-	       (when (typep org 'org)
+	   (let* ((eventsource (cl-heap:pop-heap *event-heap*)))
+	     (let ((ins-count (idleloop-event eventsource)))
+	       (when (typep eventsource 'org)
 		 (incf total-ins-count ins-count)))))
       (print-world-stats (- lasttick *world-tick*) (if lastloop lastloop loop-start-real-time) total-ins-count))
     (setf lastloop (get-internal-real-time))
