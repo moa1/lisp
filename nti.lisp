@@ -1552,7 +1552,7 @@ ROUNDS=0 only parses and annotates the FORM, but doesn't do any type inference r
 
 (defclass exit-finder ()
   ((callstack :initarg :callstack :initform nil :accessor finder-callstack :documentation "A call stack used to abort recursive APPLICATION-FORMs.")
-   (warn-dead :initarg :warn-dead :initform t :accessor finder-warn-dead :documentation "Whether to show dead form warnings or not.")))
+   (warn-dead :initarg :warn-dead :initform nil :accessor finder-warn-dead :documentation "Whether to show dead form warnings or not (which is the default).")))
 
 (defgeneric find-exits (exit-finder ast)
   (:documentation "Return the abstract syntax tree within the given AST, which is the form that determinesthe returned result of AST.
@@ -1760,7 +1760,7 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
 (defun visit-tagbody-form-exits (exit-finder ast form-function)
   "Visits the alive forms of AST and calls FORM-FUNCTION on them.
 EXIT-FINDER must be an instance of class EXIT-FINDER.
-FORM-FUNCTION must be a function of two parameters FORM, the currently processed form, and FORM-EXITS, its exits.
+FORM-FUNCTION must be a function of two parameters FORM, the currently processed form, and FORM-EXITS, its exits. Its return value is not used.
 Returns the list of exits of AST's last form, or NIL if this form cannot ever be executed (is dead)."
   (declare (optimize (debug 3)))
   (let ((goforms (list (walker:form-body ast))) ;a list of list of forms inside AST that are jumped to.
@@ -1879,7 +1879,7 @@ Returns the list of exits of AST's last form, or NIL if this form cannot ever be
 
 (defun test-find-exits-form (form)
   (let* ((ast (walker:parse-with-namespace form :parser (make-instance 'walker-plus:parser-plus))))
-    (find-exits (make-instance 'exit-finder) ast)))
+    (find-exits (make-instance 'exit-finder :warn-dead t) ast)))
 
 (defun test-find-exits ()
   (flet ((assert-find-exit (form desired-exits &optional desired-dead-forms)
@@ -1896,7 +1896,7 @@ Returns the list of exits of AST's last form, or NIL if this form cannot ever be
 						(lambda (warning)
 						  (push (condition-form warning) dead-forms)
 						  (muffle-warning warning))))
-				  (find-exits (make-instance 'exit-finder) ast))
+				  (find-exits (make-instance 'exit-finder :warn-dead t) ast))
 				(nreverse dead-forms)))))
 	       (let ((desired-exits-1 (get-captured desired-exits))
 		     (desired-dead-forms-1 (get-captured desired-dead-forms)))
@@ -2239,7 +2239,7 @@ FINDER is an instance of class ACCESSES-FINDER and stores information shared bet
   (flet ((assert-find-accesses (form desired-read desired-written)
 	   (let* ((parser (make-instance 'walker-plus:parser-plus))
 		  (ast (walker:parse-with-namespace form :parser parser))
-		  (finder (make-instance 'accesses-finder :exit-finder (make-instance 'exit-finder :warn-dead nil))))
+		  (finder (make-instance 'accesses-finder)))
 	     (labels ((lookup-desired (name)
 			(flet ((sym-lookup (type name parser)
 				 (let ((free-namespace (walker:parser-free-namespace parser)))
@@ -2393,6 +2393,13 @@ This function handles multiple branches, e.g. as in '(LET ((A 1)) (IF 1 (SETQ A 
 
 ;; TODO FIXME: make #'LAST-SETQS aware of dead forms as detected by #'FIND-EXITS.
 
+(defclass last-setqs-finder ()
+  ((callstack :initform nil :initarg :callstack :accessor finder-callstack :documentation "The call stack used to handle recursive functions in #'LAST-SETQS.")
+   (tags :initform nil :initarg :tags :accessor finder-tags :documentation "An alist with CAR holding a TAG and CDR the list of VAR-WRITINGs or VAR-BINDINGs that may have been evaluated when the given TAG is reached.")
+   (orderer :initform (make-instance 'last-setqs-orderer) :initarg :parser :reader finder-orderer)
+   (parser :initform (make-instance 'walker-plus:parser-plus) :initarg :parser :reader finder-parser)
+   (exit-finder :initform (make-instance 'exit-finder) :initarg :exit-finder :reader finder-exit-finder)))
+
 (defclass last-setqs-orderer (walker:orderer)
   ()
   (:documentation "The orderer omitting some accessors of forms to determine the last SETQ"))
@@ -2407,105 +2414,139 @@ This function handles multiple branches, e.g. as in '(LET ((A 1)) (IF 1 (SETQ A 
 	 (return-from conc-setqs setqs)))
   nil)
 
-(defmethod last-setqs ((ast walker:setq-form) var last-setqs)
+(defmethod last-setqs ((finder last-setqs-finder) (ast walker:setq-form) var last-setqs)
   (dolist (var-writing (walker:form-vars ast))
     (setf last-setqs
-	  (let ((value-setqs (last-setqs (walker:form-value var-writing) var last-setqs)))
+	  (let ((value-setqs (last-setqs finder (walker:form-value var-writing) var last-setqs)))
 	    (if (eql (walker:form-var var-writing) (walker:form-var var))
 	      (list var-writing)
 	      value-setqs))))
   last-setqs)
 
-(defmethod last-setqs ((ast walker:if-form) var last-setqs)
-  (let* ((test-setqs (last-setqs (walker:form-test ast) var last-setqs))
-	 (then-setqs (last-setqs (walker:form-then ast) var test-setqs))
+(defmethod last-setqs ((finder last-setqs-finder) (ast walker:if-form) var last-setqs)
+  (let* ((test-setqs (last-setqs finder (walker:form-test ast) var last-setqs))
+	 (then-setqs (last-setqs finder (walker:form-then ast) var test-setqs))
 	 (else-setqs (if (walker:form-else ast)
-			 (last-setqs (walker:form-else ast) var test-setqs)
+			 (last-setqs finder (walker:form-else ast) var test-setqs)
 			 test-setqs)))
     (vars-union then-setqs else-setqs))) ;TODO: rename #'VARS-UNION since it doesn't have anything to do with "VARS" here.
 
-(defmethod last-setqs ((ast walker:var-bindings-form) var last-setqs)
+(defmethod last-setqs ((finder last-setqs-finder) (ast walker:var-bindings-form) var last-setqs)
   (loop for binding in (walker:form-bindings ast) do
        (when (eql (walker:form-var var) (walker:form-sym binding))
 	 (setf last-setqs (conc-setqs last-setqs (list binding)))))
   (loop for form in (walker:form-body ast) do
-       (setf last-setqs (last-setqs form var last-setqs)))
+       (setf last-setqs (last-setqs finder form var last-setqs)))
   last-setqs)
 
-(defparameter *last-setqs-call-stack* nil "The call stack used to handle recursive functions in #'LAST-SETQS.") ;;TODO FIXME: move this into an argument passed to #'LAST-SETQS, so that #'LAST-SETQS is reentrant
-
-(defmethod last-setqs ((ast walker:application-form) var last-setqs)
+(defmethod last-setqs ((finder last-setqs-finder) (ast walker:application-form) var last-setqs)
   (declare (optimize (debug 3)))
   (cond
-    ((find ast *last-setqs-call-stack*)
+    ((find ast (finder-callstack finder))
      last-setqs)
     (t
-     (push ast *last-setqs-call-stack*)
-     (let* ((parser (make-instance 'walker:parser))
+     (push ast (finder-callstack finder))
+     (let* ((parser (finder-parser finder))
 	    (fun-binding (walker:nso-definition (walker:form-fun ast)))
 	    (llist (walker:form-llist fun-binding))
 	    (args (walker:form-arguments ast))
 	    (alist (walker-plus:arguments-assign-to-lambda-list parser llist args)))
        (loop for acons in alist do
 	  ;; TODO: when implementing variable (value) bindings: bind result to (CAR ACONS).
-	    (setf last-setqs (last-setqs (cdr acons) var last-setqs)))
+	    (setf last-setqs (last-setqs finder (cdr acons) var last-setqs)))
        (loop for form in (walker:form-body fun-binding) do
-	    (setf last-setqs (last-setqs form var last-setqs))))
-     (pop *last-setqs-call-stack*)))
+	    (setf last-setqs (last-setqs finder form var last-setqs))))
+     (pop (finder-callstack finder))))
   last-setqs)
 
-(defmethod last-setqs (ast var last-setqs)
-  (loop for accessor in (walker:eval-order (make-instance 'last-setqs-orderer) ast) do
+(defmethod last-setqs ((finder last-setqs-finder) (ast walker:tagbody-form) var last-setqs)
+  (let ((old-tags (finder-tags finder))) ;note that although slot TAGS is saved here, the alists within it may still be modified by GO-FORMs within #'VISIT
+    (loop for tag in (walker:form-tags ast) do
+	 (setf (finder-tags finder) (acons tag nil (finder-tags finder))))
+    (labels ((form-function (form form-exits)
+	       (declare (ignore form-exits))
+	       (cond
+		 ((typep form 'walker:tagpoint)
+		  (push (walker:form-tag form) last-setqs))
+		 (t
+		  (setf last-setqs (last-setqs finder form var last-setqs)))))
+	     (is-own-tag (form)
+	       (and (typep form 'walker:tag) (eql (walker:nso-definition form) ast)))
+	     (replace-tag-with-assoc (last-setqs)
+	       (let ((tags nil))
+		 (setf last-setqs (remove-if (lambda (setq) (when (is-own-tag setq) (push setq tags) t))
+					     last-setqs))
+		 (loop for tag in tags do
+		      (let* ((asetqs (cdr (assoc tag (finder-tags finder))))
+			     (asetqs (remove-if (lambda (setq) (eql setq tag)) asetqs)))
+			(setf last-setqs (vars-union last-setqs (replace-tag-with-assoc asetqs))))))
+	       last-setqs))
+      (visit-tagbody-form-exits (finder-exit-finder finder) ast #'form-function)
+      ;; replace placeholder tagpoints with their actual last setqs.
+      (setf last-setqs (replace-tag-with-assoc last-setqs))
+      ;; replace own tags with associated setqs in slot FINDER-TAGS and LAST-SETQS
+      (setf (finder-tags finder) (mapcar (lambda (acons)
+					   (cons (car acons) (replace-tag-with-assoc (cdr acons))))
+					 old-tags))
+      (remove-if #'is-own-tag last-setqs))))
+
+(defmethod last-setqs ((finder last-setqs-finder) (ast walker:go-form) var last-setqs)
+  (let* ((tag (walker:form-tag ast))
+	 (acons (assoc tag (finder-tags finder))))
+    (assert (not (null acons)) () "unknown tag ~S" (walker:form-tag ast))
+    (setf (cdr acons) (vars-union (cdr acons) last-setqs)))
+  nil)
+
+;; HIER WEITER
+
+(defmethod last-setqs ((finder last-setqs-finder) ast var last-setqs)
+  (loop for accessor in (walker:eval-order (finder-orderer finder) ast) do
        (cond
 	 ((eql accessor #'walker:form-body)
 	  (loop for form in (walker:form-body ast) do
-	       (setf last-setqs (last-setqs form var last-setqs))))
+	       (setf last-setqs (last-setqs finder form var last-setqs))))
 	 (t
-	  (setf last-setqs (last-setqs (funcall accessor ast) var last-setqs)))))
+	  (setf last-setqs (last-setqs finder (funcall accessor ast) var last-setqs)))))
   last-setqs)
 
-;; HIER WEITER mit (defmethod last-setq ((ast walker:tagbody) var last-setqs)
-
-
-(defmethod last-setqs ((ast walker:var-reading) var last-setqs)
+(defmethod last-setqs ((finder last-setqs-finder) (ast walker:var-reading) var last-setqs)
   (if (eql var ast)
       (throw 'last-setqs-for-var-reading last-setqs)
       last-setqs))
 
-(defun last-setqs-for-var-reading (var-reading)
-  (catch 'last-setqs-for-var-reading ;(LAST-SETQS (AST VAR-READING) VAR LAST-SETQS) throws
+(defun last-setqs-for-var-reading (finder var-reading)
+  (catch 'last-setqs-for-var-reading ;(LAST-SETQS FINDER (AST VAR-READING) VAR LAST-SETQS) throws
     (let* ((var (walker:form-var var-reading))
 	   (definition (walker:form-parent (walker:nso-definition var))))
-    (last-setqs definition var-reading nil))))
+    (last-setqs finder definition var-reading nil))))
 
 (defun last-var-reading (ast)
   (let ((last-var-reading nil))
-    (walker:map-ast (lambda (form path) (declare (ignore path)) (and (typep form 'walker:var-reading) (setf last-var-reading form))) ast)
+    (walker:map-ast (lambda (form path)
+		      (declare (ignore path))
+		      (and (typep form 'walker:var-reading) (setf last-var-reading form)))
+		    ast)
     last-var-reading))
 
-(defun test-last-setqs-form (form)
-  ;; TODO: This function cannot yet be used to query last SETQs for a VAR-READING in the body or a subform of the body of FORM. (For that, I used #'TEST-FWD-INFER-FORM and prinded values in #'LAST-SETQS.)
-  (let* ((ast (walker:parse-with-namespace form))
-	 (var-reading (last-var-reading ast)))
+(defun test-last-setqs-form (form &optional (captured-symbol 'var))
+  "FORM must contain a captured variable reading, captured to the symbol CAPTURED-SYMBOL, as in '(LET ((A 1)) (CAPTURE VAR A) 1). If such a CAPTURE-form doesn't exist, the last form is assumed to be the variable reading."
+  (let* ((parser (walker:make-parser :type 'capturing-parser :variables nil :functions nil :macros nil))
+	 (ast (walker:parse-with-namespace form :parser parser))
+	 (var-reading (or (gethash captured-symbol (parser-container parser))
+			  (last-var-reading ast)))
+	 (finder (make-instance 'last-setqs-finder)))
     (unless var-reading
-      (error "FORM must return the value of a variable,~%but is ~S" form))
-    (last-setqs-for-var-reading var-reading)))
-
-(defun last-var-reading (ast)
-  (let ((last-var-reading nil))
-    (walker:map-ast (lambda (form path) (declare (ignore path)) (and (typep form 'walker:var-reading) (setf last-var-reading form))) ast)
-    last-var-reading))
-
-(defun test-find-last-var-writings-form (form)
-  (find-last-var-writings (last-var-reading (walker:parse-with-namespace form))))
+      (error "FORM must contain a variable reading captured like (CAPTURE ~S variable),~%or the last form must be a variable reading,~%but FORM is ~S" captured-symbol form))
+    (last-setqs-for-var-reading finder var-reading)))
 
 (defun test-last-setqs ()
   (flet ((assert-result (form desired-values)
 	   (let* ((var-writings (test-last-setqs-form form))
 		  (actual-values (mapcar #'walker:form-object (mapcar #'walker:form-value var-writings))))
-	     (assert (equal actual-values desired-values) () "TEST-FIND-LAST-VAR-WRITINGS for form~%~S~%expected ~S,~%but got  ~S~%" form desired-values actual-values))))
+	     (assert (equal actual-values desired-values) () "TEST-LAST-SETQS for form~%~S~%expected ~S,~%but got  ~S~%" form desired-values actual-values))))
     (assert-result '(let ((a 1)) a) '(1))
     (assert-result '(let ((a 1)) (setq a 2) a) '(2))
+    (assert-result '(let ((a 1)) (capture var a) (setq a 2) a) '(1))
     (assert-result '(let ((a 1)) (labels ((f (&optional (a (setq a 2))) (if 1 (f) a))) (f)) a) '(2))
     (assert-result '(let ((a 1)) (labels ((f (&optional (a (setq a 2))) (if 1 (f) a))) (f t)) a) '(2 1)) ;note that since (F) is called in the THEN-BRANCH and the ELSE-BRANCH returns from F, the desired result is '(2 1), not '(1 2), because the IF-FORM returns the last SETQs of the THEN-BRANCH before the ELSE-BRANCH.
     (assert-result '(let ((a 1)) (labels ((f (&optional (a (setq a 2))) (if 1 (f) a) (f))) (f)) a) '(2))
@@ -2513,7 +2554,7 @@ This function handles multiple branches, e.g. as in '(LET ((A 1)) (IF 1 (SETQ A 
     (assert-result '(let ((a 1)) (labels ((f (&optional (a (setq a 2))) (if 1 (f) a)) (g (a) (f a))) (g t)) a) '(2 1))
     (assert-result '(let ((a 1)) (if 1 (setq a 2)) (if 2 (setq a 3)) a) '(3 2 1))
     (assert-result '(let ((a 1)) (if 1 (setq a 2)) (if 2 (setq a 3) (setq a 4)) a) '(3 4))
-    ;;(assert-result '(let ((a 1)) (if 1 (setq a (capture a (if 2 2 3)))) a) TODO: pass DESIRED-VALUES=(LIST (GET-CAPTURED 'A)))
+    ;;(assert-result '(let ((a 1)) (if 1 (setq a (if 2 2 3))) a) '((if 2 2 3) 1)) ;TODO low priority
     (assert-result '(let ((a 1)) (if 1 (if 2 (setq a 2))) a) '(2 1))
     (assert-result '(let ((a 1)) (if 1 (if 2 (setq a 2) (setq a 3))) a) '(2 3 1))
     (assert-result '(let ((a 1)) (setq a 2) (if 1 (setq a 3) (if 2 (setq a 4))) a) '(3 4 2))
@@ -2522,6 +2563,31 @@ This function handles multiple branches, e.g. as in '(LET ((A 1)) (IF 1 (SETQ A 
     (assert-result '(let ((a 1)) (if 0 (setq a 2) (setq a 3)) (if 1 (setq a 4) (if 2 (setq a 5))) a) '(4 5 2 3))
     (assert-result '(let ((a 1)) (if 0 (setq a 2)) (if 1 (setq a 3) (if 2 (setq a 4))) a) '(3 4 2 1))
     (assert-result '(let ((a 1)) (if 0 (setq a 2) (if 1 (setq a 3) (if 2 (setq a 4)))) a) '(2 3 4 1))
+    (assert-result '(let ((a 1)) (tagbody (setq a 2)) a) '(2))
+    (assert-result '(let ((a 1)) (tagbody (go e) (setq a 2) e) a) '(1))
+    (assert-result '(let ((a 1)) (tagbody s (if (setq a 2) (progn (setq a 3) (go s)))) a) '(2))
+    (assert-result '(let ((a 1)) (tagbody s (if 1 (progn (go s) (setq a 2)))) a) '(2 1)) ;if we would check for dead forms, the result would be '(1)
+    (assert-result '(let ((a 1)) (tagbody s (if 1 (progn (setq a 2) (go s)))) a) '(1 2))
+    (assert-result '(let ((a 1)) (tagbody s (if 1 (progn (setq a 2) (go s)) (setq a 3))) a) '(3))
+    (assert-result '(let ((a 1)) (tagbody s (if 1 (if (setq a 2) (progn (setq a 3) (go s))))) a) '(2 1 3))
+    (assert-result '(let ((a 1)) (tagbody s (if 1 (if 2 (progn (setq a 2) (go s))))) a) '(1 2))
+    (assert-result '(let ((a 1)) (tagbody s (if 1 (if 2 (progn (setq a 2) (go s)) (setq a 3)))) a) '(3 1 2))
+    (assert-result '(let ((a 1)) (tagbody s (if 0 (go e)) (if (setq a 2) (progn (setq a 3) (go s))) e) a) '(2 1 3))
+    (assert-result '(let ((a 1)) (tagbody s (if 0 (go e)) (if 1 (progn (setq a 2) (go s))) e) a) '(1 2))
+    (assert-result '(let ((a 1)) (tagbody s (if 0 (go e)) (if 1 (progn (setq a 2) (go s)) (setq a 3)) e) a) '(3 1 2))
+    (assert-result '(let ((a 1)) (tagbody s (if 0 (go e)) (if 1 (if (setq a 2) (progn (setq a 3) (go s)))) e) a) '(2 1 3))
+    (assert-result '(let ((a 1)) (tagbody s (if 0 (go e)) (if 1 (if 2 (progn (setq a 2) (go s)))) e) a) '(1 2))
+    (assert-result '(let ((a 1)) (tagbody s (if 0 (go e)) (if 1 (if 2 (progn (setq a 2) (go s)) (setq a 3))) e) a) '(3 1 2))
+    (assert-result '(let ((a 1)) (tagbody s (tagbody s (if 1 (progn (setq a 2) (go s)))) e) a) '(1 2))
+    (assert-result '(let ((a 1)) (tagbody s (tagbody s (if 1 (progn (setq a 2) (go s)) (go e))) e) a) '(1 2))
+    (assert-result '(let ((a 1)) (tagbody s (if 1 (tagbody s (setq a 2) (go s)))) a) '(1))
+    (assert-result '(let ((a 1)) (tagbody s (if 1 (progn (setq a 2) (go s))) t (if 1 (progn (setq a 3) (go t)))) a) '(1 2 3))
+    (assert-result '(let ((a 1)) (tagbody s (if 1 (progn (setq a 2) (go s))) (setq a 3) t (if 1 (progn (setq a 4) (go t)))) a) '(3 4))
+    (assert-result '(let ((a 1)) (tagbody s (if 1 (progn (setq a 2) (go s)) (progn (setq a 3) (go s)))) a) 'nil)
+    (assert-result '(let ((a 1)) (tagbody s (if 1 (go e)) (if 1 (progn (setq a 2) (go s)) (progn (setq a 3) (go s))) e) a) '(1 2 3))
+    (assert-result '(let ((a 1)) (tagbody s (if 1 (progn (setq a 2) (go s)) (go t)) t (if 1 (progn (setq a 3) (go s))) e) a) '(1 2 3))
+    (assert-result '(let ((a 1)) (tagbody s (if 1 (progn (setq a 2) (go s)) (go t)) t (if 1 (progn (setq a 3) (go s)) (go e)) e) a) '(1 2 3))
+    (assert-result '(let ((a 1)) (tagbody s (setq a 2) (if 1 (progn (setq a 3) (go s)))) a) '(2))
     ))
 
 (test-last-setqs)
