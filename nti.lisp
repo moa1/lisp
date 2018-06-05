@@ -2263,7 +2263,7 @@ FINDER is an instance of class ACCESSES-FINDER and stores information shared bet
     (assert-find-accesses '(let ((a 1)) a) '() '())
     (assert-find-accesses '(setq x 1) '() '(x))
     (assert-find-accesses '(setq x y) '(y) '(x))
-    (assert-find-accesses '(let (t) (setq t x x y y t)) '(x y) '(x y))
+    (assert-find-accesses '(let (tmp) (setq tmp x x y y tmp)) '(x y) '(x y))
     (assert-find-accesses '(let* ((a 1) (b a)) b) '() '())
     (assert-find-accesses '(flet ((f (a) (setq x a))) (f 1)) '() '(x))
     (assert-find-accesses '(flet ((f (&optional (a (setq x 1))) 1)) (f)) '() '(x))
@@ -2529,6 +2529,8 @@ This function handles multiple branches, e.g. as in '(LET ((A 1)) (IF 1 (SETQ A 
 ;;TODO: I have to know which forms of the TAGBODY are the last form before a TAG and are alive, so that I can merge their namespaces in.
 
 ;;; INFER THE FORWARD PASS.
+
+;; TODO: There is currently a bug when trying to #'FWD-INFER a recursive call in a LABELS-FORM (either that or a non-recursive call). If I remember correctly, when I saw the problem some weeks ago, I decided that the current approach does not work. (Or it is too complicated because I tried (or it was technically required because of previous decisions) to do everything in one or only few functions, especially the overridden methods #'WALKER:PARSE and #'MAKE-USERPROPERTIES.) So instead I now implemented (well, not every method is implemented yet) #'FIND-ACCESSES and #'LAST-SETQS-FOR-VAR-READING, which should allow getting rid of namespaces completely (in #'FWD-INFER and #'MAKE-USERPROPERTIES) and instead use the two functions #'FIND-ACCESSES and #'LAST-SETQS-FOR-VAR-READING to determine where to get or update the type of a variable. For example, in an IF-FORM, there is currently a join of the variables changed in the THEN- and ELSE-branch namespaces (the changed variables are computed in #'MAKE-USERPROPERTIES, but this doesn't work for recursive calls). Instead I should use #'FIND-ACCESSES to determine both read and written variables within each of the two branches and then use #'LAST-SETQS-FOR-VAR-READING on each of the read and written variables to find the place where to store the joined type bounds. The interface of #'LAST-SETQS-FOR-VAR-READING should be correct: It returns, for each variable accessed, the last SETQs. The join of variables which are written-to in the two branches will not happen in #'FWD-INFER of the IF-FORM anymore, but in a VAR-READING of such a variable after the IF-FORM. #'LAST-SETQS-FOR-VAR-READNIG will return the SETQs in the THEN- or ELSE-branch, or (if one or both branches do not SETQ the variable) in the forms (this includes the TEST-FORM) before the IF-FORM. Then I can join the type bounds of each last SETQ returned and return that as the type bound of the variable at that VAR-READING. #'FWD-INFER will become more functional and do some calculations of last SETQS and variable accesses for a variable twice or more often, but if that is a speed problem, I can memoize #'FIND-ACCESSES and #'LAST-SETQS-FOR-VAR-READING.
 
 (defclass fwd-inferer ()
   ((exit-finder :initarg :exit-finder :initform (make-instance 'exit-finder) :accessor inferer-exit-finder)
