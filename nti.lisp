@@ -1093,7 +1093,7 @@ NIL (no annotation)
 	(cons 'the-ul
 	      (cond
 		((or (is-results-0 u) (is-results-0 l))
-		 (list nil nil))
+		 (list (list nil nil)))
 		((= m -1)
 		 (list (list '&rest (results-infinite u) '&rest (results-infinite l))))
 		(t
@@ -1691,8 +1691,7 @@ FORM-FUNCTION must be a function of two parameters FORM, the currently processed
 Returns the list of exits of AST's last form, or NIL if this form cannot ever be executed (is dead)."
   (declare (optimize (debug 3)))
   (let ((goforms (list (walker:form-body ast))) ;a list of list of forms inside AST that are jumped to.
-	(visited (make-hash-table))
-	(last-form (walker:form-body-last ast)))
+	(visited (make-hash-table)))
     (loop while (not (null goforms)) do
 	 (let* ((goforms0 (pop goforms)))
 	   (loop for form in goforms0 do
@@ -1711,7 +1710,8 @@ Returns the list of exits of AST's last form, or NIL if this form cannot ever be
     (loop for form in (walker:form-body ast) do
 	 (unless (gethash form visited nil)
 	   (warn-dead-form exit-finder form)))
-    (and (gethash last-form visited) (find-exits exit-finder last-form))))
+    (let ((last-form (walker:form-body-last ast)))
+      (and (gethash last-form visited) (find-exits exit-finder last-form)))))
 
 (defmethod find-exits ((exit-finder exit-finder) (ast walker:tagbody-form))
   (declare (optimize (debug 3)))
@@ -2630,40 +2630,13 @@ FINDER is an instance of class ACCESSES-FINDER and stores information shared bet
 
 (defmethod fwd-infer ((fwd-inferer fwd-inferer) (ast walker:tagbody-form))
   ;; First, find all exits that reach a TAGPOINT either by normally exiting the previous form before the TAGPOINT, or by jumping to it from a JUMPING-EXIT of one of ASTs forms. We do not have to care about GO-FORMs or RETURN-FROM-FORMs that jump outside the AST, since they are handled by their parents (i.e. the TAGBODY-FORM that has the GO-FORM's tag, or the BLOCK-FORM that has the RETURN-FROM-FORM's blo).
-  (let ((tags-prev-namespaces (make-hash-table)))
-    ;; If the first form is a tagpoint. set its previous-form namespace to AST-PARSER-PREV of AST.
-    (when (typep (walker:form-body-1 ast) 'walker:tagpoint)
-      (push (ast-parser-prev ast) (gethash (walker:form-body-1 ast) tags-prev-namespaces)))
-    (visit-tagbody-form-exits (inferer-exit-finder fwd-inferer)
-			       ast
-			       (lambda (form form-exits)
-				 (let ((next-form (cadr (member form (walker:form-body ast)))))
-				   (when (and (typep next-form 'walker:tagpoint) (normal-exits form-exits)) ;if the NEXT-FORM is a tagpoint, and FORM has at least one normal exit, add prev-namespace of FORM
-				     (push (ast-parser-next form) (gethash next-form tags-prev-namespaces))))
-				 (loop for exit in form-exits do
-				      (when (go-form-jumps-inside-ast exit ast)
-					(let* ((tag (walker:form-tag exit))
-					       (tagpoint (car (walker:nso-gopoint tag)))
-					       (exit-parser (ast-parser-next exit)))
-					  (push exit-parser (gethash tagpoint tags-prev-namespaces)))))))
-    ;; Second, compute the next-namespaces of all forms, and, when reaching a TAGPOINT, assign its prev-namespace to the join of all incoming exits computed in the first step.
-    (let ((last-exits
-	   (visit-tagbody-form-exits (inferer-exit-finder fwd-inferer)
-				     ast
-				     (lambda (form form-exits)
-				       (declare (ignore form-exits))
-				       (when (typep form 'walker:tagpoint)
-					 (let ((parser-join (ast-fun-binding form))
-					       (branches (gethash form tags-prev-namespaces)))
-					   (join-namespaces! parser-join branches)
-					   (set-namespaces! (ast-parser-next form) parser-join)))
-				       (fwd-infer fwd-inferer form)))))
-      (cond
-	((null (walker:form-body ast))
-	 (set-namespaces! ast ast :key1 #'ast-parser-next :key2 #'ast-parser-prev))
-	(t
-	 (join-namespaces! (ast-parser-next ast) (mapcar #'ast-parser-next (normal-exits last-exits)))))))
-  (make-bounds (make-results 'null) (make-results 'null)))
+  (if (visit-tagbody-form-exits (inferer-exit-finder fwd-inferer)
+				ast
+				(lambda (form form-exits)
+				  (declare (ignore form-exits))
+				  (fwd-infer fwd-inferer form)))
+      (make-bounds (make-results 'null) (make-results 'null))
+      (make-bounds (make-results-0) (make-results-0))))
 
 (defmethod fwd-infer ((fwd-inferer fwd-inferer) (ast walker:application-form))
   (let* ((arguments (walker:form-arguments ast))
@@ -2748,7 +2721,6 @@ FINDER is an instance of class ACCESSES-FINDER and stores information shared bet
   (let* ((ast (ntiparse form))
 	 (fwd-inferer (make-instance 'fwd-inferer)))
     (fwd-infer fwd-inferer ast)
-    (prind (last1 (walker:form-body ast)))
     (annotate ast)))
 
 ;;; TEST INFER THE FORWARD PASS.
@@ -2803,6 +2775,7 @@ FINDER is an instance of class ACCESSES-FINDER and stores information shared bet
     (assert-result '(let ((a 1)) (tagbody (if 1 (go x)) (setq a 1.0) x) a) '(number))
     (assert-result '(let ((a 1)) (tagbody e (setq a 1.0) (if 1 (go e))) a) '(single-float))
     (assert-result '(let ((a 1)) (tagbody e (if 1 (setq a 1.0)) (if 1 (go e))) a) '(number))
+    (assert-result '(let ((a 1)) (tagbody (if 1 (tagbody s (if 1 (go s) (go e)))) (setq a 1.0) e) a) '(number))
     (assert-result '(let ((a 1)) (tagbody (flet ((fa () (setq a 1.0))) (fa) (go e) (setq a 1)) e) a) '(single-float))
     (assert-result '(let ((a 1)) (tagbody (flet ((fb () (setq a 1.0))) (flet ((fa () (fb))) (fa) (go e) (setq a 1))) e) a) '(single-float))
     ))
