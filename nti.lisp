@@ -2280,7 +2280,7 @@ FINDER is an instance of class ACCESSES-FINDER and stores information shared bet
   (cond
     ((or (find ast (finder-callstack finder)) ;recursive call
 	 (null (ast-fun-binding ast))) ;also recursive call (actually I think I can remove the above line, since recursive calls all constitute individual APPLICATION-FORM instances now)
-     last-setqs)
+     nil)
     (t
      (push ast (finder-callstack finder))
      (let* ((parser (finder-parser finder))
@@ -2291,7 +2291,6 @@ FINDER is an instance of class ACCESSES-FINDER and stores information shared bet
 	    (alist (walker-plus:arguments-assign-to-lambda-list parser llist args)))
        (loop for acons in alist do
 	  ;; TODO: when implementing variable (value) bindings: bind result to (CAR ACONS).
-	    ;;(prind (cdr acons) (last-setqs finder (cdr acons) var last-setqs))
 	    (setf last-setqs (last-setqs finder (cdr acons) var last-setqs)))
        (loop for form in (walker:form-body fun-binding) do
 	    (setf last-setqs (last-setqs finder form var last-setqs))))
@@ -2405,15 +2404,17 @@ FINDER is an instance of class ACCESSES-FINDER and stores information shared bet
       last-setqs))
 
 (defun last-setqs-for-var-reading (finder var-reading)
-  (catch 'last-setqs-for-var-reading ;(LAST-SETQS FINDER (AST VAR-READING) VAR LAST-SETQS) throws
-    (let* ((var (walker:form-var var-reading))
-	   (definition (walker:form-parent (walker:nso-definition var)))
-	   (definition (etypecase definition
-			 (walker:var-bindings-mixin
-			  definition)
-			 (walker:llist
-			  (walker:form-parent definition)))))
-      (last-setqs finder definition var-reading nil))))
+  (prog1
+      (catch 'last-setqs-for-var-reading ;(LAST-SETQS FINDER (AST VAR-READING) VAR LAST-SETQS) throws
+	(let* ((var (walker:form-var var-reading))
+	       (definition (walker:form-parent (walker:nso-definition var)))
+	       (definition (etypecase definition
+			     (walker:var-bindings-mixin
+			      definition)
+			     (walker:llist
+			      (walker:form-parent definition)))))
+	  (last-setqs finder definition var-reading nil)))
+    (setf (finder-callstack finder) nil)))
 
 (defun last-var-reading (ast)
   "This function is more of a hack for #'TEST-LAST-SETQS-FORM than a generally useful function, since it returns _any_ VAR-READING in AST."
@@ -2458,7 +2459,7 @@ FINDER is an instance of class ACCESSES-FINDER and stores information shared bet
     (assert-result '(let ((a 1)) (capture var a) (setq a 2) a) '(1))
     (assert-result '(let ((a 1)) (labels ((f (&optional (a (setq a 2))) (if 1 (f) a))) (f)) a) '(2))
     (assert-result '(let ((a 1)) (labels ((f (&optional (a (setq a 2))) (if 1 (f) a))) (f t)) a) '(2 1)) ;note that since (F) is called in the THEN-BRANCH and the ELSE-BRANCH returns from F, the desired result is '(2 1), not '(1 2), because the IF-FORM returns the last SETQs of the THEN-BRANCH before the ELSE-BRANCH.
-    (assert-result '(let ((a 1)) (labels ((f (&optional (a (setq a 2))) (if 1 (f) a) (f))) (f)) a) '(2))
+    (assert-result '(let ((a 1)) (labels ((f (&optional (a (setq a 2))) (if 1 (f) a) (f))) (f)) a) '()) ;recurses forever, therefore there is no last setq
     (assert-result '(let ((a 1)) (labels ((f (&optional (a (setq a 2))) (if 1 (f) a))) (f)) a) '(2))
     (assert-result '(let ((a 1)) (labels ((f (&optional (a (setq a 2))) (if 1 (f) a))) (f t)) a) '(2 1))
     (assert-result '(let ((a 1)) (labels ((f (&optional (a (setq a 2))) (if 1 (f) a)) (g (a) (f a))) (g t)) a) '(2 1))
@@ -2541,7 +2542,6 @@ FINDER is an instance of class ACCESSES-FINDER and stores information shared bet
 	 (setq-bounds (mapcar (lambda (setq)
 				(etypecase setq
 				  (walker:var-binding
-				   ;;(fwd-infer fwd-inferer (walker:form-value setq)) TODO remove this it's slow
 				   (ast-bounds (walker:form-value setq)))
 				  (walker:var-writing
 				   (ast-bounds setq))
@@ -2675,7 +2675,7 @@ FINDER is an instance of class ACCESSES-FINDER and stores information shared bet
 			 (walker:fun
 			  (ast-fun-binding ast))))))
     (cond
-      ((find funbinding (inferer-callstack fwd-inferer)) ;this is a recursive call(-loop) of(between) function(s)
+      ((or (null funbinding) (find funbinding (inferer-callstack fwd-inferer))) ;this is a recursive call(-loop) of(between) function(s)
        (make-bounds (make-results-0) (make-results-0)))
       (t
        (push funbinding (inferer-callstack fwd-inferer))
