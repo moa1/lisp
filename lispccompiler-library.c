@@ -248,7 +248,7 @@ void inline or_f_int_int(const int a, const int b, int* r) {
 void inline not_int(const int a, int* r) {
 	*r = !a;
 }
-void inline fail_with_message_str(const char* message) {
+void fail_with_message_str(const char* message) {
 	fprintf(stderr, "%s\n", message);
 	exit(1);
 }
