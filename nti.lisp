@@ -1889,9 +1889,14 @@ Returns the list of exits of AST's last form, or NIL if this form cannot ever be
 
 ;;; FIND VAR-READINGs and VAR-WRITINGs
 
+(defclass accesses-orderer (walker:orderer)
+  ()
+  (:documentation "The orderer omitting some accessors of forms to determine the variable accesses."))
+
 (defclass accesses-finder ()
   ((exit-finder :initarg :exit-finder :initform (make-instance 'exit-finder) :accessor finder-exit-finder :documentation "The exit-finder used to compute dead and alive forms.")
-   (callstack :initarg :callstack :initform nil :accessor finder-callstack :documentation "A call stack used to abort recursive APPLICATION-FORMs.")))
+   (callstack :initarg :callstack :initform nil :accessor finder-callstack :documentation "A call stack used to abort recursive APPLICATION-FORMs.")
+   (orderer :initform (make-instance 'accesses-orderer) :initarg :parser :reader finder-orderer)))
 
 (defgeneric find-accesses (finder ast)
   (:documentation "Return two values: the list of read variables defined outside AST that determine the evaluation (computation) of AST, and the list of written variables defined outside AST that are changed as a result of evaluating AST.
@@ -1899,8 +1904,9 @@ Note that a variable can be in both lists, for example as in (+ A (SETQ A 2)). T
 FINDER is an instance of class ACCESSES-FINDER and stores information shared between the forms."))
 
 (defmacro find-accesses-update! (read0 written0 read1 written1)
+  "A variable VAR that has already been written to (so VAR is in WRITTEN0) overwrote the state of VAR if it is read later (so VAR is also in READ1).
+An example where this occurs is (+ (SETQ A 2) A). We want A to only be in the list of written variables." ;the example is taken from the docstring of #'FIND-ACCESSES
   (declare (type symbol read0 written0))
-  ;; A variable that has already been written to overwrote the state of a read-from-in-FORM variable.
   `(setf ,read0 (nvars-union ,read0
 			     (nvars-difference ,read1 ,written0))
 	 ,written0 (nvars-union ,written0 ,written1)))
@@ -1909,7 +1915,7 @@ FINDER is an instance of class ACCESSES-FINDER and stores information shared bet
   "Assuming that READ0 and WRITTEN0 are the lists of variables already read and written, determine the list of read and written variables after FORM is executed and return the updated lists. Also return the exits of FORM."
   (declare (type list read0 written0)
 	   (type accesses-finder finder)
-	   (type walker:form form))
+	   (type (or walker:form walker:var-writing) form))
   ;; a jumping exit within FORM will exclude the following forms from being evaluated.
   (multiple-value-bind (read1 written1) (find-accesses finder form)
     (let ((exits (find-exits (finder-exit-finder finder) form)))
@@ -1965,13 +1971,24 @@ FINDER is an instance of class ACCESSES-FINDER and stores information shared bet
 (defmethod find-accesses ((finder accesses-finder) (ast walker:object-form))
   (values nil nil))
 
-(defmethod find-accesses ((finder accesses-finder) (ast walker:body-mixin))
-  (no-exits (find-accesses-forms-list finder nil nil (walker:form-body ast))))
+(defmethod find-accesses ((finder accesses-finder) ast)
+  "The fallback method of #'FIND-ACCESSES."
+  (let ((read nil)
+	(written nil))
+    (loop for accessor in (walker:eval-order (finder-orderer finder) ast) do
+	 (cond
+	   ((eql accessor #'walker:form-body)
+	    (unless (normal-exits (find-accesses-forms-list! finder read written (walker:form-body ast)))
+	      (return (values read written))))
+	   (t
+	    (unless (normal-exits (find-accesses-form! finder read written (funcall accessor ast)))
+	      (return (values read written)))))
+       finally (return (values read written)))))
 
 (defmethod find-accesses ((finder accesses-finder) (ast walker:function-form))
   (values (list ast) nil))
 
-;; PROGN-FORM is handled by BODY-MIXIN.
+;; PROGN-FORM is handled by the fallback method.
 
 (defmethod find-accesses ((finder accesses-finder) (ast walker:var-bindings-mixin))
   (let ((init-values (loop for binding in (walker:form-bindings ast) collect
@@ -2017,17 +2034,13 @@ FINDER is an instance of class ACCESSES-FINDER and stores information shared bet
 	   (pop (finder-callstack finder))
 	   (return-values read written)))))))
 
-(defmethod find-accesses ((finder accesses-finder) (ast walker:fun-bindings-mixin))
-  ;; only have to process the body.
-  (no-exits (find-accesses-forms-list finder nil nil (walker:form-body ast))))
+;; FUN-BINDINGS-MIXIN is handled by the fallback method.
+(defmethod walker:eval-order ((orderer accesses-orderer) (ast walker:fun-bindings-mixin))
+  `(,#'walker:form-body))
 
-;; LET-FORM and LET*-FORM are handled by VAR-BINDINGS-MIXIN and BODY-MIXIN.
+;; LET-FORM and LET*-FORM are handled by VAR-BINDINGS-MIXIN.
 
-(defmethod find-accesses ((finder accesses-finder) (ast walker:return-from-form))
-  (no-exits (find-accesses-form finder nil nil (walker:form-value ast))))
-
-(defmethod find-accesses ((finder accesses-finder) (ast walker:block-form))
-  (no-exits (find-accesses-forms-list finder nil nil (walker:form-body ast))))
+;; RETURN-FROM-FORM and BLOCK-FORM is handled by the fallback method.
 
 ;; FLET-FORM and LABELS-FORM are handled by FUN-BINDINGS-MIXIN.
 
@@ -2037,8 +2050,7 @@ FINDER is an instance of class ACCESSES-FINDER and stores information shared bet
 
 ;; LOCALLY-FORM is handled by BODY-MIXIN.
 
-(defmethod find-accesses ((finder accesses-finder) (ast walker:the-form))
-  (find-accesses finder (walker:form-value ast)))
+;; THE-FORM is handled by the fallback method.
 
 (defmethod find-accesses ((finder accesses-finder) (ast walker:if-form))
   (let* ((read nil)
@@ -2052,31 +2064,18 @@ FINDER is an instance of class ACCESSES-FINDER and stores information shared bet
        (when (walker:form-else ast) (find-accesses-form! finder read written (walker:form-else ast)))
        (values read written)))))
 
+(defmethod find-accesses ((finder accesses-finder) (ast walker:var-writing))
+  (multiple-value-bind (read written) (find-accesses finder (walker:form-value ast))
+    (values read (vars-union written (list ast)))))
+
 (defmethod find-accesses ((finder accesses-finder) (ast walker:setq-form))
-  (let ((read0 nil)
-	(written0 nil))
-    (loop for var-writing in (walker:form-vars ast) do
-	 (let* ((value (walker:form-value var-writing))
-		(exits (find-exits (finder-exit-finder finder) value)))
-	   (cond
-	     ((normal-exits exits)
-	      (multiple-value-bind (value-read value-written) (find-accesses finder value)
-		(find-accesses-update! read0 written0 value-read value-written))
-	      (setf written0 (vars-union written0 (list var-writing))))
-	     (t
-	      (return-from find-accesses (values read0 written0))))))
-    (values read0 written0)))
+  (no-exits (find-accesses-forms-list finder nil nil (walker:form-vars ast))))
 
-(defmethod find-accesses ((finder accesses-finder) (ast walker:catch-form))
-  (find-accesses finder (walker:form-values ast)))
+;; CATCH-FORM and THROW-FORM are handled by the fallback method.
 
-(defmethod find-accesses ((finder accesses-finder) (ast walker:throw-form))
-  (find-accesses finder (walker:form-value ast)))
+;; EVAL-WHEN-FORM is handled by the fallback method.
 
-;; EVAL-WHEN-FORM should be handled by BODY-MIXIN.
-
-(defmethod find-accesses ((finder accesses-finder) (ast walker:load-time-value-form))
-  (find-accesses finder (walker:form-value ast)))
+;; LOAD-TIME-VALUE-FORM is handled by the fallback method.
 
 (defmethod find-accesses ((finder accesses-finder) (ast walker:quote-form))
   (values nil nil))
@@ -2084,9 +2083,7 @@ FINDER is an instance of class ACCESSES-FINDER and stores information shared bet
 (defmethod find-accesses ((finder accesses-finder) (ast walker:multiple-value-call-form))
   (error "TODO: we need value prediction for the following form: (TAGBODY (FLET ((F (&OPTIONAL (A (GO E))) (GO S))) (MULTIPLE-VALUE-CALL F)) (SETQ X 1) E) doesn't set X, but (TAGBODY (FLET ((F (&OPTIONAL (A (GO E))) (GO S))) (MULTIPLE-VALUE-CALL F 1)) (SETQ X 1) E) sets X"))
 
-(defmethod find-accesses ((finder accesses-finder) (ast walker:multiple-value-prog1-form))
-  (no-exits (find-accesses-forms-list finder nil nil (cons (walker:form-values ast)
-							   (walker:form-body ast)))))
+;; MULTIPLE-VALUE-PROG1-FORM is handled by the fallback method.
 
 (defmethod find-accesses ((finder accesses-finder) (ast walker:progv-form))
   (error "TODO: (tagbody (progv (if 1 (go e) '(a b)) (list 1 2) (setq x 1)) e)"))
@@ -2139,12 +2136,13 @@ FINDER is an instance of class ACCESSES-FINDER and stores information shared bet
 				 (vars-difference written1 locals :key1 #'walker:form-var))))))))))
 
 (defmethod find-accesses ((finder accesses-finder) (ast walker-plus:values-form))
+  ;; VALUES-FORM cannot be handled by the fallback method because (WALKER:FORM-VALUES AST) is a list.
   (no-exits (find-accesses-forms-list finder nil nil (walker:form-values ast))))
 
-(defmethod find-accesses ((finder accesses-finder) (ast walker-plus:nth-value-form))
-  (no-exits (find-accesses-forms-list finder nil nil (list (walker:form-value ast) (walker:form-values ast)))))
+;; NTH-VALUE-FORM is handled by the fallback method.
 
-;;TODO: (defmethod find-accesses ((finder accesses-finder) (ast walker-plus:defun-form)))
+(defmethod find-accesses ((finder accesses-finder) (ast walker-plus:defun-form))
+  (error "TODO"))
 
 (defmethod find-accesses ((finder accesses-finder) (ast walker-plus:funcall-form))
   (let ((arguments (walker:form-arguments ast)))
@@ -2158,7 +2156,8 @@ FINDER is an instance of class ACCESSES-FINDER and stores information shared bet
       (t
        (error "TODO")))))
 
-;;TODO: (defmethod find-exits ((exit-finder exit-finder) (ast walker-plus:assert-form)))
+(defmethod find-exits ((exit-finder exit-finder) (ast walker-plus:assert-form))
+  (error "TODO"))
 
 ;;; TEST FIND VAR-READINGs and VAR-WRITINGs
 
@@ -2204,6 +2203,7 @@ FINDER is an instance of class ACCESSES-FINDER and stores information shared bet
     (assert-find-accesses '(tagbody (setq x 1)) '() '(x))
     (assert-find-accesses '(tagbody (setq x 1) (go a) a) '() '(x))
     (assert-find-accesses '(tagbody (go a) (setq x 1) a) '() '())
+    (assert-find-accesses '(tagbody (progn (go a) (setq x 1)) a) '() '())
     (assert-find-accesses '(tagbody (labels ((f (&optional (a (go a))) (setq x 1))) (f)) a) '() '())
     (assert-find-accesses '(tagbody (labels ((f (&optional (a (go a))) (setq x 1))) (f 1)) a) '() '(x))
     (assert-find-accesses '(tagbody (labels ((f () (go a) (setq x 1))) (f)) a) '() '())
