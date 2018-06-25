@@ -1473,8 +1473,13 @@ ROUNDS=0 only parses and annotates the FORM, but doesn't do any type inference r
 
 ;;; FIND EXITS
 
+(defclass exit-finder-orderer (walker:orderer)
+  ()
+  (:documentation "The orderer omitting some accessors of forms to determine the exits."))
+
 (defclass exit-finder ()
   ((callstack :initarg :callstack :initform nil :accessor finder-callstack :documentation "A call stack used to abort recursive APPLICATION-FORMs.")
+   (orderer :initform (make-instance 'exit-finder-orderer) :initarg :parser :reader finder-orderer)
    (warn-dead-p :initarg :warn-dead-p :initform nil :accessor finder-warn-dead-p :documentation "Whether to show dead form warnings or not (which is the default).")
    (application-form-substitute-p :initarg :application-form-substitute-p :initform nil :accessor finder-application-form-substitute-p :documentation "Whether to substitute in the finding of exit forms for APPLICATION-FORMs their FUN-BINDING or not.")))
 
@@ -1507,14 +1512,6 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
        (muffle-warning ()
 	 nil))))
 
-;; Forms (in the same order as exported from packages WALKER and WALKER-PLUS)
-
-(defmethod find-exits ((finder exit-finder) (ast walker:var-reading))
-  (list ast))
-
-(defmethod find-exits ((finder exit-finder) (ast walker:object-form))
-  (list ast))
-
 (defun find-exits-forms-list (finder ast forms)
   "Return the list of forms consisting of 1. the last evaluated form in FORMS, or 2. a jump out of FORMS."
   (let ((ast-exits nil))
@@ -1530,17 +1527,42 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
       (pushend ast-exits last-form-exits)
       ast-exits)))
 
-(defmethod find-exits ((finder exit-finder) (ast walker:body-mixin))
-  ;; The NIL for NEXT-METHOD-P means that subtypes of AST below WALKER:BODY-MIXIN are not called using #'FIND-EXITS.
-  (find-exits-forms-list finder ast (walker:form-body ast)))
+(defmethod find-exits ((finder exit-finder) ast)
+  "This is the fallback method of #'FIND-EXITS. It collects jumping exits returned by #'FIND-EXITS called on the slots of AST (as returned by#'WALKER:EVAL-ORDER). The first form in a slot to have only #'JUMPING-EXITS makes the fallback method to return the collected exits."
+  (let ((exits nil)
+	(warn-only nil))
+    (loop for accessor-cdr on (walker:eval-order (finder-orderer finder) ast) do
+	 (let* ((accessor (car accessor-cdr))
+		(forms (funcall accessor ast))
+		(forms-exits (cond
+			       ((eql accessor #'walker:form-bindings)
+				(jumping-exits (mapcar (lambda (ast) (find-exits finder ast)) forms)))
+			       ((eql accessor #'walker:form-body)
+				(assert (null (cdr accessor-cdr)))
+				(find-exits-forms-list finder ast forms))
+			       (t
+				(find-exits finder forms)))))
+	   (if warn-only
+	       (if (listp forms)
+		   (loop for form in forms do (warn-dead-form finder form))
+		   (warn-dead-form finder forms))
+	       (setf exits (nconc (jumping-exits exits) forms-exits)))
+	   (unless (normal-exits forms-exits)
+	     (setf warn-only t))))
+    exits))
+
+;; Forms (in the same order as exported from packages WALKER and WALKER-PLUS)
+
+(defmethod find-exits ((finder exit-finder) (ast walker:var-reading))
+  (list ast))
+
+(defmethod find-exits ((finder exit-finder) (ast walker:object-form))
+  (list ast))
 
 (defmethod find-exits ((finder exit-finder) (ast walker:function-form))
   (list ast))
 
-;; PROGN-FORM is handled by BODY-MIXIN.
-
-(defmethod find-exits ((finder exit-finder) (ast walker:var-bindings-mixin))
-  (find-exits-forms-list finder ast (nconc (mapcar #'walker:form-value (walker:form-bindings ast)) (walker:form-body ast))))
+;; PROGN-FORM is handled by the fallback method.
 
 (defun find-exits-functiondef (finder funbinding arguments)
   (let ((callstack (finder-callstack finder)))
@@ -1569,11 +1591,7 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
 	 (pop (finder-callstack finder))
 	 ast-exits)))))
 
-(defmethod find-exits ((finder exit-finder) (ast walker:fun-bindings-mixin))
-  ;; only have to process the body, i.e. pass to (FIND-EXITS (FINDER EXIT-FINDER) (AST BODY-MIXIN)).
-  (call-next-method))
-
-;; LET-FORM and LET*-FORM are handled by VAR-BINDINGS-MIXIN and BODY-MIXIN.
+;; LET-FORM and LET*-FORM are handled by the fallback method.
 
 (defmethod find-exits ((finder exit-finder) (ast walker:return-from-form))
   (list ast))
@@ -1592,16 +1610,18 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
       (pushend ast-exits (list ast)))
     ast-exits))
 
-;; FLET-FORM and LABELS-FORM are handled by FUN-BINDINGS-MIXIN and BODY-MIXIN.
+;; FLET-FORM and LABELS-FORM are handled by FUN-BINDINGS-MIXIN, which is handled by the fallback method.
+(defmethod walker:eval-order ((orderer exit-finder-orderer) (ast walker:fun-bindings-mixin))
+  ;; We only have to process the body.
+  `(,#'walker:form-body))
 
 (defmethod find-exits ((finder exit-finder) (ast walker:lambda-form))
   (warn "TODO FIXME: the Lisp code (TAGBODY S (LET ((F (LAMBDA () (GO A)))) (FUNCALL F)) (GO S) A) is not handled correctly.")
   (list ast))
 
-;; LOCALLY-FORM is handled by BODY-MIXIN.
+;; LOCALLY-FORM is handled by the fallback method.
 
-(defmethod find-exits ((finder exit-finder) (ast walker:the-form))
-  (find-exits finder (walker:form-value ast)))
+;; THE-FORM is handled by the fallback method.
 
 (defmethod find-exits ((finder exit-finder) (ast walker:if-form))
   (let* ((test-form (walker:form-test ast))
@@ -1620,8 +1640,7 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
 		then-exits
 	        else-exits))))))
 
-(defmethod find-exits ((finder exit-finder) (ast walker:var-writing))
-  (find-exits finder (walker:form-value ast)))
+;; VAR-WRITING is handled by the fallback method.
 
 (defmethod find-exits ((finder exit-finder) (ast walker:setq-form))
   (find-exits-forms-list finder ast (walker:form-vars ast)))
@@ -1633,10 +1652,9 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
 (defmethod find-exits ((finder exit-finder) (ast walker:throw-form))
   (error "TODO: look above at CATCH-FORM."))
 
-;; EVAL-WHEN-FORM should be handled by BODY-MIXIN.
+;; EVAL-WHEN-FORM is handled by the fallback method.
 
-(defmethod find-exits ((finder exit-finder) (ast walker:load-time-value-form))
-  (find-exits finder (walker:form-value ast)))
+;; LOAD-TIME-VALUE-FORM is handled by the fallback method.
 
 (defmethod find-exits ((finder exit-finder) (ast walker:quote-form))
   (list ast))
@@ -1644,20 +1662,9 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
 (defmethod find-exits ((finder exit-finder) (ast walker:multiple-value-call-form))
   (error "TODO: the control flow first evaluates the FUNCTION-form to get back the function (named function or LAMBDA) and then goes to the BODY-MIXINs to get the parameters and then the FUNCTION is called with the concatenated list of parameters. Example test cases: (TAGBODY S (FLET ((F (&OPTIONAL (A (GO E))) (GO S))) (MULTIPLE-VALUE-CALL F)) E) exits through tag E and (TAGBODY S (FLET ((F (&OPTIONAL (A (GO E))) (GO S))) (MULTIPLE-VALUE-CALL F 1)) E) doesn't exit."))
 
-(defmethod find-exits ((finder exit-finder) (ast walker:multiple-value-prog1-form))
-  (let ((prog1-exits (find-exits finder (walker:form-values ast))))
-    (if (normal-exits prog1-exits)
-	(nconc (jumping-exits prog1-exits) (call-next-method))
-	prog1-exits)))
+;; MULTIPLE-VALUE-PROG1-FORM is handled by the fallback method.
 
-(defmethod find-exits ((finder exit-finder) (ast walker:progv-form))
-  (let ((symbols-exits (find-exits finder (walker:form-symbols ast))))
-    (if (normal-exits symbols-exits)
-	(let ((values-exits (find-exits finder (walker:form-values ast))))
-	  (if (normal-exits values-exits)
-	      (nconc (jumping-exits symbols-exits) (jumping-exits values-exits) (call-next-method))
-	      (nconc (jumping-exits symbols-exits) values-exits)))
-	symbols-exits)))
+;; PROGV-FORM is handled by the fallback method.
 
 (defmethod find-exits ((finder exit-finder) (ast walker:unwind-protect-form))
   (error "TOOD: (see CLHS UNWIND-PROTECT) due to protecting the PROTECTED-FORM, the UNWIND-PROTECT-FORM can transfer control after any form or subform consisting of GO-, HANDLER-CASE-, IGNORE-ERRORS-, RESTART-CASE-, RETURN-FROM-, THROW-, WITH-SIMPLE-RESTART-form to the CLEANUP-FORM (which is called BODY-MIXIN in WALKER)."))
@@ -1739,16 +1746,16 @@ Returns the list of exits of AST's last form, or NIL if this form cannot ever be
 (defmethod find-exits ((finder exit-finder) (ast walker:go-form))
   (list ast))
 
-(defmethod find-exits ((finder exit-finder) (ast walker-plus:multiple-value-bind-form))
-  (find-exits-forms-list finder ast (cons (walker:form-values ast) (walker:form-body ast))))
+;; MULTIPLE-VALUE-BIND-FORM is handled by the fallback method.
 
 (defmethod find-exits ((finder exit-finder) (ast walker-plus:values-form))
+  ;; VALUES-FORM cannot be handled by the fallback method, because #'A.
   (find-exits-forms-list finder ast (walker:form-values ast)))
 
-(defmethod find-exits ((finder exit-finder) (ast walker-plus:nth-value-form))
-  (find-exits-forms-list finder ast (list (walker:form-value ast) (walker:form-values ast))))
+;; NTH-VALUE-FORM is handled by the fallback method.
 
-;;TODO: (defmethod find-exits ((finder exit-finder) (ast walker-plus:defun-form)))
+(defmethod find-exits ((finder exit-finder) (ast walker-plus:defun-form))
+  (error "TODO"))
 
 (defmethod find-exits ((finder exit-finder) (ast walker-plus:funcall-form))
   (let ((arguments (walker:form-arguments ast)))
@@ -1762,7 +1769,8 @@ Returns the list of exits of AST's last form, or NIL if this form cannot ever be
       (t
        (error "TODO")))))
 
-;;TODO: (defmethod find-exits ((finder exit-finder) (ast walker-plus:assert-form)))
+(defmethod find-exits ((finder exit-finder) (ast walker-plus:assert-form))
+  (error "TODO"))
 
 ;; TEST FIND-EXITS
 
@@ -1883,6 +1891,8 @@ Returns the list of exits of AST's last form, or NIL if this form cannot ever be
     (assert-find-exit '(nth-value 1 (values 1 (capture a 2))) '(a))
     (assert-find-exit '(nth-value (capture a (go a)) (capture b (values 1 2))) '(a) '(b))
     (assert-find-exit '(nth-value 1 (values 1 (capture a (go a)))) '(a))
+    (assert-find-exit '(multiple-value-prog1 (capture a (go a)) (capture b (go b))) '(a) '(b))
+    (assert-find-exit '(multiple-value-prog1 1 (capture a (go a))) '(a))
     ))
 
 (test-find-exits)
