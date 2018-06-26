@@ -1479,7 +1479,7 @@ ROUNDS=0 only parses and annotates the FORM, but doesn't do any type inference r
 
 (defclass exit-finder ()
   ((callstack :initarg :callstack :initform nil :accessor finder-callstack :documentation "A call stack used to abort recursive APPLICATION-FORMs.")
-   (orderer :initform (make-instance 'exit-finder-orderer) :initarg :parser :reader finder-orderer)
+   (orderer :initform (make-instance 'exit-finder-orderer) :initarg :orderer :reader finder-orderer)
    (warn-dead-p :initarg :warn-dead-p :initform nil :accessor finder-warn-dead-p :documentation "Whether to show dead form warnings or not (which is the default).")
    (application-form-substitute-p :initarg :application-form-substitute-p :initform nil :accessor finder-application-form-substitute-p :documentation "Whether to substitute in the finding of exit forms for APPLICATION-FORMs their FUN-BINDING or not.")))
 
@@ -1927,14 +1927,14 @@ Returns the list of exits of AST's last form, or NIL if this form cannot ever be
 
 ;;; FIND VAR-READINGs and VAR-WRITINGs
 
-(defclass accesses-orderer (walker:orderer)
+(defclass accesses-finder-orderer (walker:orderer)
   ()
   (:documentation "The orderer omitting some accessors of forms to determine the variable accesses."))
 
 (defclass accesses-finder ()
   ((exit-finder :initarg :exit-finder :initform (make-instance 'exit-finder) :accessor finder-exit-finder :documentation "The exit-finder used to compute dead and alive forms.")
    (callstack :initarg :callstack :initform nil :accessor finder-callstack :documentation "A call stack used to abort recursive APPLICATION-FORMs.")
-   (orderer :initform (make-instance 'accesses-orderer) :initarg :parser :reader finder-orderer)))
+   (orderer :initform (make-instance 'accesses-finder-orderer) :initarg :orderer :reader finder-orderer)))
 
 (defgeneric find-accesses (finder ast)
   (:documentation "Return two values: the list of read variables defined outside AST that determine the evaluation (computation) of AST, and the list of written variables defined outside AST that are changed as a result of evaluating AST.
@@ -2072,7 +2072,7 @@ Returns two values, namely READ0 and WRITTEN0"
 	   (return-values read written)))))))
 
 ;; FUN-BINDINGS-MIXIN is handled by the fallback method.
-(defmethod walker:eval-order ((orderer accesses-orderer) (ast walker:fun-bindings-mixin))
+(defmethod walker:eval-order ((orderer accesses-finder-orderer) (ast walker:fun-bindings-mixin))
   `(,#'walker:form-body))
 
 ;; LET-FORM and LET*-FORM are handled by VAR-BINDINGS-MIXIN.
@@ -2266,7 +2266,7 @@ Returns two values, namely READ0 and WRITTEN0"
 (defclass last-setqs-finder ()
   ((callstack :initform nil :initarg :callstack :accessor finder-callstack :documentation "The call stack used to handle recursive functions in #'LAST-SETQS.")
    (tags :initform nil :initarg :tags :accessor finder-tags :documentation "An alist with CAR holding a TAG and CDR the list of VAR-WRITINGs or VAR-BINDINGs that may have been evaluated when the given TAG is reached.")
-   (orderer :initform (make-instance 'last-setqs-orderer) :initarg :parser :reader finder-orderer)
+   (orderer :initform (make-instance 'last-setqs-orderer) :initarg :orderer :reader finder-orderer)
    (parser :initform (make-instance 'walker-plus:parser-plus) :initarg :parser :reader finder-parser)
    (exit-finder :initform (make-instance 'exit-finder) :initarg :exit-finder :reader finder-exit-finder)))
 
