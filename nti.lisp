@@ -1551,7 +1551,20 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
 	     (setf warn-only t))))
     exits))
 
-;; Forms (in the same order as exported from packages WALKER and WALKER-PLUS)
+;; LAMBDA LISTS (in the same order as exported from packages WALKER and WALKER-PLUS). These are not needed as helpers for #'FIND-EXITS, but to determine exits for #'LAST-SETQ.
+
+(defmethod find-exits ((finder exit-finder) (ast walker:argument))
+  ;; The returned value must not be NIL, otherwise #'LAST-SETQS on ORDINARY-LLIST cannot find normal exits for REQUIRED-ARGUMENT, and returns prematurely.
+  (list ast))
+
+(defmethod find-exits ((finder exit-finder) (ast walker:argument-init-mixin))
+  (find-exits finder (walker:argument-init ast)))
+
+(defmethod find-exits ((finder exit-finder) (ast walker:ordinary-llist))
+  (let ((init-args (append (walker:llist-optional ast) (walker:llist-key ast) (walker:llist-aux ast))))
+    (find-exits-forms-list finder ast (mapcar #'walker:argument-init init-args))))
+
+;; FORMS (in the same order as exported from packages WALKER and WALKER-PLUS)
 
 (defmethod find-exits ((finder exit-finder) (ast walker:var-reading))
   (list ast))
@@ -2261,9 +2274,6 @@ Returns two values, namely READ0 and WRITTEN0"
   ()
   (:documentation "The orderer omitting some accessors of forms to determine the last SETQ"))
 
-(defmethod walker:eval-order ((orderer last-setqs-orderer) (ast walker:fun-bindings-mixin))
-  `(,#'walker:form-body))
-
 (defun conc-setqs (&rest setqs-list)
   "Return the last non-NIL element out of SETQS-LIST."
   (loop for setqs in (reverse setqs-list) do
@@ -2271,7 +2281,54 @@ Returns two values, namely READ0 and WRITTEN0"
 	 (return-from conc-setqs setqs)))
   nil)
 
+(defmacro last-setqs-form! (finder form var last-setqs &body no-normal-exits-forms)
+  "Assuming that LAST-SETQS is the list of the definition or the last SETQs of VAR, determine the list of the definition or last SETQs after the form FORM is executed, and update LAST-SETQS.
+If FORM did not have a normal exit, evaluate NO-NORMAL-EXITS-FORMS.
+Returns the updated LAST-SETQS."
+  (declare (type symbol finder var last-setqs))
+  (let ((last-setqs1-sym (gensym "LAST-SETQS1")))
+    `(with-exits (last-setqs ,finder ,form ,var ,last-setqs) (,last-setqs1-sym)
+	 (progn
+	   (setf ,last-setqs ,last-setqs1-sym)
+	   ,@no-normal-exits-forms)
+       (setf ,last-setqs ,last-setqs1-sym)
+       ,last-setqs)))
+
+(defun last-setqs-forms-list (finder forms-list var last-setqs)
+  "Assuming that LAST-SETQS is the list of the definition or the last SETQs of VAR, determine the list of the definition or last SETQs after the list of forms FORMS-LIST are executed and return two values: the updated LAST-SETQS, and a boolean indicating whether the last form in FORMS-LIST had normal exits."
+  (loop for form in forms-list do
+       (last-setqs-form! finder form var last-setqs
+	 (return (values last-setqs nil)))
+     finally (return (values last-setqs t))))
+
+(defmacro last-setqs-forms-list! (finder forms-list var last-setqs &body no-normal-exits-forms)
+  "Updates the list of the declaration of VAR or SETQs done previously, LAST-SETQS, with the last SETQs done by the forms in FORMS-LIST.
+If the last form in FORMS-LIST did not exit normally, execute NO-NORMAL-EXITS-FORMS.
+Returns the updated LAST-SETQS."
+  (declare (type symbol finder var last-setqs))
+  (let ((last-setqs1-sym (gensym "LAST-SETQS1"))
+	(no-normal-exits-sym (gensym "NO-NORMAL-EXITS")))
+    `(multiple-value-bind (,last-setqs1-sym ,no-normal-exits-sym)
+	 (last-setqs-forms-list ,finder ,forms-list ,var ,last-setqs)
+       (unless ,no-normal-exits-sym
+	 ,@no-normal-exits-forms)
+       (setf ,last-setqs ,last-setqs1-sym)
+       ,last-setqs)))
+
+(defmethod last-setqs ((finder last-setqs-finder) ast var last-setqs)
+  "This is the fallback method of #'LAST-SETQS."
+  (loop for accessor in (walker:eval-order (finder-orderer finder) ast) do
+       (cond
+	 ((eql accessor #'walker:form-body)
+	  (last-setqs-forms-list! finder (walker:form-body ast) var last-setqs
+	    (return last-setqs)))
+	 (t
+	  (last-setqs-form! finder (funcall accessor ast) var last-setqs
+	    (return last-setqs))))
+     finally (return last-setqs)))
+
 (defmethod last-setqs ((finder last-setqs-finder) (ast walker:setq-form) var last-setqs)
+  ;; Note that this method is the only method that "forgets" old last setqs stored in LAST-SETQS.
   (dolist (var-writing (walker:form-vars ast))
     (setf last-setqs
 	  (let ((value-setqs (last-setqs finder (walker:form-value var-writing) var last-setqs)))
@@ -2281,20 +2338,22 @@ Returns two values, namely READ0 and WRITTEN0"
   last-setqs)
 
 (defmethod last-setqs ((finder last-setqs-finder) (ast walker:if-form) var last-setqs)
-  (let* ((test-setqs (last-setqs finder (walker:form-test ast) var last-setqs))
-	 (then-setqs (last-setqs finder (walker:form-then ast) var test-setqs))
+  (last-setqs-form! finder (walker:form-test ast) var last-setqs
+    (return-from last-setqs last-setqs))
+  (let* ((then-setqs (last-setqs finder (walker:form-then ast) var last-setqs))
 	 (else-setqs (if (walker:form-else ast)
-			 (last-setqs finder (walker:form-else ast) var test-setqs)
-			 test-setqs)))
+			 (last-setqs finder (walker:form-else ast) var last-setqs)
+			 last-setqs)))
     (vars-union then-setqs else-setqs))) ;TODO: rename #'VARS-UNION since it doesn't have anything to do with "VARS" here.
 
 (defmethod last-setqs ((finder last-setqs-finder) (ast walker:var-bindings-mixin) var last-setqs)
-  (loop for binding in (walker:form-bindings ast) do
-       (when (eql (walker:form-var var) (walker:form-sym binding))
-	 (setf last-setqs (conc-setqs last-setqs (list binding)))))
-  (loop for form in (walker:form-body ast) do
-       (setf last-setqs (last-setqs finder form var last-setqs)))
-  last-setqs)
+  (let ((definition nil))
+    ;; find last definition
+    (loop for binding in (walker:form-bindings ast) do
+	 (when (eql (walker:form-var var) (walker:form-sym binding))
+	   (setf definition binding)))
+    (setf last-setqs (conc-setqs last-setqs (list definition))))
+  (last-setqs-forms-list! finder (walker:form-body ast) var last-setqs))
 
 (defmethod last-setqs ((finder last-setqs-finder) (ast walker:application-form) var last-setqs)
   (declare (optimize (debug 3)))
@@ -2312,13 +2371,20 @@ Returns two values, namely READ0 and WRITTEN0"
 	    (alist (walker-plus:arguments-assign-to-lambda-list parser llist args)))
        (loop for acons in alist do
 	  ;; TODO: when implementing variable (value) bindings: bind result to (CAR ACONS).
-	    (setf last-setqs (last-setqs finder (cdr acons) var last-setqs)))
-       (loop for form in (walker:form-body fun-binding) do
-	    (setf last-setqs (last-setqs finder form var last-setqs))))
+	    (let ((initform (cdr acons)))
+	      (last-setqs-form! finder initform var last-setqs
+		(pop (finder-callstack finder))
+		(return-from last-setqs last-setqs))))
+       (last-setqs-forms-list! finder (walker:form-body fun-binding) var last-setqs))
      (pop (finder-callstack finder))
      last-setqs)))
 
+;; FLET-FORM and LABELS-FORM are handled by FUN-BINDINGS-MIXIN.
+(defmethod walker:eval-order ((orderer last-setqs-orderer) (ast walker:fun-bindings-mixin))
+  `(,#'walker:form-body))
+
 (defmethod last-setqs ((finder last-setqs-finder) (ast walker:tagbody-form) var last-setqs)
+  ;; TODO: couldn't I get rid of slot (FINDER-TAGS FINDER) by using the FORM-EXITS passed to #'FORM-FUNCTION by #'VISIT-TAGBODY-FORM-EXITS? #'LAST-SETQS is called in #'FORM-FUNCTION. In that call, a GO-FORM could store its last setqs by appending to its passed LAST-SETQS variable an alist (TAG . LAST-SETQS) and returning that updated LAST-SETQS. Then, in #'FORM-FUNCTION, if FORM-EXITS is a GO-FORM, I could retrieve the last setqs up to that GO-FORM by inspecting the last setqs returned by #'LAST-SETQS. GO-FORMs that do not belong to the current TAGBODY-FORM (i.e. AST) could pass their stored LAST-SETQS by returning their stored alists in the LAST-SETQs returned by the current #'LAST-SETQS. This would mean that #'LAST-SETQS may hold either variable VAR-BINDINGs, VAR-WRITINGs, or alists consisting of (TAG . TAG-LAST-SETQS), where TAG-LAST-SETQS may itself contain VAR-BINDINGS, VAR-WRITINGS, or TAG-alists.
   (let ((old-tags (finder-tags finder))) ;note that although slot TAGS is saved here, the alists within it may still be modified by GO-FORMs within #'VISIT
     (loop for tag in (walker:form-tags ast) do
 	 (setf (finder-tags finder) (acons tag nil (finder-tags finder))))
@@ -2369,7 +2435,8 @@ Returns two values, namely READ0 and WRITTEN0"
 
 (macrolet ((init-form ()
 	     `(let* ((init (walker:argument-init ast)))
-		(when init (setf last-setqs (last-setqs finder init var last-setqs)))))
+		(when init (last-setqs-form! finder init var last-setqs
+			     (return-from last-setqs last-setqs)))))
 	   (var-form (argument-type)
 	     (assert (and (consp argument-type) (eql (car argument-type) 'quote) (symbolp (cadr argument-type))))
 	     `(when (eql (walker:form-var var) (walker:argument-var ast))
@@ -2395,30 +2462,18 @@ Returns two values, namely READ0 and WRITTEN0"
     last-setqs))
 
 (defmethod last-setqs ((finder last-setqs-finder) (ast walker:ordinary-llist) var last-setqs)
-  (loop for arg in (walker:llist-required ast) do
-       (setf last-setqs (last-setqs finder arg var last-setqs)))
-  (loop for arg in (walker:llist-optional ast) do
-       (setf last-setqs (last-setqs finder arg var last-setqs)))
-  (when (walker:llist-rest ast)
-    (setf last-setqs (last-setqs finder (walker:llist-rest ast) var last-setqs)))
-  (loop for arg in (walker:llist-key ast) do
-       (setf last-setqs (last-setqs finder arg var last-setqs)))
-  (loop for arg in (walker:llist-aux ast) do
-       (setf last-setqs (last-setqs finder arg var last-setqs)))
+  (flet ((process (arg-list)
+	   (loop for arg in arg-list do
+		(last-setqs-form! finder arg var last-setqs
+		  (return-from last-setqs last-setqs)))))
+    (process (walker:llist-required ast))
+    (process (walker:llist-optional ast))
+    (when (walker:llist-rest ast) (last-setqs-form! finder (walker:llist-rest ast) var last-setqs))
+    (process (walker:llist-key ast))
+    (process (walker:llist-aux ast)))
   last-setqs)
 
 ;; HIER WEITER
-
-(defmethod last-setqs ((finder last-setqs-finder) ast var last-setqs)
-  "This is the fallback method of #'LAST-SETQS."
-  (loop for accessor in (walker:eval-order (finder-orderer finder) ast) do
-       (cond
-	 ((eql accessor #'walker:form-body)
-	  (loop for form in (walker:form-body ast) do
-	       (setf last-setqs (last-setqs finder form var last-setqs))))
-	 (t
-	  (setf last-setqs (last-setqs finder (funcall accessor ast) var last-setqs)))))
-  last-setqs)
 
 (defmethod last-setqs ((finder last-setqs-finder) (ast walker:var-reading) var last-setqs)
   (if (eql var ast)
@@ -2466,6 +2521,7 @@ Returns two values, namely READ0 and WRITTEN0"
 		  (actual-last-setqs (remove-duplicates (mapcar #'walker:form-object (mapcar #'walker:form-value last-setqs)))))
 	     (assert (equal actual-last-setqs desired-last-setqs) () "TEST-LAST-SETQS for form~%~S~%expected ~S,~%but got  ~S~%" form desired-last-setqs actual-last-setqs)))
 	 (assert-argument (form desired-argument desired-argument-varp desired-last-setqs)
+	   "Check that #'LAST-SETQS returns DESIRED-ARGUMENT-VARP as definition of capture VAR."
 	   (let* ((last-setqs (test-last-setqs-form form :warn-multiple-captures nil))
 		  (arguments (remove-if (lambda (x) (not (typep x 'argument))) last-setqs))
 		  (non-arguments (remove-if (lambda (x) (typep x 'argument)) last-setqs))
