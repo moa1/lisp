@@ -2789,9 +2789,14 @@ Returns the updated LAST-SETQS."
 
 ;;; TEST INFER THE FORWARD PASS.
 
+(defun make-fwd-inferer ()
+  (let* ((exit-finder (make-instance 'exit-finder :application-form-substitute-p t))
+	 (last-setqs-finder (make-instance 'last-setqs-finder :exit-finder exit-finder)))
+    (make-instance 'fwd-inferer :exit-finder exit-finder :last-setqs-finder last-setqs-finder)))
+
 (defun test-fwd-infer-form (form)
   (let* ((ast (ntiparse form))
-	 (fwd-inferer (make-instance 'fwd-inferer)))
+	 (fwd-inferer (make-fwd-inferer)))
     (fwd-infer fwd-inferer ast)
     (annotate ast)))
 
@@ -2800,7 +2805,7 @@ Returns the updated LAST-SETQS."
 (defun test-fwd-infer ()
   (flet ((assert-result (form desired-upper)
 	   (let* ((ast (ntiparse form))
-		  (actual-bounds (fwd-infer (make-instance 'fwd-inferer) ast))
+		  (actual-bounds (fwd-infer (make-fwd-inferer) ast))
 		  (actual-upper (loop for i below (length desired-upper) collect
 				     (resultn (bounds-upper actual-bounds) i))))
 	     (assert (equal desired-upper actual-upper) () "form ~S~%yielded actual upper ~S,~%but desired upper ~S~%"
