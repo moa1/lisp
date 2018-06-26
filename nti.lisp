@@ -1749,7 +1749,7 @@ Returns the list of exits of AST's last form, or NIL if this form cannot ever be
 ;; MULTIPLE-VALUE-BIND-FORM is handled by the fallback method.
 
 (defmethod find-exits ((finder exit-finder) (ast walker-plus:values-form))
-  ;; VALUES-FORM cannot be handled by the fallback method, because #'A.
+  ;; VALUES-FORM cannot be handled by the fallback method, because (WALKER:FORM-VALUES AST) is a list.
   (find-exits-forms-list finder ast (walker:form-values ast)))
 
 ;; NTH-VALUE-FORM is handled by the fallback method.
@@ -1933,7 +1933,7 @@ An example where this occurs is (+ (SETQ A 2) A). We want A to only be in the li
       (values exits read0 written0))))
 
 (defmacro find-accesses-form! (finder read0 written0 form)
-  "Updates the list of already read and already written variables, READ0 and WRITTEN0, with the variable accesses done by FORM."
+  "Updates the list of already read and written variables, READ0 and WRITTEN0, with the variable accesses done by FORM."
   (declare (type (or symbol cons) read0 written0)) ;may also be accessors
   (let ((read1-sym (gensym "READ1"))
 	(written1-sym (gensym "WRITTEN1"))
@@ -1954,7 +1954,7 @@ An example where this occurs is (+ (SETQ A 2) A). We want A to only be in the li
     (values exits read0 written0)))
 
 (defmacro find-accesses-forms-list! (finder read0 written0 forms-list)
-  "Updates the list of already read and already written variables, READ0 and WRITTEN0, with the variable accesses done by FORMS-LIST."
+  "Updates the list of already read and written variables, READ0 and WRITTEN0, with the variable accesses done by FORMS-LIST."
   (declare (type (or symbol cons) read0 written0)) ;may also be accessors
   (let ((exits-sym (gensym "EXITS"))
 	(read1-sym (gensym "READ1"))
@@ -1982,7 +1982,7 @@ An example where this occurs is (+ (SETQ A 2) A). We want A to only be in the li
   (values nil nil))
 
 (defmethod find-accesses ((finder accesses-finder) ast)
-  "The fallback method of #'FIND-ACCESSES."
+  "This is the fallback method of #'FIND-ACCESSES."
   (let ((read nil)
 	(written nil))
     (loop for accessor in (walker:eval-order (finder-orderer finder) ast) do
@@ -2402,6 +2402,7 @@ An example where this occurs is (+ (SETQ A 2) A). We want A to only be in the li
 ;; HIER WEITER
 
 (defmethod last-setqs ((finder last-setqs-finder) ast var last-setqs)
+  "This is the fallback method of #'LAST-SETQS."
   (loop for accessor in (walker:eval-order (finder-orderer finder) ast) do
        (cond
 	 ((eql accessor #'walker:form-body)
@@ -2568,13 +2569,7 @@ An example where this occurs is (+ (SETQ A 2) A). We want A to only be in the li
   (bounds-of-var-reading fwd-inferer ast))
 
 (defun bounds-of-object (object)
-  (let* ((type (etypecase (walker:form-object object)
-		 (fixnum 'fixnum)
-		 (float 'single-float)
-		 (null 'null)
-		 (boolean 'boolean) ;must be after NULL
-		 (symbol 'symbol)
-		 (t t)))
+  (let* ((type (type-of-object (walker:form-object object)))
 	 (upper (make-results type))
 	 (lower (make-results type)))
     (make-bounds upper lower)))
