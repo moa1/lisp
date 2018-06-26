@@ -1897,6 +1897,21 @@ Returns the list of exits of AST's last form, or NIL if this form cannot ever be
 
 (test-find-exits)
 
+(defmacro with-exits ((function finder form &rest args) result-symbols no-normal-exits-form &body body)
+  "Calls (FUNCTION FINDER FORM ,@ARGS) and binds its multiple return values to the variable list RESULT-SYMBOLS. If FORM has no normal exits (as determined by the call (FIND-EXITS (FINDER-EXIT-FINDER FINDER) FORM)), execute NO-NORMAL-EXITS-FORM. Then the forms BODY are executed (irrespectively of the types of exits)."
+  (declare (type symbol function))
+  (loop for rs in result-symbols do
+       (assert (typep rs 'symbol)))
+  (let ((finder-sym (gensym "FINDER"))
+	(form-sym (gensym "FORM")))
+    `(let* ((,finder-sym ,finder)
+	    (,form-sym ,form))
+       (block nil
+	 (multiple-value-bind (,@result-symbols) (,function ,finder-sym ,form-sym ,@args)
+	   (unless (normal-exits (find-exits (finder-exit-finder ,finder-sym) ,form-sym))
+	     ,no-normal-exits-form)
+	   ,@body)))))
+
 ;;; FIND VAR-READINGs and VAR-WRITINGs
 
 (defclass accesses-orderer (walker:orderer)
@@ -1921,57 +1936,57 @@ An example where this occurs is (+ (SETQ A 2) A). We want A to only be in the li
 			     (nvars-difference ,read1 ,written0))
 	 ,written0 (nvars-union ,written0 ,written1)))
 
-(defun find-accesses-form (finder read0 written0 form)
+(defun find-accesses-form (finder form read0 written0)
   "Assuming that READ0 and WRITTEN0 are the lists of variables already read and written, determine the list of read and written variables after FORM is executed and return the updated lists. Also return the exits of FORM."
-  (declare (type list read0 written0)
-	   (type accesses-finder finder)
+  (declare (type accesses-finder finder)
+	   (type list read0 written0)
 	   (type (or walker:form walker:var-writing) form))
   ;; a jumping exit within FORM will exclude the following forms from being evaluated.
   (multiple-value-bind (read1 written1) (find-accesses finder form)
-    (let ((exits (find-exits (finder-exit-finder finder) form)))
-      (find-accesses-update! read0 written0 read1 written1)
-      (values exits read0 written0))))
+    (find-accesses-update! read0 written0 read1 written1)
+    (values read0 written0)))
 
-(defmacro find-accesses-form! (finder read0 written0 form)
+(defmacro find-accesses-form! (finder form read0 written0 &body no-normal-exits-forms)
   "Updates the list of already read and written variables, READ0 and WRITTEN0, with the variable accesses done by FORM."
-  (declare (type (or symbol cons) read0 written0)) ;may also be accessors
+  (declare (type symbol read0 written0))
+  (let ((read1-sym (gensym "READ1"))
+	(written1-sym (gensym "WRITTEN1")))
+    `(with-exits (find-accesses-form ,finder ,form ,read0 ,written0) (,read1-sym ,written1-sym)
+	 (progn
+	   (setf ,read0 ,read1-sym ,written0 ,written1-sym)
+	   (progn ,@no-normal-exits-forms))
+       (setf ,read0 ,read1-sym ,written0 ,written1-sym)
+       (values ,read0 ,written0))))
+
+(defun find-accesses-forms-list (finder forms-list read0 written0)
+  "Assuming that READ0 and WRITTEN0 are the lists of variables already read and written, determine the list of read and written variables after the list of forms FORMS-LIST are executed and return three values: the updated READ0 and WRITTEN0 lists, and a boolean indicating whether the last form in FORMS-LIST had normal exits."
+  (loop for form in forms-list do
+       (find-accesses-form! finder form read0 written0
+	 (return-from find-accesses-forms-list (values read0 written0 nil))))
+  (values read0 written0 t))
+
+(defmacro find-accesses-forms-list! (finder forms-list read0 written0 &body no-normal-exits-forms)
+  "Updates the list of already read and written variables, READ0 and WRITTEN0, with the variable accesses done by the forms in FORMS-LIST.
+If the last form in FORMS-LIST did not exit normally, execute NO-NORMAL-EXITS-FORMS.
+Returns two values, namely READ0 and WRITTEN0"
+  (declare (type symbol read0 written0))
   (let ((read1-sym (gensym "READ1"))
 	(written1-sym (gensym "WRITTEN1"))
-	(exits-sym (gensym "EXITS")))
-    `(multiple-value-bind (,exits-sym ,read1-sym ,written1-sym)
-	 (find-accesses-form ,finder ,read0 ,written0 ,form)
-       (setf ,read0 ,read1-sym
-	     ,written0 ,written1-sym)
-       (values ,exits-sym ,read0 ,written0))))
-
-(defun find-accesses-forms-list (finder read0 written0 forms-list)
-  "Assuming that READ0 and WRITTEN0 are the lists of variables already read and written, determine the list of read and written variables after the list of forms FORMS-LIST are executed and return the updated lists."
-  (let (exits)
-    (loop for form in forms-list do
-	 (setq exits (find-accesses-form! finder read0 written0 form))
-	 (unless (normal-exits exits)
-	   (return-from find-accesses-forms-list (values exits read0 written0))))
-    (values exits read0 written0)))
-
-(defmacro find-accesses-forms-list! (finder read0 written0 forms-list)
-  "Updates the list of already read and written variables, READ0 and WRITTEN0, with the variable accesses done by FORMS-LIST."
-  (declare (type (or symbol cons) read0 written0)) ;may also be accessors
-  (let ((exits-sym (gensym "EXITS"))
-	(read1-sym (gensym "READ1"))
-	(written1-sym (gensym "WRITTEN1")))
-    `(multiple-value-bind (,exits-sym ,read1-sym ,written1-sym)
-	 (find-accesses-forms-list ,finder ,read0 ,written0 ,forms-list)
-       (setf ,read0 ,read1-sym
-	     ,written0 ,written1-sym)
-       (values ,exits-sym ,read0 ,written0))))
-
-(defmacro no-exits (find-accesses-forms-list-values)
-  (let ((exits-sym (gensym "EXITS"))
-	(read0-sym (gensym "READ0"))
-	(written0-sym (gensym "WRITTEN0")))
-    `(multiple-value-bind (,exits-sym ,read0-sym ,written0-sym) ,find-accesses-forms-list-values
-       (declare (ignore ,exits-sym))
-       (values ,read0-sym ,written0-sym))))
+	(normal-exits-sym (gensym "NORMAL-EXITS"))
+	(nil-var (when (null read0)
+		   (assert (null written0))
+		   (setf read0 (gensym "READ0") written0 (gensym "WRITTEN0"))
+		   t)))
+    `(let (,@(when nil-var
+	       `((,read0 nil)
+		 (,written0 nil))))
+       (multiple-value-bind (,read1-sym ,written1-sym ,normal-exits-sym)
+	   (find-accesses-forms-list ,finder ,forms-list ,read0 ,written0)
+	 (setf ,read0 ,read1-sym
+	       ,written0 ,written1-sym)
+	 (unless ,normal-exits-sym
+	   ,@no-normal-exits-forms)
+	 (values ,read0 ,written0)))))
 
 ;; Forms (in the same order as exported from packages WALKER and WALKER-PLUS)
 
@@ -1985,14 +2000,16 @@ An example where this occurs is (+ (SETQ A 2) A). We want A to only be in the li
   "This is the fallback method of #'FIND-ACCESSES."
   (let ((read nil)
 	(written nil))
-    (loop for accessor in (walker:eval-order (finder-orderer finder) ast) do
-	 (cond
-	   ((eql accessor #'walker:form-body)
-	    (unless (normal-exits (find-accesses-forms-list! finder read written (walker:form-body ast)))
-	      (return (values read written))))
-	   (t
-	    (unless (normal-exits (find-accesses-form! finder read written (funcall accessor ast)))
-	      (return (values read written)))))
+    (loop for accessor-cdr on (walker:eval-order (finder-orderer finder) ast) do
+	 (let ((accessor (car accessor-cdr)))
+	   (cond
+	     ((eql accessor #'walker:form-body)
+	      (assert (null (cdr accessor-cdr)) () "FORM-BODY must be the last accessor, but it is ~S" accessor-cdr)
+	      (find-accesses-forms-list! finder (walker:form-body ast) read written
+		(return (values read written))))
+	     (t
+	      (find-accesses-form! finder (funcall accessor ast) read written
+		(return (values read written))))))
        finally (return (values read written)))))
 
 (defmethod find-accesses ((finder accesses-finder) (ast walker:function-form))
@@ -2003,22 +2020,20 @@ An example where this occurs is (+ (SETQ A 2) A). We want A to only be in the li
 (defmethod find-accesses ((finder accesses-finder) (ast walker:var-bindings-mixin))
   (let ((init-values (loop for binding in (walker:form-bindings ast) collect
 			  (let ((value (walker:form-value binding)))
-			    (if (null value) (walker:make-nil binding) value)))))
-    (multiple-value-bind (exits read written) (find-accesses-forms-list finder nil nil init-values)
-      (cond
-	((normal-exits exits)
-	 (find-accesses-forms-list! finder read written (walker:form-body ast))
-	 (let ((init-vars (mapcar #'walker:form-sym (walker:form-bindings ast))))
-	   (values (vars-difference read init-vars :key1 #'walker:form-var)
-		   (vars-difference written init-vars :key1 #'walker:form-var))))
-	(t
-	 (values read written))))))
+			    (if (null value) (walker:make-nil binding) value))))
+	(read nil)
+	(written nil))
+    (find-accesses-forms-list! finder init-values read written
+      (return-from find-accesses (values read written)))
+    (find-accesses-forms-list! finder (walker:form-body ast) read written)
+    (let ((init-vars (mapcar #'walker:form-sym (walker:form-bindings ast))))
+      (values (vars-difference read init-vars :key1 #'walker:form-var)
+	      (vars-difference written init-vars :key1 #'walker:form-var)))))
 
 ;; this is analogous to #'FIND-EXITS-FUNCTIONDEF.
 (defun find-accesses-functiondef (finder funbinding arguments)
   (declare (type accesses-finder finder))
-  (let ((callstack (finder-callstack finder))
-	(exit-finder (finder-exit-finder finder)))
+  (let ((callstack (finder-callstack finder)))
     (cond
       ((find funbinding callstack)
        nil) ;this is a recursive call(-loop) of(between) function(s)
@@ -2035,12 +2050,11 @@ An example where this occurs is (+ (SETQ A 2) A). We want A to only be in the li
 			 (written0 (vars-difference written arg-vars :key1 #'walker:form-var)))
 		    (return-from find-accesses-functiondef (values read0 written0)))))
 	   (loop for acons in arg-alist for acons-rest on arg-alist do
-		(let* ((form (cdr acons))
-		       (form-exits (find-exits exit-finder form)))
-		  (find-accesses-form! finder read written form)
-		  (unless (normal-exits form-exits)
+		(let* ((form (cdr acons)))
+		  (find-accesses-form! finder form read written
+		    (pop (finder-callstack finder))
 		    (return-values read written))))
-	   (find-accesses-forms-list! finder read written (walker:form-body funbinding))
+	   (find-accesses-forms-list! finder (walker:form-body funbinding) read written)
 	   (pop (finder-callstack finder))
 	   (return-values read written)))))))
 
@@ -2064,22 +2078,19 @@ An example where this occurs is (+ (SETQ A 2) A). We want A to only be in the li
 
 (defmethod find-accesses ((finder accesses-finder) (ast walker:if-form))
   (let* ((read nil)
-	 (written nil)
-	 (test-exits (find-accesses-form! finder read written (walker:form-test ast))))
-    (cond
-      ((null (normal-exits test-exits))
-       (values read written))
-      (t
-       (find-accesses-form! finder read written (walker:form-then ast))
-       (when (walker:form-else ast) (find-accesses-form! finder read written (walker:form-else ast)))
-       (values read written)))))
+	 (written nil))
+    (find-accesses-form! finder (walker:form-test ast) read written
+      (return (values read written)))
+    (find-accesses-form! finder (walker:form-then ast) read written)
+    (when (walker:form-else ast) (find-accesses-form! finder (walker:form-else ast) read written))
+    (values read written)))
 
 (defmethod find-accesses ((finder accesses-finder) (ast walker:var-writing))
   (multiple-value-bind (read written) (find-accesses finder (walker:form-value ast))
     (values read (vars-union written (list ast)))))
 
 (defmethod find-accesses ((finder accesses-finder) (ast walker:setq-form))
-  (no-exits (find-accesses-forms-list finder nil nil (walker:form-vars ast))))
+  (find-accesses-forms-list! finder (walker:form-vars ast) nil nil))
 
 ;; CATCH-FORM and THROW-FORM are handled by the fallback method.
 
@@ -2121,7 +2132,7 @@ An example where this occurs is (+ (SETQ A 2) A). We want A to only be in the li
 	(written nil))
     (flet ((form-function (form form-exits)
 	     (declare (ignore form-exits))
-	     (find-accesses-form! finder read written form)))
+	     (find-accesses-form! finder form read written)))
       (visit-tagbody-form-exits exit-finder ast #'form-function))
     (values read written)))
 
@@ -2131,23 +2142,20 @@ An example where this occurs is (+ (SETQ A 2) A). We want A to only be in the li
 (defmethod find-accesses ((finder accesses-finder) (ast walker-plus:multiple-value-bind-form))
   (let ((read0 nil)
 	(written0 nil))
-    (let ((exits0 (find-accesses-form! finder read0 written0 (walker:form-values ast))))
-      (cond
-	((null (normal-exits exits0))
-	 (values read0 written0))
-	(t
-	 (multiple-value-bind (exits1 read1 written1)
-	     (find-accesses-forms-list finder nil nil (walker:form-body ast))
-	   (declare (ignore exits1))
-	   (let ((locals (mapcar #'walker:form-var (walker:form-vars ast))))
-	     (values (vars-union read0
-				 (vars-difference read1 locals :key1 #'walker:form-var))
-		     (vars-union written0
-				 (vars-difference written1 locals :key1 #'walker:form-var))))))))))
+    (find-accesses-form! finder (walker:form-values ast) read0 written0
+      (return-from find-accesses (values read0 written0)))
+    (let ((read1 nil)
+	  (written1 nil))
+      (find-accesses-forms-list! finder (walker:form-body ast) read1 written1)
+      (let ((locals (mapcar #'walker:form-var (walker:form-vars ast))))
+	(values (vars-union read0
+			    (vars-difference read1 locals :key1 #'walker:form-var))
+		(vars-union written0
+			    (vars-difference written1 locals :key1 #'walker:form-var)))))))
 
 (defmethod find-accesses ((finder accesses-finder) (ast walker-plus:values-form))
   ;; VALUES-FORM cannot be handled by the fallback method because (WALKER:FORM-VALUES AST) is a list.
-  (no-exits (find-accesses-forms-list finder nil nil (walker:form-values ast))))
+  (find-accesses-forms-list! finder (walker:form-values ast) nil nil))
 
 ;; NTH-VALUE-FORM is handled by the fallback method.
 
