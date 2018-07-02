@@ -127,7 +127,60 @@ LIST1 may be modified."
 
 ;;; BUILT-IN FUNCTIONS
 
-(defparameter +builtin-functions+
+;; BUILT-IN LISP FUNCTIONS
+
+(defparameter +builtin-lisp-functions+
+  '((declare (ftype (function (t) boolean) null))
+    (declare (ftype (function (&rest list) number) +))
+    (declare (ftype (function (number &rest list) number) -))
+    (declare (ftype (function (number) number) 1+ 1-))
+    (declare (ftype (function (&rest list) boolean) = /= < > <= >=))
+    (declare (ftype (function (real &optional real) (values integer real)) floor ceiling truncate round))
+    (declare (ftype (function (real &optional real) (values float real)) ffloor fceiling ftruncate fround)))
+  "The types of built-in Common Lisp functions.")
+
+(defclass builtin-functiondef (walker:functiondef)
+  ((values :initarg :values :accessor walker:form-values :documentation "The type of the return value of the function.")))
+
+(defmethod print-object ((object builtin-functiondef) stream)
+  (print-unreadable-object (object stream :type t :identity t)
+    (format stream "~S ~S ~S ~S" (walker:form-documentation object) (walker:form-llist object) (walker:form-declspecs object) (walker:form-values object))))
+
+(defparameter +abc+ "ABCDEFGHIJKLMNOPQRSTUVWXYZ" "The upper-case english alphabet.")
+
+(defun lookup-builtin-lisp-function (name)
+  (find name +builtin-lisp-functions+ :key #'cddadr :test (lambda (a b) (find a b))))
+
+(defun parse-builtin-lisp-function-decls (name)
+  "Look up the FTYPE declaration of function NAME in +BUILTIN-LISP-FUNCTION+ and return three values: an ordinary lambda list for the function, type declarations for the variables in the lambda list, and the type of the return value of the function, which is normalized to `(VALUES ,TYPE1 [,TYPE2 ... ])."
+  (let* ((def (lookup-builtin-lisp-function name))
+	 (ftype (cadadr def))
+	 (llist-type (cadr ftype))
+	 (values-type (let ((v (caddr ftype)))
+			(if (consp v)
+			    (progn (assert (eql (car v) 'values) () "unknown type ~S" v) v)
+			    (list 'values v))))
+	 (parlist nil)
+	 (decls nil))
+    ;; create parameter list and the parameters' declarations
+    (loop for arg in llist-type for i from 0 do
+	 (cond
+	   ((find arg '(&rest &optional &key &aux))
+	    (decf i) ;so that variable names are not interrupted by &optional and company
+	    (push arg parlist))
+	   (t
+	    (let ((argname (intern (format nil "~A" (elt +abc+ i)))))
+	      (push argname parlist)
+	      (push `(type ,arg ,argname) decls)))))
+    (values (nreverse parlist) `(declare ,@(nreverse decls)) values-type)))
+
+(defun is-builtin-lisp-function (fun)
+  "Return the first builtin function for FUN as defined by +BUILTIN-LISP-FUNCTIONS+, or NIL if FUN is not built in."
+  (lookup-builtin-lisp-function (walker:nso-name fun)))
+
+;; BUILT-IN C FUNCTIONS
+
+(defparameter +builtin-c-functions+
   '(;; functions needed for NTI.
     (null "null_t" (t) (boolean))
     (null "null_null" (null) (boolean))
@@ -255,9 +308,9 @@ LIST1 may be modified."
     (aref "aref_array_fixnum_uint" ((array fixnum) unsigned-byte) (fixnum))
     ))
 
-(defun find-builtin-function (fun-name)
-  "Return the definition of FUN-NAME as defined in +BUILTIN-FUNCTIONS+, or NIL if it's not defined there."
-  (find fun-name +builtin-functions+ :key #'car))
+(defun find-builtin-c-function (fun-name)
+  "Return the definition of FUN-NAME as defined in +BUILTIN-C-FUNCTIONS+, or NIL if it's not defined there."
+  (find fun-name +builtin-c-functions+ :key #'car))
 
 (load "nti-subtypep.lisp")
 
@@ -491,7 +544,7 @@ LIST1 may be modified."
 		 fun))
 	(name-found nil)
 	(possible nil))
-    (loop for (lisp-name c-name fun-arg-types fun-results-types) in +builtin-functions+ do
+    (loop for (lisp-name c-name fun-arg-types fun-results-types) in +builtin-c-functions+ do
 	 ;;(when (eq fun lisp-name) (prind fun arg-types fun-arg-types))
 	 (when (and (eq fun lisp-name)
 		    (setf name-found t)
@@ -521,7 +574,7 @@ LIST1 may be modified."
 		 fun))
 	(name-found nil)
 	(possible nil))
-    (loop for (lisp-name c-name fun-arg-types fun-results-types) in +builtin-functions+ do
+    (loop for (lisp-name c-name fun-arg-types fun-results-types) in +builtin-c-functions+ do
 	 (when (and (eq fun lisp-name)
 		    (setf name-found t)
 		    ;;(equal arg-types fun-arg-types)
@@ -990,7 +1043,7 @@ LIST1 may be modified."
   (assert (typep ast 'walker:application-form))
   (not (or (typep (walker:form-fun ast) 'walker:lambda-form)
 	   (typep (walker:form-fun ast) 'walker:function-form)
-	   (find-builtin-function (walker:nso-name (walker:form-fun ast))))))
+	   (is-builtin-lisp-function (walker:form-fun ast)))))
 
 (defmethod walker:make-ast :around ((parser ntiparser) type &rest arguments)
   (let ((ast (call-next-method)))
@@ -1044,7 +1097,36 @@ Note that e.g. in '(LET ((A 1)) (LABELS ((F (&OPTIONAL (A (SETQ A 2))) (IF 1 (F)
 		    (fix-application-forms fun-binding-ast-copy (cons application-fun callstack))))))))
     (set-fun-binding-slot ast nil)))
 
-(defun ntiparse (form &key (parser-type 'ntiparser) (parser (walker:make-parser :type parser-type :variables nil :functions nil :macros nil)))
+(defun make-parser (&rest rest &key (type 'ntiparser) variables functions macros &allow-other-keys)
+  "Make a parser object that has pre-defined functions and variables in it."
+  (declare (ignorable type  variables macros))
+  (let ((parser (apply #'walker:make-parser rest)))
+    (flet ((lookup-var (name)
+	     (walker:parser-lookup 'walker:var name (walker:parser-free-namespace parser)))
+	   (lookup-fun (name)
+	     (walker:namespace-lookup 'walker:fun name (walker:parser-free-namespace parser)))
+	   (set-definition (sym definition)
+	     (setf (walker:nso-definition sym) definition))
+	   (make-values-bounds (values-type)
+	     (assert (eql (car values-type) 'values))
+	     (let ((upper (apply #'make-results (cdr values-type)))
+		   (lower (apply #'make-results (cdr values-type))))
+	       (make-bounds upper lower))))
+      (declare (ignorable #'lookup-var))
+#|      (loop for name in variables do
+	   (let ((definition (ecase name)))
+	     (set-definition (lookup-var name) definition)))|#
+      (loop for name in functions do
+	   (multiple-value-bind (arglist decls values-type) (parse-builtin-lisp-function-decls name)
+	     (let* ((parsed-llist (walker:parse-ordinary-lambda-list parser arglist nil))
+		    (parsed-declspecs (walker:parse-declspecs parser (cdr decls) nil))
+		    (values-bounds (make-values-bounds values-type))
+		    (fun (lookup-fun name))
+		    (definition (make-instance 'builtin-functiondef :parent nil :llist parsed-llist :declspecs parsed-declspecs :values values-bounds :documentation (format nil "~S" name))))
+	       (set-definition fun definition)))))
+    parser))
+
+(defun ntiparse (form &key (parser-type 'ntiparser) variables functions (parser (make-parser :type parser-type :variables variables :functions functions)))
   (let ((ast (walker:parse-with-namespace form :parser parser)))
     (walker:map-ast (lambda (ast path)
 		      (declare (ignore path))
@@ -1543,6 +1625,8 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
 			       ((eql accessor #'walker:form-body)
 				(assert (null (cdr accessor-cdr)))
 				(find-exits-forms-list finder ast forms))
+			       ((null forms) ;this can be the case e.g. for VAR-BINDINGs with VALUE=NIL
+				forms)
 			       (t
 				(find-exits finder forms)))))
 	   (if warn-only
@@ -1595,17 +1679,35 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
 	      (ast-exits nil))
 	 (loop for acons in arg-alist for acons-rest on arg-alist do
 	      (let* ((form (cdr acons))
-		     (form-exits (find-exits finder form)))
+		     (form-exits (cond
+				   ((consp form) ;this is the case for the &REST (and &WHOLE) parameter
+				    (let ((exits nil))
+				      (loop for form-rest on form do
+					   (let* ((form (car form-rest))
+						  (form-exits (find-exits finder form)))
+					     (pushend exits form-exits)
+					     (unless (normal-exits form-exits)
+					       (loop for form1 in (cdr form-rest) do
+						    (warn-dead-form finder form1))
+					       (return exits)))
+					 finally (return exits))))
+				   (t
+				    (find-exits finder form)))))
 		(pushend ast-exits (jumping-exits form-exits))
 		(unless (normal-exits form-exits)
 		  (loop for form-acons in (cdr acons-rest) do
 		       (warn-dead-form finder (cdr form-acons)))
-		  (loop for form in (walker:form-body funbinding) do
-		       (warn-dead-form finder form))
+		  (unless (typep funbinding 'builtin-functiondef)
+		    (loop for form in (walker:form-body funbinding) do
+			 (warn-dead-form finder form)))
 		  (return-from find-exits-functiondef ast-exits))))
-	 (let* ((body (walker:form-body funbinding))
-		(body-exits (find-exits-forms-list finder funbinding body)))
-	   (pushend ast-exits body-exits))
+	 (cond
+	   ((typep funbinding 'builtin-functiondef) ;FUNBINDING is a built-in Lisp function
+	    funbinding) ;return value will not be used
+	   (t
+	    (let* ((body (walker:form-body funbinding))
+		   (body-exits (find-exits-forms-list finder funbinding body)))
+	      (pushend ast-exits body-exits))))
 	 (pop (finder-callstack finder))
 	 ast-exits)))))
 
@@ -1694,10 +1796,17 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
       (walker:lambda-form
        (find-exits-functiondef finder funobj arguments))
       (walker:fun
-       (if (finder-application-form-substitute-p finder)
-	   (when (ast-fun-binding ast) ;if AST is a recursive call of a recursive call, return NIL
-	     (find-exits-functiondef finder (ast-fun-binding ast) arguments))
-	   (find-exits-functiondef finder (walker:nso-definition funobj) arguments))))))
+       (cond
+	 ((typep (walker:nso-definition funobj) 'builtin-functiondef) ;FUNOBJ is a built-in function
+	  ;; TODO: FIXME: if a built-in function is locally re-defined and returned as a first-class object, as in (PROGN (DEFUN F1 (A) A) (FUNCALL (LET ((B 1)) (FLET ((F1 (A) (= A B))) #'F1)) 1 2)), (note that #'F1 is not built-in, but the same shadowing should apply for built-in functions) then the captured variable B should be exported together with the first-class object #'F1, shadowing the previous global definition of #'F1.
+	  (find-exits-functiondef finder (walker:nso-definition funobj) arguments)
+	  ;; Disregard the return value of #'FIND-eXITS-FUNCTIONDEF and assume that built-in functions only exit without a jump. TODO: FIXME: a funarg could perform jumping exits, as in (TAGBODY A (MAPC (LAMBDA (X) (GO A)) '(1))).
+	  (list ast))
+	 ((finder-application-form-substitute-p finder)
+	  (when (ast-fun-binding ast) ;if AST is a recursive call of a recursive call, return NIL
+	    (find-exits-functiondef finder (ast-fun-binding ast) arguments)))
+	 (t
+	  (find-exits-functiondef finder (walker:nso-definition funobj) arguments)))))))
 
 ;; MACROAPPLICATION-FORM, SYMBOL-MACROLET-FORM, and MACROLET-FORM don't have to be implemented, since evaluation of the program starts after all macros have been expanded.
 
@@ -1716,7 +1825,7 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
   "Visits the alive forms of AST and calls FORM-FUNCTION on them.
 FINDER must be an instance of class EXIT-FINDER.
 FORM-FUNCTION must be a function of two parameters FORM, the currently processed form, and FORM-EXITS, its exits. Its return value is not used.
-Returns the list of exits of AST's last form, or NIL if this form cannot ever be executed (is dead)."
+Returns NIL."
   (declare (optimize (debug 3)))
   (let ((goforms (list (walker:form-body ast))) ;a list of list of forms inside AST that are jumped to.
 	(visited (make-hash-table)))
@@ -1737,15 +1846,17 @@ Returns the list of exits of AST's last form, or NIL if this form cannot ever be
 			(return)))))))
     (loop for form in (walker:form-body ast) do
 	 (unless (gethash form visited nil)
-	   (warn-dead-form finder form)))
-    (let ((last-form (walker:form-body-last ast)))
-      (and (gethash last-form visited) (find-exits finder last-form)))))
+	   (warn-dead-form finder form))))
+  nil)
 
 (defmethod find-exits ((finder exit-finder) (ast walker:tagbody-form))
   (declare (optimize (debug 3)))
-  (let ((ast-exits nil)) ;the list of forms in AST that jump outside AST
+  (let ((ast-exits nil) ;the list of forms in AST that jump outside AST
+	(last-form (walker:form-body-last ast))
+	(last-form-exits nil))
     (flet ((form-function (form form-exits)
-	     (declare (ignore form))
+	     (when (eql form last-form)
+	       (setf last-form-exits form-exits))
 	     (pushend ast-exits
 		      (remove-if (lambda (exit) ;keep exits that jump outside AST
 				   (cond
@@ -1756,10 +1867,10 @@ Returns the list of exits of AST's last form, or NIL if this form cannot ever be
 				     (t
 				      t)))
 				 form-exits))))
-      (let ((last-form-exits (visit-tagbody-form-exits finder ast #'form-function)))
-	(when (or (null (walker:form-body ast)) (normal-exits last-form-exits))
-	  (pushend ast-exits (list ast)))
-	ast-exits))))
+      (visit-tagbody-form-exits finder ast #'form-function)
+      (when (or (null (walker:form-body ast)) (normal-exits last-form-exits))
+	(pushend ast-exits (list ast)))
+      ast-exits)))
 
 (defmethod find-exits ((finder exit-finder) (ast walker:go-form))
   (list ast))
@@ -1823,13 +1934,12 @@ Returns the list of exits of AST's last form, or NIL if this form cannot ever be
 	     (format stream "symbol ~S ast ~S " k v))
 	   hash-table))
 
-(defun capturing-parse (form)
-  (let* ((capturing-parser (make-instance 'capturing-parser))
-	 (ast (ntiparse form :parser capturing-parser)))
-    (values ast (parser-container capturing-parser))))
+(defun capturing-parse (form &key (parser-type 'capturing-parser) variables functions (parser (make-parser :type parser-type :variables variables :functions functions)))
+  (let* ((ast (ntiparse form :parser parser)))
+    (values ast (parser-container parser))))
 
-(defun test-find-exits-form (form)
-  (let* ((ast (capturing-parse form)))
+(defun test-find-exits-form (form &key variables functions)
+  (let* ((ast (capturing-parse form :variables variables :functions functions)))
     (find-exits (make-instance 'exit-finder :warn-dead-p t) ast)))
 
 (defun test-find-exits ()
@@ -1914,6 +2024,23 @@ Returns the list of exits of AST's last form, or NIL if this form cannot ever be
     ))
 
 (test-find-exits)
+
+;;; CONTROL FLOW
+
+(defclass flow-finder (exit-finder)
+  ((order :initarg :order :initform nil :accessor finder-order :type list :documentation "The forward-order that forms are evaluated in.")))
+
+(defmethod find-exits :after ((finder flow-finder) ast)
+  (push ast (finder-order finder)))
+
+(defun find-flow (ast)
+  (let ((finder (make-instance 'flow-finder)))
+    (find-exits finder ast)
+    (nreverse (finder-order finder))))
+
+(defun test-find-flow-form (form &key variables functions)
+  (let* ((ast (ntiparse form :variables variables :functions functions)))
+    (find-flow ast)))
 
 (defmacro with-exits ((function finder form &rest args) result-symbols no-normal-exits-form &body body)
   "Calls (FUNCTION FINDER FORM ,@ARGS) and binds its multiple return values to the variable list RESULT-SYMBOLS. If FORM has no normal exits (as determined by the call (FIND-EXITS (FINDER-EXIT-FINDER FINDER) FORM)), execute NO-NORMAL-EXITS-FORM. Then the forms BODY are executed (irrespectively of the types of exits)."
