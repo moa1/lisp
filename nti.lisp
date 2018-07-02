@@ -316,7 +316,7 @@ LIST1 may be modified."
 
 (defstruct v4s-float)
 (defparameter +builtin-types+
-  '(nil t null boolean list ;these are always needed: NIL and T as bottom and top element of the type lattice, NULL as result of TAGBODY, BOOLEAN as type of &OPTIONAL and &KEY suppliedp arguments, and LIST for &REST arguments.
+  '(nil t null boolean list ;these are always needed: NIL and T as bottom and top element of the type lattice, NULL as result of TAGBODY, BOOLEAN as type of &OPTIONAL and &KEY suppliedp parameters, and LIST for &REST parameters.
     number integer fixnum unsigned-byte single-float (and unsigned-byte fixnum)
     symbol
     v4s-float
@@ -638,7 +638,7 @@ LIST1 may be modified."
     ((eq result2 'function)
      result1)
     (t
-     ;; compare parameter and return value types and meet them. TODO: implement meeting &REST with &REQUIRED and &OPTIONAL arguments.
+     ;; compare parameter and return value types and meet them. TODO: implement meeting &REST with &REQUIRED and &OPTIONAL parameters.
      (flet ((meet-list (r1 r2)
 	      (if (= (length r1) (length r2))
 		  (loop for type1 in r1 for type2 in r2 collect (let ((type (meet type1 type2))) (assert (not (null type))) type))
@@ -1147,10 +1147,10 @@ Note that e.g. in '(LET ((A 1)) (LABELS ((F (&OPTIONAL (A (SETQ A 2))) (IF 1 (F)
 (defun test-ntiparse ()
   (let* ((ast (ntiparse '(let ((a 1)) (labels ((f (&optional (a (setq a 2))) a)) (f)) a)))
 	 (fun-binding (ast-fun-binding (walker:form-body-1 (walker:form-body-1 ast)))))
-    (assert (eql (walker:form-var (walker:form-binding-1 ast)) (walker:form-var (car (walker:form-vars (walker:argument-init (car (walker:llist-optional (walker:form-llist fun-binding))))))))))
+    (assert (eql (walker:form-var (walker:form-binding-1 ast)) (walker:form-var (car (walker:form-vars (walker:parameter-init (car (walker:llist-optional (walker:form-llist fun-binding))))))))))
   (let* ((ast (ntiparse '(let ((a 1)) (labels ((f (&optional (a (setq a 2))) (if 1 (f) a))) (f)) a)))
 	 (fun-binding (ast-fun-binding (walker:form-body-1 (walker:form-body-1 ast)))))
-    (assert (eql (walker:form-var (walker:form-binding-1 ast)) (walker:form-var (car (walker:form-vars (walker:argument-init (car (walker:llist-optional (walker:form-llist fun-binding)))))))))))
+    (assert (eql (walker:form-var (walker:form-binding-1 ast)) (walker:form-var (car (walker:form-vars (walker:parameter-init (car (walker:llist-optional (walker:form-llist fun-binding)))))))))))
 
 ;;; ANNOTATE
 
@@ -1202,7 +1202,7 @@ NIL (no annotation)
 (defmethod walker:deparse :around ((deparser deparser-annotate) (ast walker:llist) path)
   (walker:deparse (deparser-notannotating1 deparser) ast path))
 
-(defmethod walker:deparse :around ((deparser deparser-annotate) (ast walker:argument) path)
+(defmethod walker:deparse :around ((deparser deparser-annotate) (ast walker:parameter) path)
   (walker:deparse (deparser-notannotating1 deparser) ast path))
 
 (defmethod walker:deparse :around ((deparser deparser-annotate) (ast walker:fun) path)
@@ -1640,16 +1640,16 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
 
 ;; LAMBDA LISTS (in the same order as exported from packages WALKER and WALKER-PLUS). These are not needed as helpers for #'FIND-EXITS, but to determine exits for #'LAST-SETQ.
 
-(defmethod find-exits ((finder exit-finder) (ast walker:argument))
-  ;; The returned value must not be NIL, otherwise #'LAST-SETQS on ORDINARY-LLIST cannot find normal exits for REQUIRED-ARGUMENT, and returns prematurely.
+(defmethod find-exits ((finder exit-finder) (ast walker:parameter))
+  ;; The returned value must not be NIL, otherwise #'LAST-SETQS on ORDINARY-LLIST cannot find normal exits for REQUIRED-PARAMETER, and returns prematurely.
   (list ast))
 
-(defmethod find-exits ((finder exit-finder) (ast walker:argument-init-mixin))
-  (find-exits finder (walker:argument-init ast)))
+(defmethod find-exits ((finder exit-finder) (ast walker:parameter-init-mixin))
+  (find-exits finder (walker:parameter-init ast)))
 
 (defmethod find-exits ((finder exit-finder) (ast walker:ordinary-llist))
   (let ((init-args (append (walker:llist-optional ast) (walker:llist-key ast) (walker:llist-aux ast))))
-    (find-exits-forms-list finder ast (mapcar #'walker:argument-init init-args))))
+    (find-exits-forms-list finder ast (mapcar #'walker:parameter-init init-args))))
 
 ;; FORMS (in the same order as exported from packages WALKER and WALKER-PLUS)
 
@@ -2554,43 +2554,43 @@ Returns the updated LAST-SETQS."
     (setf (cdr acons) (vars-union (cdr acons) last-setqs)))
   nil)
 
-;; When returning that a variable got its value from a passed argument to a function, I need a way to differentiate (the returned LAST-SETQS element), whether it is the VAR defined in the &OPTIONAL or &KEY lambda list VAR, or the &OPTIONAL or &KEY lambda list SUPPLIEDP. I could change the class of AST to a newly defined type (which is derived from WALKER:OPTIONAL-ARGUMENT, but I don't like it since it is incompatible wiith another piece of code which also might want to change the class. So I'll wrap the LAST-SETQS element in an instance of a newly defined type.
-(defclass argument ()
-  ((arg :initarg :arg :accessor argument-arg)))
-(defclass required-argument-var (argument) ())
-(defclass optional-argument-var (argument) ())
-(defclass optional-argument-suppliedp (argument) ())
-(defclass rest-argument-var (argument) ())
-(defclass key-argument-var (argument) ())
-(defclass key-argument-suppliedp (argument) ())
-(defclass aux-argument-var (argument) ())
+;; When returning that a variable got its value from a passed argument to a function, I need a way to differentiate (the returned LAST-SETQS element), whether it is the VAR defined in the &OPTIONAL or &KEY lambda list VAR, or the &OPTIONAL or &KEY lambda list SUPPLIEDP. I could change the class of AST to a newly defined type (which is derived from WALKER:OPTIONAL-PARAMETER, but I don't like it since it is incompatible wiith another piece of code which also might want to change the class. So I'll wrap the LAST-SETQS element in an instance of a newly defined type.
+(defclass parameter ()
+  ((arg :initarg :arg :accessor parameter-arg)))
+(defclass required-parameter-var (parameter) ())
+(defclass optional-parameter-var (parameter) ())
+(defclass optional-parameter-suppliedp (parameter) ())
+(defclass rest-parameter-var (parameter) ())
+(defclass key-parameter-var (parameter) ())
+(defclass key-parameter-suppliedp (parameter) ())
+(defclass aux-parameter-var (parameter) ())
 
 (macrolet ((init-form ()
-	     `(let* ((init (walker:argument-init ast)))
+	     `(let* ((init (walker:parameter-init ast)))
 		(when init (last-setqs-form! finder init var last-setqs
 			     (return-from last-setqs last-setqs)))))
-	   (var-form (argument-type)
-	     (assert (and (consp argument-type) (eql (car argument-type) 'quote) (symbolp (cadr argument-type))))
-	     `(when (eql (walker:form-var var) (walker:argument-var ast))
-		(setf last-setqs (conc-setqs last-setqs (list (make-instance ,argument-type :arg ast))))))
-	   (suppliedp-form (argument-type)
-	     (assert (and (consp argument-type) (eql (car argument-type) 'quote) (symbolp (cadr argument-type))))
-	     `(when (eql (walker:form-var var) (walker:argument-suppliedp ast))
-		(setf last-setqs (conc-setqs last-setqs (list (make-instance ,argument-type :arg ast)))))))
-  (defmethod last-setqs ((finder last-setqs-finder) (ast walker:required-argument) var last-setqs)
-    (var-form 'required-argument-var)
+	   (var-form (parameter-type)
+	     (assert (and (consp parameter-type) (eql (car parameter-type) 'quote) (symbolp (cadr parameter-type))))
+	     `(when (eql (walker:form-var var) (walker:parameter-var ast))
+		(setf last-setqs (conc-setqs last-setqs (list (make-instance ,parameter-type :arg ast))))))
+	   (suppliedp-form (parameter-type)
+	     (assert (and (consp parameter-type) (eql (car parameter-type) 'quote) (symbolp (cadr parameter-type))))
+	     `(when (eql (walker:form-var var) (walker:parameter-suppliedp ast))
+		(setf last-setqs (conc-setqs last-setqs (list (make-instance ,parameter-type :arg ast)))))))
+  (defmethod last-setqs ((finder last-setqs-finder) (ast walker:required-parameter) var last-setqs)
+    (var-form 'required-parameter-var)
     last-setqs)
-  (defmethod last-setqs ((finder last-setqs-finder) (ast walker:optional-argument) var last-setqs)
+  (defmethod last-setqs ((finder last-setqs-finder) (ast walker:optional-parameter) var last-setqs)
     (init-form)
-    (var-form 'optional-argument-var)
-    (suppliedp-form 'optional-argument-suppliedp)
+    (var-form 'optional-parameter-var)
+    (suppliedp-form 'optional-parameter-suppliedp)
     last-setqs)
-  (defmethod last-setqs ((finder last-setqs-finder) (ast walker:rest-argument) var last-setqs)
-    (var-form 'rest-argument-var)
+  (defmethod last-setqs ((finder last-setqs-finder) (ast walker:rest-parameter) var last-setqs)
+    (var-form 'rest-parameter-var)
     last-setqs)
-  (defmethod last-setqs ((finder last-setqs-finder) (ast walker:aux-argument) var last-setqs)
+  (defmethod last-setqs ((finder last-setqs-finder) (ast walker:aux-parameter) var last-setqs)
     (init-form)
-    (var-form 'aux-argument-var)
+    (var-form 'aux-parameter-var)
     last-setqs))
 
 (defmethod last-setqs ((finder last-setqs-finder) (ast walker:ordinary-llist) var last-setqs)
@@ -2652,18 +2652,18 @@ Returns the updated LAST-SETQS."
 	   (let* ((last-setqs (test-last-setqs-form form :warn-multiple-captures nil))
 		  (actual-last-setqs (remove-duplicates (mapcar #'walker:form-object (mapcar #'walker:form-value last-setqs)))))
 	     (assert (equal actual-last-setqs desired-last-setqs) () "TEST-LAST-SETQS for form~%~S~%expected ~S,~%but got  ~S~%" form desired-last-setqs actual-last-setqs)))
-	 (assert-argument (form desired-argument desired-argument-varp desired-last-setqs)
-	   "Check that #'LAST-SETQS returns DESIRED-ARGUMENT-VARP as definition of capture VAR."
+	 (assert-parameter (form desired-parameter desired-parameter-varp desired-last-setqs)
+	   "Check that #'LAST-SETQS returns DESIRED-PARAMETER-VARP as definition of capture VAR."
 	   (let* ((last-setqs (test-last-setqs-form form :warn-multiple-captures nil))
-		  (arguments (remove-if (lambda (x) (not (typep x 'argument))) last-setqs))
-		  (non-arguments (remove-if (lambda (x) (typep x 'argument)) last-setqs))
-		  (actual-argument (let ((l arguments))
-				     (assert (<= (length l) 1) () "An argument may only be defined once, but got ~S." l)
-				     (when l
-				       (let ((arg (argument-arg (car l))))
-					 (walker:nso-name (if desired-argument-varp (walker:argument-var arg) (walker:argument-suppliedp arg)))))))
-		  (actual-last-setqs (mapcar (lambda (x) (walker:form-object (walker:form-value x))) non-arguments)))
-	     (assert (and (eql actual-argument desired-argument) (equal actual-last-setqs desired-last-setqs)) () "TEST-LAST-SETQS for form~%~S~%expected argument ~S and last-setqs ~S,~%but got  argument ~S and last-setqs ~S~%" form desired-argument desired-last-setqs actual-argument actual-last-setqs))))
+		  (parameters (remove-if (lambda (x) (not (typep x 'parameter))) last-setqs))
+		  (non-parameters (remove-if (lambda (x) (typep x 'parameter)) last-setqs))
+		  (actual-parameter (let ((l parameters))
+				      (assert (<= (length l) 1) () "A parameter may only be defined once, but got ~S." l)
+				      (when l
+					(let ((arg (parameter-arg (car l))))
+					  (walker:nso-name (if desired-parameter-varp (walker:parameter-var arg) (walker:parameter-suppliedp arg)))))))
+		  (actual-last-setqs (mapcar (lambda (x) (walker:form-object (walker:form-value x))) non-parameters)))
+	     (assert (and (eql actual-parameter desired-parameter) (equal actual-last-setqs desired-last-setqs)) () "TEST-LAST-SETQS for form~%~S~%expected parameter ~S and last-setqs ~S,~%but got  parameter ~S and last-setqs ~S~%" form desired-parameter desired-last-setqs actual-parameter actual-last-setqs))))
     (assert-result '(let ((a 1)) a) '(1))
     (assert-result '(let ((a 1)) (setq a 2) a) '(2))
     (assert-result '(let ((a 1)) (capture var a) (setq a 2) a) '(1))
@@ -2710,27 +2710,27 @@ Returns the updated LAST-SETQS."
     (assert-result '(let ((a 1)) (tagbody s (if 1 (progn (setq a 2) (go s)) (go t)) t (if 1 (progn (setq a 3) (go s))) e) a) '(1 2 3))
     (assert-result '(let ((a 1)) (tagbody s (if 1 (progn (setq a 2) (go s)) (go t)) t (if 1 (progn (setq a 3) (go s)) (go e)) e) a) '(1 2 3))
     (assert-result '(let ((a 1)) (tagbody s (setq a 2) (if 1 (progn (setq a 3) (go s)))) a) '(2))
-    (assert-argument '(flet ((f (a) (capture var a))) (f 1)) 'a t '())
-    (assert-argument '(flet ((f (a) (if 1 (setq a 1)) (capture var a))) (f 1)) 'a t '(1))
-    (assert-argument '(flet ((f (a &optional b) (capture var b))) (f 1)) 'b t '())
-    (assert-argument '(flet ((f (a &optional b) (if 1 (setq b 1)) (capture var b))) (f 1)) 'b t '(1))
-    (assert-argument '(flet ((f (a &optional (b a)) (capture var b))) (f 1)) 'b t '())
-    (assert-argument '(flet ((f (a &optional (b (capture var a))) b)) (f 1)) 'a t '())
-    (assert-argument '(flet ((f (a &optional (b (setq a 1))) (capture var a))) (f 1)) nil t '(1))
-    (assert-argument '(flet ((f (a &optional (b a bs)) (capture var bs))) (f 1)) 'bs nil '())
-    (assert-argument '(flet ((f (&rest a) (capture var a))) (f 1)) 'a t '())
-    (assert-argument '(flet ((f (&rest a) (if 1 (setq a 1)) (capture var a))) (f 1)) 'a t '(1))
-    (assert-argument '(flet ((f (a &key b) (capture var b))) (f 1)) 'b t '())
-    (assert-argument '(flet ((f (a &key b) (if 1 (setq b 1)) (capture var b))) (f 1)) 'b t '(1))
-    (assert-argument '(flet ((f (a &key (b a)) (capture var b))) (f 1)) 'b t '())
-    (assert-argument '(flet ((f (a &key (b (capture var a))) b)) (f 1)) 'a t '())
-    (assert-argument '(flet ((f (a &key (b (setq a 1))) (capture var a))) (f 1)) nil t '(1))
-    (assert-argument '(flet ((f (a &key (b a bs)) (capture var bs))) (f 1)) 'bs nil '())
-    (assert-argument '(flet ((f (a &aux b) (capture var b))) (f 1)) 'b t '())
-    (assert-argument '(flet ((f (a &aux b) (if 1 (setq b 1)) (capture var b))) (f 1)) 'b t '(1))
-    (assert-argument '(flet ((f (a &aux (b a)) (capture var b))) (f 1)) 'b t '())
-    (assert-argument '(flet ((f (a &aux (b (capture var a))) b)) (f 1)) 'a t '())
-    (assert-argument '(flet ((f (a &aux (b (setq a 1))) (capture var a))) (f 1)) nil t '(1))
+    (assert-parameter '(flet ((f (a) (capture var a))) (f 1)) 'a t '())
+    (assert-parameter '(flet ((f (a) (if 1 (setq a 1)) (capture var a))) (f 1)) 'a t '(1))
+    (assert-parameter '(flet ((f (a &optional b) (capture var b))) (f 1)) 'b t '())
+    (assert-parameter '(flet ((f (a &optional b) (if 1 (setq b 1)) (capture var b))) (f 1)) 'b t '(1))
+    (assert-parameter '(flet ((f (a &optional (b a)) (capture var b))) (f 1)) 'b t '())
+    (assert-parameter '(flet ((f (a &optional (b (capture var a))) b)) (f 1)) 'a t '())
+    (assert-parameter '(flet ((f (a &optional (b (setq a 1))) (capture var a))) (f 1)) nil t '(1))
+    (assert-parameter '(flet ((f (a &optional (b a bs)) (capture var bs))) (f 1)) 'bs nil '())
+    (assert-parameter '(flet ((f (&rest a) (capture var a))) (f 1)) 'a t '())
+    (assert-parameter '(flet ((f (&rest a) (if 1 (setq a 1)) (capture var a))) (f 1)) 'a t '(1))
+    (assert-parameter '(flet ((f (a &key b) (capture var b))) (f 1)) 'b t '())
+    (assert-parameter '(flet ((f (a &key b) (if 1 (setq b 1)) (capture var b))) (f 1)) 'b t '(1))
+    (assert-parameter '(flet ((f (a &key (b a)) (capture var b))) (f 1)) 'b t '())
+    (assert-parameter '(flet ((f (a &key (b (capture var a))) b)) (f 1)) 'a t '())
+    (assert-parameter '(flet ((f (a &key (b (setq a 1))) (capture var a))) (f 1)) nil t '(1))
+    (assert-parameter '(flet ((f (a &key (b a bs)) (capture var bs))) (f 1)) 'bs nil '())
+    (assert-parameter '(flet ((f (a &aux b) (capture var b))) (f 1)) 'b t '())
+    (assert-parameter '(flet ((f (a &aux b) (if 1 (setq b 1)) (capture var b))) (f 1)) 'b t '(1))
+    (assert-parameter '(flet ((f (a &aux (b a)) (capture var b))) (f 1)) 'b t '())
+    (assert-parameter '(flet ((f (a &aux (b (capture var a))) b)) (f 1)) 'a t '())
+    (assert-parameter '(flet ((f (a &aux (b (setq a 1))) (capture var a))) (f 1)) nil t '(1))
     ))
 
 (test-last-setqs)
@@ -2755,8 +2755,8 @@ Returns the updated LAST-SETQS."
 				   (ast-bounds (walker:form-value setq)))
 				  (walker:var-writing
 				   (ast-bounds setq))
-				  (required-argument-var
-				   (ast-bounds (walker:argument-var (argument-arg setq))))))
+				  (required-parameter-var
+				   (ast-bounds (walker:parameter-var (parameter-arg setq))))))
 			      last-setqs)))
     ;; TODO: have to meet bounds with (all) declared types.
     (apply #'join-bounds setq-bounds)))
@@ -2891,7 +2891,7 @@ Returns the updated LAST-SETQS."
 						      (let* ((form-bounds (typecase form
 									    (walker:fun-binding nil)
 									    (walker:llist nil)
-									    (walker:argument nil)
+									    (walker:parameter nil)
 									    (t (ast-bounds form))))
 							     (annot (cons form-bounds form)))
 							(push annot form-bounds-list)))
