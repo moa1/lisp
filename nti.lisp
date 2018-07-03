@@ -973,40 +973,40 @@ LIST1 may be modified."
     (let ((bounds (userproperties-bounds user)))
       (format stream "~S" bounds))))
 
-(defun ast-fun-binding (ast)
+(defun form-fun-binding (ast)
   (userproperties-fun-binding (walker:user ast)))
-(defun (setf ast-fun-binding) (value ast)
+(defun (setf form-fun-binding) (value ast)
   (setf (userproperties-fun-binding (walker:user ast)) value))
 
-(defun ast-parser (ast)
+(defun form-parser (ast)
   (userproperties-parser (walker:user ast)))
-(defun (setf ast-parser) (value ast)
+(defun (setf form-parser) (value ast)
   (setf (userproperties-parser (walker:user ast)) value))
 
-(defmethod ast-bounds ((ast walker:form))
+(defmethod form-bounds ((ast walker:form))
   (userproperties-bounds (walker:user ast)))
-(defmethod ast-bounds ((ast walker:sym))
+(defmethod form-bounds ((ast walker:sym))
   (userproperties-bounds (walker:user ast)))
-(defmethod ast-bounds ((ast walker:var-binding))
+(defmethod form-bounds ((ast walker:var-binding))
   (userproperties-bounds (walker:user ast)))
-(defmethod ast-bounds ((ast walker:var-reading))
+(defmethod form-bounds ((ast walker:var-reading))
   (userproperties-bounds (walker:user ast)))
-(defmethod ast-bounds ((ast walker:var-writing))
+(defmethod form-bounds ((ast walker:var-writing))
   (userproperties-bounds (walker:user ast)))
-(defmethod ast-bounds ((ast walker:tagpoint))
+(defmethod form-bounds ((ast walker:tagpoint))
   (userproperties-bounds (walker:user ast)))
 
-(defmethod (setf ast-bounds) (value (ast walker:form))
+(defmethod (setf form-bounds) (value (ast walker:form))
   (setf (userproperties-bounds (walker:user ast)) value))
-(defmethod (setf ast-bounds) (value (ast walker:sym))
+(defmethod (setf form-bounds) (value (ast walker:sym))
   (setf (userproperties-bounds (walker:user ast)) value))
-(defmethod (setf ast-bounds) (value (ast walker:var-binding))
+(defmethod (setf form-bounds) (value (ast walker:var-binding))
   (setf (userproperties-bounds (walker:user ast)) value))
-(defmethod (setf ast-bounds) (value (ast walker:var-reading))
+(defmethod (setf form-bounds) (value (ast walker:var-reading))
   (setf (userproperties-bounds (walker:user ast)) value))
-(defmethod (setf ast-bounds) (value (ast walker:var-writing))
+(defmethod (setf form-bounds) (value (ast walker:var-writing))
   (setf (userproperties-bounds (walker:user ast)) value))
-(defmethod (setf ast-bounds) (value (ast walker:tagpoint))
+(defmethod (setf form-bounds) (value (ast walker:tagpoint))
   (setf (userproperties-bounds (walker:user ast)) value))
 
 (defun meet-bounds (bounds-target bounds2)
@@ -1066,7 +1066,7 @@ Note that e.g. in '(LET ((A 1)) (LABELS ((F (&OPTIONAL (A (SETQ A 2))) (IF 1 (F)
   (labels ((copy-fun-binding (application-form)
 	     (let* ((application-fun (walker:form-fun application-form))
 		    (fun-bindings-mixin (walker:form-parent (walker:nso-definition application-fun)))
-		    (llist-parser (ast-parser fun-bindings-mixin))
+		    (llist-parser (form-parser fun-bindings-mixin))
 		    (labels-fun-source (walker:nso-source application-fun))
 		    (labels-ast (walker:parse-fun-binding llist-parser 'labels labels-fun-source application-form)) ;to be able to tell apart copies, set parent to APPLICATION-FORM
 		    (fun-binding-ast-copy labels-ast))
@@ -1078,7 +1078,7 @@ Note that e.g. in '(LET ((A 1)) (LABELS ((F (&OPTIONAL (A (SETQ A 2))) (IF 1 (F)
 			       (declare (ignore path))
 			       (when (and (typep form 'walker:application-form) (is-application-form-that-needs-fun-binding-slot form))
 				 (let ((fun-binding-copy (copy-fun-binding form)))
-				   (setf (ast-fun-binding form) fun-binding-copy)
+				   (setf (form-fun-binding form) fun-binding-copy)
 				   (set-fun-binding-slot form callstack))))
 			     ast)
 	     (walker:map-ast (lambda (form path)
@@ -1093,7 +1093,7 @@ Note that e.g. in '(LET ((A 1)) (LABELS ((F (&OPTIONAL (A (SETQ A 2))) (IF 1 (F)
 	       (cond
 		 ((< (count application-fun callstack) 2)
 		  (let ((fun-binding-ast-copy (copy-fun-binding application-form)))
-		    (setf (ast-fun-binding application-form) fun-binding-ast-copy)
+		    (setf (form-fun-binding application-form) fun-binding-ast-copy)
 		    (fix-application-forms fun-binding-ast-copy (cons application-fun callstack))))))))
     (set-fun-binding-slot ast nil)))
 
@@ -1146,10 +1146,10 @@ Note that e.g. in '(LET ((A 1)) (LABELS ((F (&OPTIONAL (A (SETQ A 2))) (IF 1 (F)
 
 (defun test-ntiparse ()
   (let* ((ast (ntiparse '(let ((a 1)) (labels ((f (&optional (a (setq a 2))) a)) (f)) a)))
-	 (fun-binding (ast-fun-binding (walker:form-body-1 (walker:form-body-1 ast)))))
+	 (fun-binding (form-fun-binding (walker:form-body-1 (walker:form-body-1 ast)))))
     (assert (eql (walker:form-var (walker:form-binding-1 ast)) (walker:form-var (car (walker:form-vars (walker:parameter-init (car (walker:llist-optional (walker:form-llist fun-binding))))))))))
   (let* ((ast (ntiparse '(let ((a 1)) (labels ((f (&optional (a (setq a 2))) (if 1 (f) a))) (f)) a)))
-	 (fun-binding (ast-fun-binding (walker:form-body-1 (walker:form-body-1 ast)))))
+	 (fun-binding (form-fun-binding (walker:form-body-1 (walker:form-body-1 ast)))))
     (assert (eql (walker:form-var (walker:form-binding-1 ast)) (walker:form-var (car (walker:form-vars (walker:parameter-init (car (walker:llist-optional (walker:form-llist fun-binding)))))))))))
 
 ;;; ANNOTATE
@@ -1242,11 +1242,11 @@ NIL (no annotation)
 
 (defmethod walker:deparse :around ((deparser deparser-annotate) (ast walker:application-form) path)
   (let ((annotated-ast (call-next-method))
-	(annotated-funbinding (if (ast-fun-binding ast) (walker:deparse deparser (ast-fun-binding ast) nil) :is-nil)))
+	(annotated-funbinding (if (form-fun-binding ast) (walker:deparse deparser (form-fun-binding ast) nil) :is-nil)))
     (list :call (id-of ast) annotated-ast annotated-funbinding)))
 
 (defmethod walker:deparse :around ((deparser deparser-annotate) ast path)
-  (results-format deparser (ast-bounds ast) (call-next-method deparser ast path)))
+  (results-format deparser (form-bounds ast) (call-next-method deparser ast path)))
 
 (defmethod walker:deparse :around ((deparser deparser-notannotate) ast path)
   (call-next-method (deparser-next deparser) ast path))
@@ -1803,8 +1803,8 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
 	  ;; Disregard the return value of #'FIND-eXITS-FUNCTIONDEF and assume that built-in functions only exit without a jump. TODO: FIXME: a funarg could perform jumping exits, as in (TAGBODY A (MAPC (LAMBDA (X) (GO A)) '(1))).
 	  (list ast))
 	 ((finder-application-form-substitute-p finder)
-	  (when (ast-fun-binding ast) ;if AST is a recursive call of a recursive call, return NIL
-	    (find-exits-functiondef finder (ast-fun-binding ast) arguments)))
+	  (when (form-fun-binding ast) ;if AST is a recursive call of a recursive call, return NIL
+	    (find-exits-functiondef finder (form-fun-binding ast) arguments)))
 	 (t
 	  (find-exits-functiondef finder (walker:nso-definition funobj) arguments)))))))
 
@@ -2491,13 +2491,13 @@ Returns the updated LAST-SETQS."
   (declare (optimize (debug 3)))
   (cond
     ((or (find ast (finder-callstack finder)) ;recursive call
-	 (null (ast-fun-binding ast))) ;also recursive call (actually I think I can remove the above line, since recursive calls all constitute individual APPLICATION-FORM instances now)
+	 (null (form-fun-binding ast))) ;also recursive call (actually I think I can remove the above line, since recursive calls all constitute individual APPLICATION-FORM instances now)
      nil)
     (t
      (push ast (finder-callstack finder))
      (let* ((parser (finder-parser finder))
-	    ;;(fun-binding (walker:nso-definition (walker:form-fun ast))) leave this here so that I remember that #'LAST-SETQS on WALKER:APPLICATION-FORM should operate on AST-FUN-BINDING, not (WALKER:NSO-DEFINITION (WALKER:FORM-FUN AST)).
-	    (fun-binding (ast-fun-binding ast))
+	    ;;(fun-binding (walker:nso-definition (walker:form-fun ast))) leave this here so that I remember that #'LAST-SETQS on WALKER:APPLICATION-FORM should operate on FORM-FUN-BINDING, not (WALKER:NSO-DEFINITION (WALKER:FORM-FUN AST)).
+	    (fun-binding (form-fun-binding ast))
 	    (llist (walker:form-llist fun-binding))
 	    (args (walker:form-arguments ast))
 	    (alist (walker-plus:arguments-assign-to-lambda-list parser llist args)))
@@ -2752,11 +2752,11 @@ Returns the updated LAST-SETQS."
 	 (setq-bounds (mapcar (lambda (setq)
 				(etypecase setq
 				  (walker:var-binding
-				   (ast-bounds (walker:form-value setq)))
+				   (form-bounds (walker:form-value setq)))
 				  (walker:var-writing
-				   (ast-bounds setq))
+				   (form-bounds setq))
 				  (required-parameter-var
-				   (ast-bounds (walker:parameter-var (parameter-arg setq))))))
+				   (form-bounds (walker:parameter-var (parameter-arg setq))))))
 			      last-setqs)))
     ;; TODO: have to meet bounds with (all) declared types.
     (apply #'join-bounds setq-bounds)))
@@ -2796,7 +2796,7 @@ Returns the updated LAST-SETQS."
 	   (let* ((value (walker:form-value binding))
 		  (value-exits (find-exits (inferer-exit-finder fwd-inferer) value)))
 	     (if (normal-exits value-exits)
-		 (setf (ast-bounds binding) (fwd-infer fwd-inferer value)) ;TODO: meet (AST-BOUNDS VALUE) with the declared bounds of VAR == (WALKER:FORM-SYM BINDING). (This must be done also at MULTIPLE-VALUE-BIND, and everywhere a variable is set.)
+		 (setf (form-bounds binding) (fwd-infer fwd-inferer value)) ;TODO: meet (FORM-BOUNDS VALUE) with the declared bounds of VAR == (WALKER:FORM-SYM BINDING). (This must be done also at MULTIPLE-VALUE-BIND, and everywhere a variable is set.)
 		 (progn (fwd-infer fwd-inferer value)
 			(return nil))))
 	 finally (return t))
@@ -2808,10 +2808,10 @@ Returns the updated LAST-SETQS."
        (let* ((value (walker:form-value write-var))
 	      (value-exits (find-exits (inferer-exit-finder fwd-inferer) value)))
 	 (if (normal-exits value-exits)
-	     (setf (ast-bounds write-var) (fwd-infer fwd-inferer value)) ;TODO: meet (AST-BOUNDS VALUE) with the declared bounds of (WALKER:FORM-VAR WRITE-VAR). (This must be done also at MULTIPLE-VALUE-BIND, and everywhere a variable is set.)
+	     (setf (form-bounds write-var) (fwd-infer fwd-inferer value)) ;TODO: meet (FORM-BOUNDS VALUE) with the declared bounds of (WALKER:FORM-VAR WRITE-VAR). (This must be done also at MULTIPLE-VALUE-BIND, and everywhere a variable is set.)
 	     (progn (fwd-infer fwd-inferer value)
 		    (return (make-bounds (make-results-0) (make-results-0))))))
-     finally (return (ast-bounds (last1 (walker:form-vars ast))))))
+     finally (return (form-bounds (last1 (walker:form-vars ast))))))
 
 (defmethod fwd-infer ((fwd-inferer fwd-inferer) (ast walker:if-form))
   (let* ((test-exits (find-exits (inferer-exit-finder fwd-inferer) (walker:form-test ast))))
@@ -2850,7 +2850,7 @@ Returns the updated LAST-SETQS."
 			 (walker:lambda-form
 			  funobj)
 			 (walker:fun
-			  (ast-fun-binding ast))))))
+			  (form-fun-binding ast))))))
     (cond
       ((or (null funbinding) (find funbinding (inferer-callstack fwd-inferer))) ;this is a recursive call(-loop) of(between) function(s)
        (make-bounds (make-results-0) (make-results-0)))
@@ -2865,7 +2865,7 @@ Returns the updated LAST-SETQS."
 			 (form-exits (find-exits exit-finder form)))
 		    (cond
 		      ((normal-exits form-exits)
-		       (setf (ast-bounds var) (fwd-infer fwd-inferer form)))
+		       (setf (form-bounds var) (fwd-infer fwd-inferer form)))
 		      (t
 		       (fwd-infer fwd-inferer form)
 		       (return nil))))
@@ -2880,7 +2880,7 @@ Returns the updated LAST-SETQS."
     (loop for binding in (walker:form-bindings ast) do
 	 (let* ((fun (walker:form-sym binding))
 		(applications (walker:nso-sites fun))
-		(funbindings (mapcar #'ast-fun-binding applications))
+		(funbindings (mapcar #'form-fun-binding applications))
 		(funbindings (remove-if (lambda (fb) (not (typep fb 'walker:application-form)))
 					funbindings))
 		(bounds (let ((bounds nil))
@@ -2892,7 +2892,7 @@ Returns the updated LAST-SETQS."
 									    (walker:fun-binding nil)
 									    (walker:llist nil)
 									    (walker:parameter nil)
-									    (t (ast-bounds form))))
+									    (t (form-bounds form))))
 							     (annot (cons form-bounds form)))
 							(push annot form-bounds-list)))
 						    funbinding)
@@ -2908,14 +2908,14 @@ Returns the updated LAST-SETQS."
 		    (let ((bounds (mapcar #'car applications)))
 		      (unless (null (car bounds))
 			(prind bounds)
-			(setf (ast-bounds (cdr binding)) (apply #'join-bounds bounds)))))
+			(setf (form-bounds (cdr binding)) (apply #'join-bounds bounds)))))
 		  (cdr (last1 bounds))
 		  (mapcar #'cdr (butlast bounds)))))
     ))
 
 (defmethod fwd-infer :around ((fwd-inferer fwd-inferer) ast)
   (let ((bounds (call-next-method fwd-inferer ast)))
-    (setf (ast-bounds ast) bounds)
+    (setf (form-bounds ast) bounds)
     bounds))
 
 
