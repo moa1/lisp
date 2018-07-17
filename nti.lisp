@@ -342,7 +342,7 @@ LIST1 may be modified."
 (defstruct v4s-float)
 (defparameter +builtin-types+
   '(nil t null boolean list ;these are always needed: NIL and T as bottom and top element of the type lattice, NULL as result of TAGBODY, BOOLEAN as type of &OPTIONAL and &KEY suppliedp parameters, and LIST for &REST parameters.
-    number integer fixnum unsigned-byte single-float (and unsigned-byte fixnum)
+    number integer fixnum unsigned-byte real single-float (and unsigned-byte fixnum)
     symbol
     v4s-float
     array (array fixnum) (array single-float)))
@@ -547,7 +547,7 @@ LIST1 may be modified."
 
 (defun test-meet-join-results ()
   (assert (is-results (meet-results (make-results 'fixnum) (make-results 'single-float)) (make-results-nil)))
-  (assert (is-results (join-results (make-results 'fixnum) (make-results 'single-float)) (make-results 'number)))
+  (assert (is-results (join-results (make-results 'fixnum) (make-results 'single-float)) (make-results 'real)))
   (assert (is-results (meet-results (make-results 'fixnum) (make-results 'number)) (make-results 'fixnum)))
   (assert (is-results (join-results (make-results 'fixnum) (make-results 'number)) (make-results 'number)))
   (assert (is-results (meet-results (make-results 'fixnum) (make-results-t)) (make-results 'fixnum)))
@@ -989,7 +989,8 @@ LIST1 may be modified."
 
 (defclass userproperties ()
   ((parser :initarg :parser :accessor userproperties-parser :documentation "The parser used to parse the AST this USERPROPERTIES-instance is the child of.")
-   (fun-binding :initarg :fun-binding :accessor userproperties-fun-binding :documentation "For WALKER:APPLICATION-FORMs, this stores the WALKER:FUN-BINDING, that the WALKER:APPLICATION-FORM calls.")
+   (fun-binding :initarg :fun-binding :accessor userproperties-fun-binding :documentation "For WALKER:APPLICATION-FORMs, this stores the WALKER:FUN-BINDING that the WALKER:APPLICATION-FORM calls.
+For copies of WALKER:FUN-BINDINGs, this stores the original WALKER:FUN-BINDING.")
    (application-form :initarg :application-form :accessor userproperties-application-form :documentation "For WALKER:FUN-BINDINGs, this stores the WALKER:APPLICATION-FORM that calls the WALKER:FUN-BINDING.")
    (bounds :initform (make-bounds (make-results-0) (make-results-0)) :initarg :bounds :accessor userproperties-bounds :type bounds :documentation "The upper and lower bound of the form.")))
 
@@ -1118,6 +1119,7 @@ Note that e.g. in '(LET ((A 1)) (LABELS ((F (&OPTIONAL (A (SETQ A 2))) (IF 1 (F)
 		    (fun-binding-ast-copy (walker:parse-fun-binding llist-parser 'labels labels-fun-source fun-bindings-mixin)))
 	       (assert (eql application-fun (walker:form-fun fun-binding-ast-copy)))
 	       (setf (form-application-form fun-binding-ast-copy) application-form) ;to be able to tell apart copies from originals (whose FORM-APPLICATION-FORM is NIL). Previously I did this by setting the parent to APPLICATION-FORM, but this was wrong, as it broke parsing, e.g. (TEST-LAST-SETQS-FORM '(LET ((A 1)) (LABELS ((F (&OPTIONAL (A (SETQ A 2))) (IF 1 (F) A))) (F)) A)) returned the wrong result, because the A in (SETQ A 2) did not refer to the A from the LET.
+	       (setf (form-fun-binding fun-binding-ast-copy) fun-bindings-mixin)
 	       fun-binding-ast-copy))
 	   (fix-application-forms (ast callstack)
 	     (walker:map-ast (lambda (form path)
@@ -1156,7 +1158,7 @@ Note that e.g. in '(LET ((A 1)) (LABELS ((F (&OPTIONAL (A (SETQ A 2))) (IF 1 (F)
 	   (make-values-bounds (values-type)
 	     (assert (eql (car values-type) 'values))
 	     (let ((upper (apply #'make-results (cdr values-type)))
-		   (lower (apply #'make-results (cdr values-type))))
+		   (lower (make-results-nil)))
 	       (make-bounds upper lower))))
       (declare (ignorable #'lookup-var))
 #|      (loop for name in variables do
@@ -1164,12 +1166,14 @@ Note that e.g. in '(LET ((A 1)) (LABELS ((F (&OPTIONAL (A (SETQ A 2))) (IF 1 (F)
 	     (set-definition (lookup-var name) definition)))|#
       (loop for name in functions do
 	   (multiple-value-bind (arglist decls values-type) (parse-builtin-lisp-function-decls name)
-	     (let* ((parsed-llist (walker:parse-ordinary-lambda-list parser arglist nil))
-		    (parsed-declspecs (walker:parse-declspecs parser (cdr decls) nil))
-		    (values-bounds (make-values-bounds values-type))
-		    (fun (lookup-fun name))
-		    (definition (make-instance 'builtin-functiondef :parent nil :llist parsed-llist :declspecs parsed-declspecs :values values-bounds :documentation (format nil "~S" name))))
-	       (set-definition fun definition)))))
+	     (multiple-value-bind (parsed-llist llist-parser)
+		 (walker:parse-ordinary-lambda-list parser arglist nil)
+	       (let* ((parsed-declspecs (walker:parse-declspecs llist-parser (cdr decls) nil))
+		      (values-bounds (make-values-bounds values-type))
+		      (fun (lookup-fun name))
+		      (definition (make-instance 'builtin-functiondef :parent nil :llist parsed-llist :declspecs parsed-declspecs :values values-bounds :documentation (format nil "~S" name))))
+		 (setf (walker:form-parent parsed-llist) definition)
+		 (set-definition fun definition))))))
     parser))
 
 (defun ntiparse (form &key (parser-type 'ntiparser) variables functions (parser (make-parser :type parser-type :variables variables :functions functions)))
@@ -1288,8 +1292,16 @@ NIL (no annotation)
 
 (defmethod walker:deparse :around ((deparser deparser-annotate) (ast walker:application-form) path)
   (let ((annotated-ast (call-next-method))
-	(annotated-funbinding (if (form-fun-binding ast) (walker:deparse deparser (form-fun-binding ast) nil) :is-nil)))
-    (list :call (id-of ast) annotated-ast annotated-funbinding)))
+	(annotated-funbinding (cond
+				((form-fun-binding ast)
+				 (walker:deparse deparser (form-fun-binding ast) nil))
+				((typep (walker:nso-definition (walker:form-fun ast))
+					'builtin-functiondef)
+				 :is-builtin)
+				(t
+				 :is-nil))))
+    (append (butlast annotated-ast)
+	    (list (list :call (id-of ast) (last1 annotated-ast) annotated-funbinding)))))
 
 (defmethod walker:deparse :around ((deparser deparser-annotate) ast path)
   (results-format deparser (form-bounds ast) (call-next-method deparser ast path)))
@@ -1720,7 +1732,7 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
       (t
        (push funbinding (finder-callstack finder))
        (let* ((llist (walker:form-llist funbinding))
-	      (parser (make-instance 'walker:parser)) ;FIXME? needed by ARGUMENTS-ASSIGN-TO-LAMBDA-LIST
+	      (parser (make-instance 'ntiparser)) ;FIXME? needed by ARGUMENTS-ASSIGN-TO-LAMBDA-LIST
 	      (arg-alist (walker-plus:arguments-assign-to-lambda-list parser llist arguments))
 	      (ast-exits nil))
 	 (loop for acons in arg-alist for acons-rest on arg-alist do
@@ -2186,11 +2198,12 @@ Returns two values, namely READ0 and WRITTEN0"
 ;; PROGN-FORM is handled by the fallback method.
 
 (defmethod find-accesses ((finder accesses-finder) (ast walker:var-bindings-mixin))
-  (let ((init-values (loop for binding in (walker:form-bindings ast) collect
-			  (let ((value (walker:form-value binding)))
-			    (if (null value) (walker:make-nil binding) value))))
-	(read nil)
-	(written nil))
+  (let* ((parser (make-instance 'ntiparser))
+	 (init-values (loop for binding in (walker:form-bindings ast) collect
+			   (let ((value (walker:form-value binding)))
+			     (if (null value) (walker:make-nil parser binding) value))))
+	 (read nil)
+	 (written nil))
     (find-accesses-forms-list! finder init-values read written
       (return-from find-accesses (values read written)))
     (find-accesses-forms-list! finder (walker:form-body ast) read written)
@@ -2208,7 +2221,7 @@ Returns two values, namely READ0 and WRITTEN0"
       (t
        (push funbinding (finder-callstack finder))
        (let* ((llist (walker:form-llist funbinding))
-	      (parser (make-instance 'walker:parser)) ;FIXME? needed by ARGUMENTS-ASSIGN-TO-LAMBDA-LIST
+	      (parser (make-instance 'ntiparser)) ;FIXME? needed by ARGUMENTS-ASSIGN-TO-LAMBDA-LIST
 	      (arg-alist (walker-plus:arguments-assign-to-lambda-list parser llist arguments))
 	      (read nil)
 	      (written nil))
@@ -2512,27 +2525,36 @@ Returns the updated LAST-SETQS."
 
 (defmethod last-setqs ((finder last-setqs-finder) (ast walker:application-form) var last-setqs)
   (declare (optimize (debug 3)))
-  (cond
-    ((or (find ast (finder-callstack finder)) ;recursive call
-	 (null (form-fun-binding ast))) ;also recursive call (actually I think I can remove the above line, since recursive calls all constitute individual APPLICATION-FORM instances now)
-     nil)
-    (t
-     (push ast (finder-callstack finder))
-     (let* ((parser (finder-parser finder))
-	    ;;(fun-binding (walker:nso-definition (walker:form-fun ast))) leave this here so that I remember that #'LAST-SETQS on WALKER:APPLICATION-FORM should operate on FORM-FUN-BINDING, not (WALKER:NSO-DEFINITION (WALKER:FORM-FUN AST)).
-	    (fun-binding (form-fun-binding ast))
-	    (llist (walker:form-llist fun-binding))
-	    (args (walker:form-arguments ast))
-	    (alist (walker-plus:arguments-assign-to-lambda-list parser llist args)))
-       (loop for acons in alist do
-	  ;; TODO: when implementing variable (value) bindings: bind result to (CAR ACONS).
-	    (let ((initform (cdr acons)))
-	      (last-setqs-form! finder initform var last-setqs
-		(pop (finder-callstack finder))
-		(return-from last-setqs last-setqs))))
-       (last-setqs-forms-list! finder (walker:form-body fun-binding) var last-setqs))
-     (pop (finder-callstack finder))
-     last-setqs)))
+  (let ((fun-definition (walker:nso-definition (walker:form-fun ast))))
+    (cond
+      ((and (not (typep fun-definition 'builtin-functiondef))
+	    (or (find ast (finder-callstack finder)) ;recursive call
+		(null (form-fun-binding ast)))) ;also recursive call (actually I think I can remove the above line, since recursive calls all constitute individual APPLICATION-FORM instances now)
+       nil)
+      (t
+       (push ast (finder-callstack finder))
+       (let* ((parser (finder-parser finder))
+	      ;;(fun-binding (walker:nso-definition (walker:form-fun ast))) leave this here so that I remember that #'LAST-SETQS on WALKER:APPLICATION-FORM should operate on FORM-FUN-BINDING, not (WALKER:NSO-DEFINITION (WALKER:FORM-FUN AST)).
+	      (fun-binding (if (typep fun-definition 'builtin-functiondef)
+			       fun-definition
+			       (form-fun-binding ast)))
+	      (llist (walker:form-llist fun-binding))
+	      (args (walker:form-arguments ast))
+	      (alist (walker-plus:arguments-assign-to-lambda-list parser llist args)))
+	 (loop for acons in alist do
+	    ;; TODO: when implementing variable (value) bindings: bind result to (CAR ACONS).
+	      (let ((initforms (let ((initform (cdr acons)))
+				 (if (consp initform) ;to handle &REST parameter
+				     initform
+				     (list initform)))))
+		(loop for initform in initforms do
+		     (last-setqs-form! finder initform var last-setqs
+		       (pop (finder-callstack finder))
+		       (return-from last-setqs last-setqs)))))
+	 (unless (typep fun-definition 'builtin-functiondef)
+	   (last-setqs-forms-list! finder (walker:form-body fun-binding) var last-setqs)))
+       (pop (finder-callstack finder)))))
+  last-setqs)
 
 ;; FLET-FORM and LABELS-FORM are handled by FUN-BINDINGS-MIXIN.
 (defmethod walker:eval-order ((orderer last-setqs-orderer) (ast walker:fun-bindings-mixin))
@@ -2657,9 +2679,9 @@ Returns the updated LAST-SETQS."
 		    ast)
     last-var-reading))
 
-(defun test-last-setqs-form (form &key (captured-symbol 'var) (warn-multiple-captures t))
+(defun test-last-setqs-form (form &key (captured-symbol 'var) (warn-multiple-captures t) variables functions)
   "FORM must contain a captured variable reading, captured to the symbol CAPTURED-SYMBOL, as in '(LET ((A 1)) (CAPTURE VAR A) 1). If such a CAPTURE-form doesn't exist, the last form is assumed to be the variable reading."
-  (let* ((parser (walker:make-parser :type 'capturing-parser :variables nil :functions nil :macros nil))
+  (let* ((parser (make-parser :type 'capturing-parser :variables variables :functions functions :macros nil))
 	 (ast (ntiparse form :parser parser))
 	 (var-reading-captured (let ((vr (gethash captured-symbol (parser-container parser))))
 				 (when (and warn-multiple-captures (consp (cdr vr))) (warn "Symbol ~S was captured more than once: ~S" captured-symbol vr))
@@ -2672,9 +2694,9 @@ Returns the updated LAST-SETQS."
     (last-setqs-for-var-reading finder var-reading)))
 
 (defun test-last-setqs ()
-  (flet ((assert-result (form desired-last-setqs)
-	   (let* ((last-setqs (test-last-setqs-form form :warn-multiple-captures nil))
-		  (actual-last-setqs (remove-duplicates (mapcar #'walker:form-object (mapcar #'walker:form-value last-setqs)))))
+  (flet ((assert-result (form desired-last-setqs &key variables functions)
+	   (let* ((last-setqs (test-last-setqs-form form :warn-multiple-captures nil :variables variables :functions functions))
+		  (actual-last-setqs (remove-duplicates (mapcar (lambda (form) (walker:deparse (make-instance 'walker:deparser) form nil)) (mapcar #'walker:form-value last-setqs)))))
 	     (assert (equal actual-last-setqs desired-last-setqs) () "TEST-LAST-SETQS for form~%~S~%expected ~S,~%but got  ~S~%" form desired-last-setqs actual-last-setqs)))
 	 (assert-parameter (form desired-parameter desired-parameter-varp desired-last-setqs)
 	   "Check that #'LAST-SETQS returns DESIRED-PARAMETER-VARP as definition of capture VAR."
@@ -2693,11 +2715,13 @@ Returns the updated LAST-SETQS."
     (assert-result '(let ((a 1)) (capture var a) (setq a 2) a) '(1))
     (assert-result '(let ((a 1)) (labels ((f (&optional (a (setq a 2))) (if 1 (f) a))) (f)) a) '(2))
     (assert-result '(let ((a 1)) (labels ((f (&optional (a (setq a 2))) (if 1 (f) a))) (f t)) a) '(2 1)) ;note that since (F) is called in the THEN-BRANCH and the ELSE-BRANCH returns from F, the desired result is '(2 1), not '(1 2), because the IF-FORM returns the last SETQs of the THEN-BRANCH before the ELSE-BRANCH.
-    (assert-result '(let ((a 1)) (labels ((f (&optional (a (setq a 2))) (if 1 (f) a) (f))) (f)) a) '()) ;recurses forever, therefore there is no last setq
+    ;;(assert-result '(let ((a 1)) (labels ((f (&optional (a (setq a 2))) (if 1 (f) a) (f))) (f)) a) '()) ;recurses forever, therefore I'm not sure there is a correct last setq
     (assert-result '(let ((a 1)) (labels ((f (&optional (a (setq a 2))) (if 1 (f) a))) (f)) a) '(2))
     (assert-result '(let ((a 1)) (labels ((f (&optional (a (setq a 2))) (if 1 (f) a))) (f t)) a) '(2 1))
     (assert-result '(let ((a 1)) (labels ((f (&optional (a (setq a 2))) (if 1 (f) a)) (g (a) (f a))) (g t)) a) '(2 1))
     (assert-result '(let ((a 1)) (flet ((fb () (setq a 2))) (flet ((fa () (fb))) (fa))) a) '(2))
+    (assert-result '(let ((a (1+ 1))) (1+ a) a) '((1+ 1)) :functions '(1+))
+    (assert-result '(let ((a (1+ 1))) (1+ (setq a 2)) a) '(2) :functions '(1+))
     (assert-result '(let ((a 1)) (if 1 (setq a 2)) (if 2 (setq a 3)) a) '(3 2 1))
     (assert-result '(let ((a 1)) (if 1 (setq a 2)) (if 2 (setq a 3) (setq a 4)) a) '(3 4))
     ;;(assert-result '(let ((a 1)) (if 1 (setq a (if 2 2 3))) a) '((if 2 2 3) 1)) ;TODO low priority
@@ -2769,21 +2793,24 @@ Returns the updated LAST-SETQS."
    (last-setqs-finder :initarg :last-setqs-finder :initform (make-instance 'last-setqs-finder) :accessor inferer-last-setqs-finder)
    ))
 
+(defun setq-forms-for-var-reading (inferer var-reading)
+  (let* ((last-setqs (last-setqs-for-var-reading (inferer-last-setqs-finder inferer) var-reading))
+	 (setq-forms (mapcar (lambda (setq)
+			       (etypecase setq
+				 (walker:var-binding
+				  (walker:form-value setq))
+				 (walker:var-writing
+				  setq)
+				 (required-parameter-var
+				  (walker:parameter-var (parameter-arg setq)))))
+			     last-setqs)))
+    (assert (not (null last-setqs)) () "No LAST-SETQS for ~S." var-reading)
+    setq-forms))
+
 (defun bounds-of-var-reading (fwd-inferer var-reading)
-  (let* ((last-setqs (last-setqs-for-var-reading (inferer-last-setqs-finder fwd-inferer) var-reading))
-	 (setq-bounds (mapcar (lambda (setq)
-				(etypecase setq
-				  (walker:var-binding
-				   (form-bounds (walker:form-value setq)))
-				  (walker:var-writing
-				   (form-bounds setq))
-				  (required-parameter-var
-				   (form-bounds (walker:parameter-var (parameter-arg setq))))))
-			      last-setqs)))
-    (if (null last-setqs)
-	(error "No LAST-SETQS for ~S." var-reading)
-	;; TODO: have to meet bounds with (all) declared types.
-	(apply #'join-bounds setq-bounds))))
+  (let* ((setq-bounds (setq-forms-for-var-reading fwd-inferer var-reading)))
+    ;; TODO: have to meet bounds with (all) declared types.
+    (apply #'join-bounds (mapcar #'form-bounds setq-bounds))))
 
 (defmethod fwd-infer ((fwd-inferer fwd-inferer) (ast walker:var-reading))
   (bounds-of-var-reading fwd-inferer ast))
@@ -2881,7 +2908,7 @@ Returns the updated LAST-SETQS."
       (t
        (push funbinding (inferer-callstack fwd-inferer))
        (let* ((llist (walker:form-llist funbinding))
-	      (parser (make-instance 'walker:parser)) ;FIXME? needed by ARGUMENTS-ASSIGN-TO-LAMBDA-LIST
+	      (parser (make-instance 'ntiparser)) ;FIXME? needed by ARGUMENTS-ASSIGN-TO-LAMBDA-LIST
 	      (arg-alist (walker-plus:arguments-assign-to-lambda-list parser llist arguments)))
 	 (if (loop for acons in arg-alist for acons-rest on arg-alist do
 		  (let* ((var (car acons))
@@ -3039,24 +3066,15 @@ Returns the updated LAST-SETQS."
     (check-new-bounds ast met-bounds)
     (setf (form-bounds ast) met-bounds)))
 
-(defun meet-forms (branches ast)
+(defun meet-forms (branches ast &key (ast-bounds (form-bounds ast)))
   (mapc (lambda (form)
-	  (let* ((met-bounds (meet-bounds (form-bounds form) (form-bounds ast))))
+	  (let* ((met-bounds (meet-bounds (form-bounds form) ast-bounds)))
 	    (check-new-bounds form met-bounds)
 	    (setf (form-bounds form) met-bounds)))
 	branches))
 
 (defmethod infer ((inferer inferer) (ast walker:var-reading))
-  (let* ((last-setqs (last-setqs-for-var-reading (inferer-last-setqs-finder inferer) ast))
-	 (setq-forms (mapcar (lambda (setq)
-			       (etypecase setq
-				 (walker:var-binding
-				  (walker:form-value setq))
-				 (walker:var-writing
-				  setq)
-				 (required-parameter-var
-				  (walker:parameter-var (parameter-arg setq)))))
-			     last-setqs)))
+  (let ((setq-forms (setq-forms-for-var-reading inferer ast)))
     ;; TODO: have to meet bounds with (all) declared types.
     ;; forward pass: join bounds from the last setqs to this form's bounds.
     (join-forms ast setq-forms)
@@ -3138,7 +3156,6 @@ Returns the updated LAST-SETQS."
 
 (defun infer-user-defined-llist (inferer ast)
   (declare (type inferer inferer) (ignore inferer) (type walker:ordinary-llist ast))
-  (prind (form-application-form (walker:form-parent ast)))
   (let* ((application-form (let ((appform (form-application-form (walker:form-parent ast))))
 			     (assert (typep appform 'walker:application-form))
 			     appform))
@@ -3150,7 +3167,7 @@ Returns the updated LAST-SETQS."
 			 (walker:fun
 			  (form-fun-binding application-form))))))
     (let* ((llist (walker:form-llist funbinding))
-	   (parser (make-instance 'walker:parser)) ;FIXME? needed by ARGUMENTS-ASSIGN-TO-LAMBDA-LIST
+	   (parser (make-instance 'ntiparser)) ;FIXME? needed by ARGUMENTS-ASSIGN-TO-LAMBDA-LIST
 	   (arg-alist (walker-plus:arguments-assign-to-lambda-list parser llist arguments)))
       (loop for acons in arg-alist for acons-rest on arg-alist do
 	   (let* ((var (car acons)) ;(PARAMETER (WALKER:NSO-DEFINITION VAR)) in case I need it
@@ -3168,9 +3185,76 @@ Returns the updated LAST-SETQS."
     (t
      (infer-user-defined-llist inferer ast))))
 
+(defun infer-builtin-functiondef (application-form funbinding)
+  "Does the forward and backward pass on the built-in Lisp function FUNBINDING."
+  (declare (type walker:application-form application-form) (type builtin-functiondef funbinding))
+  (declare (optimize (debug 3)))
+  (labels ((warn-argument-parameter-type (argument-form parameter-type)
+	     (flet ((warn-resultn (n parameter-type)
+		      (let* ((form-bounds (form-bounds argument-form))
+			     (argument-upper (resultn (bounds-upper form-bounds) n))
+			     (argument-lower (resultn (bounds-lower form-bounds) n)))
+			(unless (is-subtypep argument-upper parameter-type +builtin-typehash+)
+			  (warn "Function parameter upper bounds type mismatch: ~S should be a subtype of ~S." argument-upper parameter-type))
+			(unless (is-subtypep nil argument-lower +builtin-typehash+)
+			  (warn "Function parameter lower bounds type mismatch: ~S should be a subtype of ~S." nil argument-lower)))))
+	       (cond
+		 ((consp parameter-type)
+		  (assert (eql (car parameter-type) 'values))
+		  (loop for type in (cdr parameter-type) for n from 0 do (warn-resultn n type)))
+		 (t
+		  (warn-resultn 0 parameter-type)))))
+	   (process-arguments-parameters (process-function)
+	     (let* ((llist (walker:form-llist funbinding))
+		    (parser (make-instance 'ntiparser)) ;FIXME? needed by ARGUMENTS-ASSIGN-TO-LAMBDA-LIST
+		    (arguments (walker:form-arguments application-form))
+		    (arg-alist (walker-plus:arguments-assign-to-lambda-list parser llist arguments)))
+	       (loop for acons in arg-alist for acons-rest on arg-alist do
+		    (let* ((var (car acons))
+			   (types (remove-if (lambda (declspec) (not (typep declspec 'walker:declspec-type)))
+					     (walker:nso-declspecs var)))
+			   (type (join-typelist (mapcar #'walker:declspec-type types) +builtin-typehash+))
+			   (parameter (walker:nso-definition var))
+			   (form (cdr acons)))
+		      (funcall process-function parameter form type))))))
+    ;; forward pass: from the matching ARGUMENTS, find a built-in function, and set the APPLICATION-FORM.
+    (process-arguments-parameters
+     (lambda (parameter argument-form parameter-type)
+       ;; forward pass: check that the bounds of FORM are a subtype of the declaration of PARAMETER.
+       (etypecase parameter
+	 (walker:required-parameter (warn-argument-parameter-type argument-form parameter-type))
+	 (walker:optional-parameter (warn-argument-parameter-type argument-form parameter-type))
+	 (walker:rest-parameter
+	  ;; TODO: when I have implemented algebraic types, declare types of the PARAMETER in +BUILTIN-LISP-FUNCTIONS+ like so (DECLARE (FTYPE (FUNCTION (&REST (LIST NUMBER NUMBER)) NUMBER) +)) and match the elements of FORM with the declared &REST types (i.e. (LIST NUMBER NUMBER)).
+	  )
+	 (walker:key-parameter (warn-argument-parameter-type argument-form parameter-type)))))
+    ;; forward pass: update the APPLICATION-FORMs result from the value type of the declaration.
+    (let* ((decl-result-bounds (walker:form-values funbinding)))
+      (join-forms application-form nil :branches-bounds (list decl-result-bounds))
+      ;; backward pass: from the result value, find a matching function and update the arguments' types from the parameters. But first warn if the result type does not match the declared result type.
+      (let ((result-values (cons 'values
+				 (let* ((u (bounds-upper decl-result-bounds))
+					(l (bounds-lower decl-result-bounds))
+					(m (max (results-nvalues u) (results-nvalues l))))
+				   (loop for i below (most-significant-bit m) collect (resultn u i))))))
+	(warn-argument-parameter-type application-form result-values)))
+    (process-arguments-parameters
+     (lambda (parameter argument-form parameter-type)
+       ;; backward pass: update the arguments' types from the parameters.
+       (flet ((meet-non-list-type ()
+		(let* ((upper (make-results parameter-type))
+		       (parameter-bounds (make-bounds upper (make-results-nil))))
+		  (meet-forms (list argument-form) nil :ast-bounds parameter-bounds))))
+	 (etypecase parameter
+	   (walker:required-parameter (meet-non-list-type))
+	   (walker:optional-parameter (meet-non-list-type))
+	   (walker:rest-parameter
+	    ;; TODO: when I have implemented algebraic types, declare types of the PARAMETER in +BUILTIN-LISP-FUNCTIONS+ like so (DECLARE (FTYPE (FUNCTION (&REST (LIST NUMBER NUMBER)) NUMBER) +)) and match the elements of FORM with the declared &REST types (i.e. (LIST NUMBER NUMBER)).
+	    )
+	   (walker:key-parameter (meet-non-list-type))))))))
+
 (defmethod infer ((inferer inferer) (ast walker:application-form))
   (let* ((funbinding (let ((funobj (walker:function-object (walker:form-fun ast))))
-		       (prind funobj)
 		       (etypecase funobj
 			 (walker:lambda-form
 			  funobj)
@@ -3180,8 +3264,7 @@ Returns the updated LAST-SETQS."
 			    (walker:functiondef (form-fun-binding ast))))))))
     (etypecase funbinding
       (builtin-functiondef
-       (error "TODO")
-       (infer-builtin-functiondef ast funbinding (walker:form-arguments ast)))
+       (infer-builtin-functiondef ast funbinding))
       (t
        ;; TODO FIXME: meet last body result with the declared return-value of the function.
        ;; forward pass: the application-form's result is updated from to the bounds of the last body form.
@@ -3218,14 +3301,10 @@ Returns the updated LAST-SETQS."
 				(cons binding funbindings))
 			  bounds)))
 	   ;; store the merged types in BINDING, which is of type WALKER:FUN-BINDING
-	   ;;(prind fun (mapcar #'id-of applications))
-	   ;;(let ((walker:*print-detailed-walker-objects* t)) (prind "bindings" (mapcar #'car bounds)))
-	   ;;(prind bounds)
 	   (apply #'mapc
 		  (lambda (binding &rest applications)
 		    (let ((bounds (mapcar #'car applications)))
 		      (unless (null (car bounds))
-			(prind bounds)
 			(setf (form-bounds (cdr binding)) (apply #'join-bounds bounds)))))
 		  (cdr (last1 bounds))
 		  (mapcar #'cdr (butlast bounds)))))
@@ -3265,14 +3344,29 @@ Returns the updated LAST-SETQS."
   (push ast (deparser-all deparser)))
 
 (defun find-flow (ast &key warn-dead-p application-form-substitute-p)
-  (let ((all-forms (let ((deparser (make-instance 'flow-deparser)))
-		     (walker:deparse deparser ast nil)
-		     (nreverse (deparser-all deparser))))
-	(all-evaluated (let ((finder (make-instance 'flow-finder :warn-dead-p warn-dead-p :application-form-substitute-p application-form-substitute-p)))
-			 (find-exits finder ast)
-			 (nreverse (finder-order finder)))))
+  (declare (optimize (debug 3)))
+  ;; TODO: FIXME: detection of unreachable forms doesn't work, e.g. for '(TAGBODY A (IF 1 (LET ((X 1)) (GO B) 2) (GO A)) B) there is currently a warning about X and B not being reachable.
+  ;; TODO: if there are warnings about virtual forms in WALKER:APPLICATION-FORMs of user-defined functions not being reachable, map them to the real forms in the WALKER:FUN-BINDINGs.
+  (let* ((all-evaluated (let ((finder (make-instance 'flow-finder :warn-dead-p warn-dead-p :application-form-substitute-p application-form-substitute-p)))
+			  (find-exits finder ast)
+			  (nreverse (finder-order finder))))
+	 (all-forms (let ((deparser (make-instance 'flow-deparser)))
+		      (walker:deparse deparser ast nil)
+		      (nreverse (deparser-all deparser))))
+	 (all-user-defined-funs (make-hash-table)))
+    (mapcar (lambda (ast)
+	      (when (typep ast 'walker:application-form)
+		(setf (gethash (walker:form-fun ast) all-user-defined-funs) 0)))
+	    all-evaluated)
     (loop for form in all-forms do
-	 (unless (or (typep form 'walker:tag) (find form all-evaluated))
+	 (when (typep form 'walker:application-form)
+	   (incf (gethash (walker:form-fun form) all-user-defined-funs))))
+    ;;(prind all-evaluated)
+    (loop for form in all-forms do
+	 ;;(prind form (and (typep form 'walker:fun) (gethash form all-user-defined-funs)))
+	 (unless (or (typep form 'walker:tag) (typep form 'walker:ordinary-llist)
+		     (find form all-evaluated)
+		     (and (typep form 'walker:fun) (> (gethash form all-user-defined-funs) 0)))
 	   (warn "Unreachable form~% ~S." form)
 	   (setf (form-bounds form) (make-bounds (make-results-0) (make-results-0)))))
     all-evaluated))
@@ -3289,15 +3383,59 @@ Returns the updated LAST-SETQS."
 	 (inferer (make-instance 'inferer :last-setqs-finder last-setqs-finder)))
     inferer))
 
-(defun test-infer-form (form &key variables functions)
+(defun test-infer-form (form &key variables functions (borders :upper-lower) (show :form))
   (let* ((ast (ntiparse form :variables variables :functions functions))
 	 (inferer (make-inferer))
 	 (order (find-flow ast :application-form-substitute-p t)))
     ;; forward pass
     (let ((*warn-bounds* nil))
       (loop for i from 0 for form in order do
-	   (prind form)
 	   (infer inferer form)))
-    (annotate ast)))
+    (annotate ast :borders borders :show show)))
 
-;; TODO: (TEST-INFER-FORM '(1+ 1) :FUNCTIONS '(1+))
+(defun test-infer ()
+  (flet ((assert-infer (form desired-result)
+	   (let* ((variables nil)
+		  (functions '(1+ + floor))
+		  (annotated-form (test-infer-form form :variables variables :functions functions :borders :upper-lower))
+		  (actual-result (butlast annotated-form)))
+	     (assert (equal desired-result actual-result) () "TEST-INFER failed for~%form: ~S~%desired-result:~S~%actual-result:~S" form desired-result actual-result))))
+    (assert-infer '1 '(the-ul (fixnum fixnum)))
+    (assert-infer '(1+ 1) '(the-ul (number nil)))
+    (assert-infer '(+ 1 1.0) '(the-ul (number nil)))
+    (assert-infer '(let ((a (1+ 1))) (floor a)) '(the-ul (integer nil) (real nil)))
+    (assert-infer '(let ((a 1)) a) '(the-ul (fixnum fixnum)))
+    (assert-infer '(let ((a 1)) (setq a 1.0)) '(the-ul (single-float single-float)))
+    ;; test IF-FORM join.
+    (assert-infer '(if 1 1 1.0) '(the-ul (real real)))
+    (assert-infer '(let ((a nil)) (if 1 (setq a 1.0) (setq a 1))) '(the-ul (real real)))
+    (assert-infer '(let ((a nil)) (if (setq a 1) (setq a 1.0)) a) '(the-ul (real real))) ;SETQ in TEST-FORM
+    ;; check that an empty else-form works.
+    (assert-infer '(let ((a 1)) a (if a (setq a 1.0)) a) '(the-ul (real real)))
+    ;; IF-FORM: check that joining does not join the wrong variables.
+    (assert-infer '(if 1 (let ((a 1)) a) (let ((b 1)) b)) '(the-ul (fixnum fixnum)))
+    ;; TAGBODY-FORM
+    (assert-infer '(tagbody a (go b) (go a) b) '(the-ul (null null)))
+    (assert-infer '(let ((a 1)) (tagbody (if a (progn (setq a 1.0) (go a)) a) a) a) '(the-ul (real real)))
+    (assert-infer '(let ((a 1)) (tagbody (if 1 (progn (setq a 1.0) (go a))) a) a) '(the-ul (real real)))
+    ;; check that the test in IF works.
+    (assert-infer '(let ((a 1)) (tagbody (if (go a) (setq a 1.0) (setq a 1.0)) a) a) '(the-ul (fixnum fixnum)))
+    ;; check that loops work.
+    (assert-infer '(tagbody a (if (go b) (go a) (go a)) b) '(the-ul (null null)))
+    (assert-infer '(tagbody a (if 1 (go b) (go a)) b) '(the-ul (null null)))
+    ;; check that the GO inside the LET correctly aborts the LET
+    ;;(assert-infer '(tagbody a (if 1 (let ((x 1)) (go b) 2) (go a)) b) '(the-ul (null null)))
+    ;;(assert-infer '(tagbody a (if 1 (let ((x (go b))) 2) (go a)) b) '(the-ul (null null)))
+    ;; check that labels works
+#|    (test '(tagbody a (if 1 (labels ((f () 1)) (go b)) (go a)) b)
+    ;; check that detecting dead forms works: the NILs should be dead
+    '(tagbody (go a) nil a)
+    '(tagbody b (go b) nil)
+    '(block a 1 (return-from a) nil) ;the 1 shouln't be dead
+    '(block a 1 (return-from a 1) nil) ;the 1s shouln't be dead
+    ;; check that function application works
+    '(tagbody a (if 1 (labels ((f () (go b))) (f)) (go a)) b)
+    '(tagbody a (if 1 (labels ((f () (go b)) (g () (f))) (g)) (go a)) b)
+|#
+    ))
+;;(test-infer)
