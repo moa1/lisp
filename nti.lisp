@@ -1679,7 +1679,7 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
 		(forms (funcall accessor ast))
 		(forms-exits (cond
 			       ((eql accessor #'walker:form-bindings)
-				(jumping-exits (mapcar (lambda (ast) (find-exits finder ast)) forms)))
+				(find-exits-forms-list finder ast (mapcar #'walker:form-value forms)))
 			       ((eql accessor #'walker:form-body)
 				(assert (null (cdr accessor-cdr)))
 				(find-exits-forms-list finder ast forms))
@@ -2046,6 +2046,10 @@ Returns NIL."
     (assert-find-exit '(capture a (tagbody (if 1 (go a) (if 2 (go b))) (capture z (go z)) a b)) '(z a))
     (assert-find-exit '(tagbody (if 1 (go a) (if 2 (go b))) (capture z (go z)) a b (go a)) '(z))
     (assert-find-exit '(tagbody (if 1 (go a) (if 2 (go b))) (capture z (return-from z)) a b (go a)) '(z))
+    (assert-find-exit '(let () (capture a 1)) '(a))
+    (assert-find-exit '(let ((a (capture z (go z)))) (capture a 1)) '(z) '(a))
+    (assert-find-exit '(let ((a (capture z (go z))) (b (capture b 1))) (capture c 1)) '(z) '(b c))
+    (assert-find-exit '(let ((a 1)) (capture z (go z))) '(z))
     (assert-find-exit '(capture a (block nil (return-from nil))) '(a))
     (assert-find-exit '(capture a (block nil)) '(a))
     (assert-find-exit '(block nil (capture a (return-from x))) '(a))
@@ -3424,8 +3428,8 @@ Returns the updated LAST-SETQS."
     (assert-infer '(tagbody a (if (go b) (go a) (go a)) b) '(the-ul (null null)))
     (assert-infer '(tagbody a (if 1 (go b) (go a)) b) '(the-ul (null null)))
     ;; check that the GO inside the LET correctly aborts the LET
-    ;;(assert-infer '(tagbody a (if 1 (let ((x 1)) (go b) 2) (go a)) b) '(the-ul (null null)))
-    ;;(assert-infer '(tagbody a (if 1 (let ((x (go b))) 2) (go a)) b) '(the-ul (null null)))
+    (assert-infer '(tagbody a (if 1 (let ((x 1)) (go b) 2) (go a)) b) '(the-ul (null null)))
+    (assert-infer '(tagbody a (if 1 (let ((x (go b))) 2) (go a)) b) '(the-ul (null null)))
     ;; check that labels works
 #|    (test '(tagbody a (if 1 (labels ((f () 1)) (go b)) (go a)) b)
     ;; check that detecting dead forms works: the NILs should be dead
