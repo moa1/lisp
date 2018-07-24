@@ -1660,11 +1660,13 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
   (:report (lambda (condition stream)
 	     (format stream "Form ~A~%cannot ever be reached." (walker:deparse (make-instance 'walker:deparser) (condition-form condition) nil))))
   (:documentation "Warning that FORM will not be evaluated."))
-(defmacro warn-dead-form (exit-finder form)
+(defun warn-dead-form (form)
+  (restart-case (warn (make-condition 'dead-form-warning :form form))
+    (muffle-warning ()
+      nil)))
+(defmacro warn-dead-form-finder (exit-finder form)
   `(when (finder-warn-dead-p ,exit-finder)
-     (restart-case (warn (make-condition 'dead-form-warning :form ,form))
-       (muffle-warning ()
-	 nil))))
+     (warn-dead-form ,form)))
 
 (defun find-exits-forms-list (finder ast forms)
   "Return the list of jumps that occur when FORMS are evaluated."
@@ -1674,7 +1676,7 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
 	   (pushend ast-exits (jumping-exits form-exits))
 	   (unless (normal-exits form-exits)
 	     (loop for dead in (cdr (member form forms)) do
-		  (warn-dead-form finder dead))
+		  (warn-dead-form-finder finder dead))
 	     (return-from find-exits-forms-list form-exits))))
     (let* ((last-form (last1 forms))
 	   (last-form-exits (if last-form (find-exits finder last-form) (list ast))))
@@ -1700,8 +1702,8 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
 				(find-exits finder forms)))))
 	   (if warn-only
 	       (if (listp forms)
-		   (loop for form in forms do (warn-dead-form finder form))
-		   (warn-dead-form finder forms))
+		   (loop for form in forms do (warn-dead-form-finder finder form))
+		   (warn-dead-form-finder finder forms))
 	       (setf exits (nconc (jumping-exits exits) forms-exits)))
 	   (unless (normal-exits forms-exits)
 	     (setf warn-only t))))
@@ -1756,10 +1758,10 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
 		(pushend ast-exits (jumping-exits form-exits))
 		(unless (normal-exits form-exits)
 		  (loop for form-acons in (cdr acons-rest) do
-		       (warn-dead-form finder (cdr form-acons)))
+		       (warn-dead-form-finder finder (cdr form-acons)))
 		  (unless (typep funbinding 'builtin-functiondef)
 		    (loop for form in (walker:form-body funbinding) do
-			 (warn-dead-form finder form)))
+			 (warn-dead-form-finder finder form)))
 		  (return-from find-exits-functiondef ast-exits))))
 	 (find-exits finder (walker:form-llist funbinding)) ;this is needed for #'FIND-FLOW and #'INFER, to determine when arguments to an APPLICATION-FORM have been evaluated and can be copied to the parameters
 	 (cond
@@ -1811,8 +1813,8 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
 	 (test-exits (find-exits finder test-form)))
     (cond
       ((null (normal-exits test-exits))
-       (warn-dead-form finder then-form)
-       (when else-form (warn-dead-form finder else-form))
+       (warn-dead-form-finder finder then-form)
+       (when else-form (warn-dead-form-finder finder else-form))
        test-exits)
       (t
        (let ((then-exits (find-exits finder then-form))
@@ -1907,7 +1909,7 @@ Returns NIL."
 			(return)))))))
     (loop for form in (walker:form-body ast) do
 	 (unless (gethash form visited nil)
-	   (warn-dead-form finder form))))
+	   (warn-dead-form-finder finder form))))
   nil)
 
 (defmethod find-exits ((finder exit-finder) (ast walker:tagbody-form))
@@ -2003,16 +2005,19 @@ Returns NIL."
   (let* ((ast (capturing-parse form :variables variables :functions functions)))
     (find-exits (make-instance 'exit-finder :warn-dead-p t) ast)))
 
+(defun get-captureds (form-symbols container)
+  (loop for symbol in form-symbols collect
+       (if (symbolp symbol)
+	   (let ((r (gethash symbol container nil)))
+	     (if r
+		 r
+		 (error "Symbol ~S is not captured. Captured symbols are ~S" symbol (loop for k being the hash-key of container collect k))))
+	   (error "Unknown form symbol ~S" symbol))))
+
 (defun test-find-exits ()
   (flet ((assert-find-exit (form desired-exits &optional desired-dead-forms)
 	   (multiple-value-bind (ast container) (capturing-parse form)
-	     (flet ((get-captureds (exits)
-		      (loop for exit in exits collect
-			   (if (symbolp exit)
-			       (let ((r (gethash exit container nil)))
-				 (if r r (error "Symbol ~S is not captured. Captured symbols are ~S" exit (loop for k being the hash-key of container collect k))))
-			       (error "Unknown exit symbol ~S" exit))))
-		    (equal-actual-desireds-exits (actual desireds)
+	     (flet ((equal-actual-desireds-exits (actual desireds)
 		      "Check for each ACTUAL exit that it occurs exactly once in the captured list exits, and remove the DESIREDS matches, and that afterwards, there are no symbols left in DESIREDS that have no counterpart in ACTUAL."
 		      (do ((al actual (cdr al)) (dsl desireds (cdr dsl)))
 			  ((or (null al) (null dsl)) (and (null al) (null dsl)))
@@ -2026,8 +2031,8 @@ Returns NIL."
 						  (muffle-warning warning))))
 				  (find-exits (make-instance 'exit-finder :warn-dead-p t) ast))
 				(nreverse dead-forms)))))
-	       (let ((desireds-exits-1 (get-captureds desired-exits))
-		     (desireds-dead-forms-1 (get-captureds desired-dead-forms)))
+	       (let ((desireds-exits-1 (get-captureds desired-exits container))
+		     (desireds-dead-forms-1 (get-captureds desired-dead-forms container)))
 		 (multiple-value-bind (actual-exits actual-dead-forms) (find-exits-and-dead-forms ast)
 		   (assert (equal-actual-desireds-exits actual-exits desireds-exits-1) () "(FIND-EXIT ~S)~%returned ~S,~%but expected one of ~S~%" form actual-exits desireds-exits-1)
 		   (assert (equal-actual-desireds-exits actual-dead-forms desireds-dead-forms-1) () "(FIND-EXIT ~S)~%found dead forms ~S,~%but expected one of ~S~%" form actual-dead-forms desireds-dead-forms-1)))))))
@@ -3322,6 +3327,7 @@ Then call FORM-FUNCTION on the forms that are beneath BINDING: the first paramet
 						    (walker:fun-binding nil)
 						    (walker:llist nil)
 						    (walker:parameter nil)
+						    (walker:tag nil)
 						    (walker:application-form
 						     (join-binding (walker:nso-definition (walker:form-fun binding-form)))
 						     (mapcar #'form-bounds applications-forms))
@@ -3371,31 +3377,33 @@ Then call FORM-FUNCTION on the forms that are beneath BINDING: the first paramet
 
 (defun find-flow (ast &key warn-dead-p application-form-substitute-p)
   (declare (optimize (debug 3)))
-  ;; TODO: FIXME: detection of unreachable forms doesn't work, e.g. for '(TAGBODY A (IF 1 (LET ((X 1)) (GO B) 2) (GO A)) B) there is currently a warning about X and B not being reachable.
-  ;; TODO: if there are warnings about virtual forms in WALKER:APPLICATION-FORMs of user-defined functions not being reachable, map them to the real forms in the WALKER:FUN-BINDINGs.
-  (let* ((all-evaluated (let ((finder (make-instance 'flow-finder :warn-dead-p warn-dead-p :application-form-substitute-p application-form-substitute-p)))
-			  (find-exits finder ast)
-			  (nreverse (finder-order finder))))
-	 (all-forms (let ((deparser (make-instance 'flow-deparser)))
-		      (walker:deparse deparser ast nil)
-		      (nreverse (deparser-all deparser))))
-	 (all-user-defined-funs (make-hash-table)))
-    (mapcar (lambda (ast)
-	      (when (typep ast 'walker:application-form)
-		(setf (gethash (walker:form-fun ast) all-user-defined-funs) 0)))
-	    all-evaluated)
-    (loop for form in all-forms do
-	 (when (typep form 'walker:application-form)
-	   (incf (gethash (walker:form-fun form) all-user-defined-funs))))
-    ;;(prind all-evaluated)
-    ;;(with-hash-table-iterator (key all-user-defined-funs) (prind (key)))
-    (loop for form in all-forms do
-	 (unless (or (typep form 'walker:tag) (typep form 'walker:ordinary-llist)
-		     (find form all-evaluated)
-		     (and (typep form 'walker:fun) (> (gethash form all-user-defined-funs 0) 0)))
-	   (warn "Unreachable form~% ~S." form) ;TODO FIXME: this doesn't work (see above)
-	   (setf (form-bounds form) (make-bounds (make-results-0) (make-results-0)))))
-    all-evaluated))
+  (multiple-value-bind (evaluated-forms dead-forms)
+      (let ((finder (make-instance 'flow-finder :warn-dead-p warn-dead-p :application-form-substitute-p application-form-substitute-p))
+	    (dead-forms nil))
+	(handler-bind ((dead-form-warning
+			(lambda (warning)
+			  (push (condition-form warning) dead-forms)
+			  (muffle-warning warning))))
+	  (find-exits finder ast))
+	(values (nreverse (finder-order finder)) dead-forms))
+    ;; map virtual DEAD-FORMS to original forms.
+    (let* ((virtual-to-original (make-hash-table)))
+      (let ((functiondefs nil))
+	(walker:map-ast (lambda (form path)
+			  (declare (ignore path))
+			  (when (typep form 'walker:functiondef)
+			    (push form functiondefs)))
+			ast)
+	(loop for functiondef in functiondefs do
+	     (map-application-form-funbindings functiondef
+					       (lambda (original &rest virtuals)
+						 (dolist (virtual virtuals)
+						   (setf (gethash virtual virtual-to-original) original))))))
+      (dolist (dead dead-forms)
+	(let ((original (gethash dead virtual-to-original dead)))
+	  (warn-dead-form original)
+	  (setf (form-bounds original) (make-bounds (make-results-0) (make-results-0)))))
+      evaluated-forms)))
 
 (defun test-find-flow-form (form &key variables functions)
   (let* ((ast (ntiparse form :variables variables :functions functions)))
@@ -3410,22 +3418,36 @@ Then call FORM-FUNCTION on the forms that are beneath BINDING: the first paramet
     inferer))
 
 (defun test-infer-form (form &key variables functions (borders :upper-lower) (show :form))
-  (let* ((ast (ntiparse form :variables variables :functions functions))
+  (let* ((parser (make-parser :type 'capturing-parser :variables variables :functions functions :macros nil))
+	 (ast (ntiparse form :parser parser))
 	 (inferer (make-inferer))
-	 (order (find-flow ast :application-form-substitute-p t)))
+	 (order (find-flow ast :warn-dead-p t :application-form-substitute-p t)))
+    ;; avoid multiple dead form warnings when #'VISIT-TAGBODY-FORM-EXITS is called. (#'FIND-FLOW already warns.)
+    (setf (finder-warn-dead-p (finder-exit-finder (inferer-last-setqs-finder inferer))) nil)
     ;; forward pass
     (let ((*warn-bounds* nil))
       (loop for i from 0 for form in order do
 	   (infer inferer form)))
-    (annotate ast :borders borders :show show)))
+    (values (annotate ast :borders borders :show show) (parser-container parser))))
 
 (defun test-infer ()
-  (flet ((assert-infer (form desired-result)
+  (flet ((assert-infer (form desired-result &optional desired-dead-symbols)
 	   (let* ((variables nil)
 		  (functions '(1+ + floor))
-		  (annotated-form (test-infer-form form :variables variables :functions functions :borders :upper-lower))
+		  (actual-dead-forms nil)
+		  captured-forms
+		  (annotated-form (handler-bind ((dead-form-warning
+						  (lambda (warning)
+						    (push (condition-form warning) actual-dead-forms)
+						    (muffle-warning warning))))
+				    (multiple-value-bind (annotated-form container)
+					(test-infer-form form :variables variables :functions functions :borders :upper-lower)
+				      (setf captured-forms container)
+				      annotated-form)))
 		  (actual-result (butlast annotated-form)))
-	     (assert (equal desired-result actual-result) () "TEST-INFER failed for~%form: ~S~%desired-result:~S~%actual-result:~S" form desired-result actual-result))))
+	     (assert (equal desired-result actual-result) () "TEST-INFER failed for~%form: ~S~%desired-result:~S~%actual-result:~S" form desired-result actual-result)
+	     (let ((desired-dead-forms (mapcar #'car (get-captureds desired-dead-symbols captured-forms))))
+	       (assert (equal desired-dead-forms actual-dead-forms) () "TEST-INFER expected dead forms~%for: ~S~%desired-dead-forms:~S~%actual-dead-forms:~S" form desired-dead-forms actual-dead-forms)))))
     (assert-infer '1 '(the-ul (fixnum fixnum)))
     (assert-infer '(1+ 1) '(the-ul (number nil)))
     (assert-infer '(+ 1 1.0) '(the-ul (number nil)))
@@ -3441,30 +3463,29 @@ Then call FORM-FUNCTION on the forms that are beneath BINDING: the first paramet
     ;; IF-FORM: check that joining does not join the wrong variables.
     (assert-infer '(if 1 (let ((a 1)) a) (let ((b 1)) b)) '(the-ul (fixnum fixnum)))
     ;; TAGBODY-FORM
-    (assert-infer '(tagbody a (go b) (go a) b) '(the-ul (null null)))
+    (assert-infer '(tagbody a (go b) (capture a (go a)) b) '(the-ul (null null)) '(a))
     (assert-infer '(let ((a 1)) (tagbody (if a (progn (setq a 1.0) (go a)) a) a) a) '(the-ul (real real)))
     (assert-infer '(let ((a 1)) (tagbody (if 1 (progn (setq a 1.0) (go a))) a) a) '(the-ul (real real)))
     ;; check that the test in IF works.
-    (assert-infer '(let ((a 1)) (tagbody (if (go a) (setq a 1.0) (setq a 1.0)) a) a) '(the-ul (fixnum fixnum)))
+    (assert-infer '(let ((a 1)) (tagbody (if (go a) (capture a (setq a 1.0)) (capture b (setq a 1.0))) a) a) '(the-ul (fixnum fixnum)) '(a b))
     ;; check that loops work.
-    (assert-infer '(tagbody a (if (go b) (go a) (go a)) b) '(the-ul (null null)))
+    (assert-infer '(tagbody a (if (go b) (capture a (go a)) (capture b (go a))) b) '(the-ul (null null)) '(a b))
     (assert-infer '(tagbody a (if 1 (go b) (go a)) b) '(the-ul (null null)))
     ;; check that the GO inside the LET correctly aborts the LET
-    (assert-infer '(tagbody a (if 1 (let ((x 1)) (go b) 2) (go a)) b) '(the-ul (null null)))
-    (assert-infer '(tagbody a (if 1 (let ((x (go b))) 2) (go a)) b) '(the-ul (null null)))
+    (assert-infer '(tagbody a (if 1 (let ((x 1)) (go b) (capture a 2)) (go a)) b) '(the-ul (null null)) '(a))
+    (assert-infer '(tagbody a (if 1 (let ((x (go b))) (capture a 2)) (go a)) b) '(the-ul (null null)) '(a))
     ;; check that labels works
     (assert-infer '(tagbody a (if 1 (labels ((f () 1)) (go b)) (go a)) b) '(the-ul (null null)))
     (assert-infer '(labels ((f (x) x)) (f 1) (f 1.0)) '(the-ul (single-float single-float)))
     (assert-infer '(labels ((f (x) 1.0) (g (x) (f x))) (g 1)) '(the-ul (single-float single-float)))
     (assert-infer '(labels ((f (x) (if 1 (g x) x)) (g (x) (f x))) (g 1) (g 1.0)) '(the-ul (single-float single-float)))
     ;; check that detecting dead forms works: the NILs should be dead
-#|    '(tagbody (go a) nil a)
-    '(tagbody b (go b) nil)
-    '(block a 1 (return-from a) nil) ;the 1 shouln't be dead
-    '(block a 1 (return-from a 1) nil) ;the 1s shouln't be dead
+    (assert-infer '(tagbody (go a) (capture a nil) a) '(the-ul (null null)) '(a))
+    (assert-infer '(tagbody a (go a) (capture a nil) a) '(the-ul (null null)) '(a))
+    ;;(assert-infer '(block a 1 (return-from a) (capture a nil)) '(the-ul (null null)) '(a))
+    ;;(assert-infer '(block a 1 (return-from a 1) (capture a nil)) '(the-ul (fixnum fixnum)) '(a))
     ;; check that function application works
-    '(tagbody a (if 1 (labels ((f () (go b))) (f)) (go a)) b)
-    '(tagbody a (if 1 (labels ((f () (go b)) (g () (f))) (g)) (go a)) b)
-|#
+    (assert-infer '(tagbody a (if 1 (labels ((f () (go b))) (f)) (go a)) b) '(the-ul (null null)))
+    (assert-infer '(tagbody a (if 1 (labels ((f () (go b)) (g () (f))) (g)) (go a)) b) '(the-ul (null null)))
     ))
 ;;(test-infer)
