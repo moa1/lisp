@@ -1089,7 +1089,13 @@ For copies of WALKER:FUN-BINDINGs, this stores the original WALKER:FUN-BINDING."
   (assert (typep ast 'walker:application-form))
   (not (or (typep (walker:form-fun ast) 'walker:lambda-form)
 	   (typep (walker:form-fun ast) 'walker:function-form)
-	   (is-builtin-lisp-function (walker:form-fun ast)))))
+	   (is-builtin-lisp-function (walker:form-fun ast))
+	   (labels ((rec (ast) ;only copy application forms that are not inside a function
+		      (cond
+			((null ast) nil)
+			((typep ast 'walker:fun-binding) (null (form-application-form ast)))
+			(t (rec (walker:form-parent ast))))))
+	     (rec ast)))))
 
 (defmethod walker:make-ast :around ((parser ntiparser) type &rest arguments)
   (let ((ast (call-next-method)))
@@ -1113,10 +1119,14 @@ A recursive call should have slot FUN-BINDING bound to a new instance of 'WALKER
 Note that e.g. in '(LET ((A 1)) (LABELS ((F (&OPTIONAL (A (SETQ A 2))) (IF 1 (F) A)) (G (A) (F A))) (G T)) A), the A in (SETQ A 2) in the second-level recursive call in #'F must refer to the one defined in the LET-FORM, not to the &OPTIONAL variable A. We could ensure this by using a stored PARSER from the FUN-BINDING, or one inside that. It must contain in its namespace the WALKER:FUNs present in the LABELS (or FLET if AST calls a function defined in an FLET). For FLETs, the FUN-BINDING does not contain the FUNs, so we use the parser used for parsing the LLIST. This ensures that (WALKER:FORM-FUN APPLICATION-FORM) is equal to (WALKER:FORM-FUN FUN-BINDING-AST-COPY)."
   (labels ((copy-fun-binding (application-form)
 	     (let* ((application-fun (walker:form-fun application-form))
-		    (fun-bindings-mixin (walker:form-parent (walker:nso-definition application-fun)))
+		    (fun-binding (walker:nso-definition application-fun))
+		    (fun-bindings-mixin (walker:form-parent fun-binding))
 		    (llist-parser (form-parser fun-bindings-mixin))
 		    (labels-fun-source (walker:nso-source application-fun))
-		    (fun-binding-ast-copy (walker:parse-fun-binding llist-parser 'labels labels-fun-source fun-bindings-mixin)))
+		    (fun-binding-ast-copy (let ((fun-definition (walker:nso-definition application-fun))
+						(copy (walker:parse-fun-binding llist-parser 'labels labels-fun-source fun-bindings-mixin))) ;this changes (WALKER:NSO-DEFINITION APPLICATION-FUN)!
+					    (setf (walker:nso-definition application-fun) fun-definition) ;restore (WALKER:NSO-DEFINITION APPLICATION-FUN)
+					    copy)))
 	       (assert (eql application-fun (walker:form-fun fun-binding-ast-copy)))
 	       (setf (form-application-form fun-binding-ast-copy) application-form) ;to be able to tell apart copies from originals (whose FORM-APPLICATION-FORM is NIL). Previously I did this by setting the parent to APPLICATION-FORM, but this was wrong, as it broke parsing, e.g. (TEST-LAST-SETQS-FORM '(LET ((A 1)) (LABELS ((F (&OPTIONAL (A (SETQ A 2))) (IF 1 (F) A))) (F)) A)) returned the wrong result, because the A in (SETQ A 2) did not refer to the A from the LET.
 	       (setf (form-fun-binding fun-binding-ast-copy) fun-bindings-mixin)
@@ -1285,6 +1295,7 @@ NIL (no annotation)
 
 (defmethod walker:deparse :around ((deparser deparser-annotate) (ast walker:fun-binding) path)
   ;; TODO: add declarations to the function.
+  ;;(cons (id-of ast) (walker:deparse (deparser-notannotating1 deparser) ast path))
   (walker:deparse (deparser-notannotating1 deparser) ast path))
 
 (defmethod walker:deparse :around ((deparser deparser-annotate) (ast walker:fun-bindings-mixin) path)
@@ -3267,6 +3278,9 @@ Returns the updated LAST-SETQS."
 			    (builtin-functiondef (walker:nso-definition funobj))
 			    (walker:functiondef (form-fun-binding ast))))))))
     (etypecase funbinding
+      (null ;abort recursive calls
+       (setf (form-bounds ast) (make-bounds (make-results-0) (make-results-0)))
+       nil)
       (builtin-functiondef
        (infer-builtin-functiondef ast funbinding))
       (t
@@ -3276,43 +3290,51 @@ Returns the updated LAST-SETQS."
        ;; backward pass: the last body form's bounds is updated from the application-form's bounds.
        (meet-forms (list (walker:form-body-last funbinding)) ast)))))
 
+(defun map-application-form-funbindings (binding form-function)
+  "Compute the virtual FUN-BINDINGs for BINDING (i.e. the FUN-BINDINGs accessed by #'FORM-FUN-BINDING of each APPLICATION-FORM that calls the BINDING.
+Then call FORM-FUNCTION on the forms that are beneath BINDING: the first parameter is the form of the BINDING, and the &REST parameter is the list of forms of the virtual FUN-BINDINGs."
+  (let* ((fun (walker:form-sym binding))
+	 (applications (walker:nso-sites fun))
+	 (funbindings (mapcar #'form-fun-binding applications))
+	 (funbindings-no-orig (remove-if (lambda (fb) (or (null fb) (null (form-application-form fb))))
+					 funbindings)) ;remove original function
+	 (forms (mapcar (lambda (funbinding)
+			  (let ((form-bounds-list nil))
+			    (walker:map-ast (lambda (form path)
+					      (declare (ignore path))
+					      (push form form-bounds-list))
+					    funbinding)
+			    (cons funbinding form-bounds-list)))
+			(cons binding funbindings-no-orig))))
+    ;; store the merged types in BINDING, which is of type WALKER:FUN-BINDING
+    (apply #'mapc form-function forms)))
+
 (defmethod infer ((inferer inferer) (ast walker:fun-bindings-mixin))
   (prog1
       (progn
 	(join-forms ast (list (walker:form-body-last ast)))
 	(meet-forms (list (walker:form-body-last ast)) ast))
     ;; join the types computed for each application.
-    (loop for binding in (walker:form-bindings ast) do
-	 (let* ((fun (walker:form-sym binding))
-		(applications (walker:nso-sites fun))
-		(funbindings (mapcar #'form-fun-binding applications))
-		(funbindings (remove-if (lambda (fb) (not (typep fb 'walker:application-form)))
-					funbindings))
-		(bounds (let ((bounds nil))
-			  (mapc (lambda (funbinding)
-				  (let ((form-bounds-list nil))
-				    (walker:map-ast (lambda (form path)
-						      (declare (ignore path))
-						      (let* ((form-bounds (typecase form
-									    (walker:fun-binding nil)
-									    (walker:llist nil)
-									    (walker:parameter nil)
-									    (t (form-bounds form))))
-							     (annot (cons form-bounds form)))
-							(push annot form-bounds-list)))
-						    funbinding)
-				    (setf bounds (acons funbinding form-bounds-list bounds))))
-				(cons binding funbindings))
-			  bounds)))
-	   ;; store the merged types in BINDING, which is of type WALKER:FUN-BINDING
-	   (apply #'mapc
-		  (lambda (binding &rest applications)
-		    (let ((bounds (mapcar #'car applications)))
-		      (unless (null (car bounds))
-			(setf (form-bounds (cdr binding)) (apply #'join-bounds bounds)))))
-		  (cdr (last1 bounds))
-		  (mapcar #'cdr (butlast bounds)))))
-    ))
+    (let ((callstack nil))
+      (loop for binding in (walker:form-bindings ast) do
+	   (labels ((join (binding-form &rest applications-forms)
+		      (let* ((applications-bounds (typecase binding-form
+						    (walker:fun-binding nil)
+						    (walker:llist nil)
+						    (walker:parameter nil)
+						    (walker:application-form
+						     (join-binding (walker:nso-definition (walker:form-fun binding-form)))
+						     (mapcar #'form-bounds applications-forms))
+						    (t
+						     (mapcar #'form-bounds applications-forms)))))
+			(unless (null applications-bounds)
+			  (setf (form-bounds binding-form) (apply #'join-bounds applications-bounds)))))
+		    (join-binding (binding)
+		      (unless (find binding callstack)
+			(push binding callstack)
+			(map-application-form-funbindings binding #'join)
+			(pop callstack))))
+	     (join-binding binding))))))
 
 ;;; CONTROL FLOW
 
@@ -3366,12 +3388,12 @@ Returns the updated LAST-SETQS."
 	 (when (typep form 'walker:application-form)
 	   (incf (gethash (walker:form-fun form) all-user-defined-funs))))
     ;;(prind all-evaluated)
+    ;;(with-hash-table-iterator (key all-user-defined-funs) (prind (key)))
     (loop for form in all-forms do
-	 ;;(prind form (and (typep form 'walker:fun) (gethash form all-user-defined-funs)))
 	 (unless (or (typep form 'walker:tag) (typep form 'walker:ordinary-llist)
 		     (find form all-evaluated)
-		     (and (typep form 'walker:fun) (> (gethash form all-user-defined-funs) 0)))
-	   (warn "Unreachable form~% ~S." form)
+		     (and (typep form 'walker:fun) (> (gethash form all-user-defined-funs 0) 0)))
+	   (warn "Unreachable form~% ~S." form) ;TODO FIXME: this doesn't work (see above)
 	   (setf (form-bounds form) (make-bounds (make-results-0) (make-results-0)))))
     all-evaluated))
 
@@ -3431,9 +3453,12 @@ Returns the updated LAST-SETQS."
     (assert-infer '(tagbody a (if 1 (let ((x 1)) (go b) 2) (go a)) b) '(the-ul (null null)))
     (assert-infer '(tagbody a (if 1 (let ((x (go b))) 2) (go a)) b) '(the-ul (null null)))
     ;; check that labels works
-#|    (test '(tagbody a (if 1 (labels ((f () 1)) (go b)) (go a)) b)
+    (assert-infer '(tagbody a (if 1 (labels ((f () 1)) (go b)) (go a)) b) '(the-ul (null null)))
+    (assert-infer '(labels ((f (x) x)) (f 1) (f 1.0)) '(the-ul (single-float single-float)))
+    (assert-infer '(labels ((f (x) 1.0) (g (x) (f x))) (g 1)) '(the-ul (single-float single-float)))
+    (assert-infer '(labels ((f (x) (if 1 (g x) x)) (g (x) (f x))) (g 1) (g 1.0)) '(the-ul (single-float single-float)))
     ;; check that detecting dead forms works: the NILs should be dead
-    '(tagbody (go a) nil a)
+#|    '(tagbody (go a) nil a)
     '(tagbody b (go b) nil)
     '(block a 1 (return-from a) nil) ;the 1 shouln't be dead
     '(block a 1 (return-from a 1) nil) ;the 1s shouln't be dead
