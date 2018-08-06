@@ -3150,10 +3150,11 @@ Returns the updated LAST-SETQS."
   (meet-forms (list (walker:form-value ast)) ast))
 
 (defmethod infer ((inferer inferer) (ast walker:setq-form))
-  ;; forward pass: the last VAR-WRITING determines the result of AST
-  (join-forms ast (last (walker:form-vars ast)))
-  ;; backward pass: the result of AST determines the bounds of the last VAR-WRITING
-  (meet-forms (last (walker:form-vars ast)) ast))
+  (when (walker:form-vars ast)
+    ;; forward pass: the last VAR-WRITING determines the result of AST
+    (join-forms ast (last (walker:form-vars ast)))
+    ;; backward pass: the result of AST determines the bounds of the last VAR-WRITING
+    (meet-forms (last (walker:form-vars ast)) ast)))
 
 (defmethod infer ((inferer inferer) (ast walker:if-form))
   ;; forward pass: the bounds of the branches of AST are joined and determine the result of AST.
