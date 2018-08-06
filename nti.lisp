@@ -1314,6 +1314,9 @@ NIL (no annotation)
     (append (butlast annotated-ast)
 	    (list (list :call (id-of ast) (last1 annotated-ast) annotated-funbinding)))))
 
+(defmethod walker:deparse :around ((deparser deparser-annotate) (ast walker:blo) path)
+  (walker:deparse (deparser-notannotating1 deparser) ast path))
+
 (defmethod walker:deparse :around ((deparser deparser-annotate) ast path)
   (results-format deparser (form-bounds ast) (call-next-method deparser ast path)))
 
@@ -1777,7 +1780,8 @@ EXIT-FINDER is an instance of class EXIT-FINDER and stores information shared be
 ;; LET-FORM and LET*-FORM are handled by the fallback method.
 
 (defmethod find-exits ((finder exit-finder) (ast walker:return-from-form))
-  (list ast))
+  (let* ((value (walker:form-value ast)))
+    (nconc (when value (jumping-exits (find-exits finder value))) (list ast))))
 
 (defmethod find-exits ((finder exit-finder) (ast walker:block-form))
   (let ((blo (walker:form-blo ast))
@@ -2071,6 +2075,7 @@ Returns NIL."
     (assert-find-exit '(block nil (capture a (return-from x))) '(a))
     (assert-find-exit '(block nil (if 1 (capture a (return-from x)) (capture b (return-from x)))) '(a b))
     (assert-find-exit '(capture a (block nil (if (capture b 1) (return-from nil)))) '(b a))
+    (assert-find-exit '(capture a (return-from nil (if 1 (capture b (go x)) 2))) '(b a))
     (assert-find-exit '(flet ((fa () (capture a 1))) (fa)) '(a))
     (assert-find-exit '(flet ((fa () (flet ((fb () (capture a 1))) (fb)))) (fa)) '(a))
     (assert-find-exit '(flet ((fa (&rest a) (capture a a))) (fa 1)) '(a))
@@ -3342,6 +3347,32 @@ Then call FORM-FUNCTION on the forms that are beneath BINDING: the first paramet
 			(pop callstack))))
 	     (join-binding binding))))))
 
+(defmethod infer ((inferer inferer) (ast walker:block-naming-mixin))
+  (let* ((blo (walker:form-blo ast))
+	 (return-from-forms (loop for return-from in (walker:nso-sites blo) collect return-from))
+	 (last-form (unless (typep (walker:form-body-last ast) 'walker:return-from-form) (walker:form-body-last ast)))
+	 (exits-bounds (append (mapcar (lambda (return-from-form)
+					 (if (walker:form-value return-from-form)
+					     (form-bounds (walker:form-value return-from-form))
+					     (make-bounds (make-results 'null) (make-results 'null))))
+				       return-from-forms)
+			       (when last-form (list (form-bounds last-form)))))
+	 (exits (append return-from-forms (when last-form (list last-form)))))
+    ;; forward pass: the bounds of the RETURN-FROM-FORMs of AST, and possibly its last form, are joined and determine the result of AST.
+    (join-forms ast nil :branches-bounds exits-bounds)
+    ;; backward pass: the result of AST is met with each exit.
+    (meet-forms exits ast)))
+
+(defmethod infer ((inferer inferer) (ast walker:return-from-form))
+  (let ((value (walker:form-value ast)))
+    (if value
+	(progn
+	  ;; forward pass: the value form determines the result of AST.
+	  (join-forms ast (list value))
+	  ;; backward pass: the result of AST is met with the value form's bounds.
+	  (meet-forms (list value) ast))
+	(setf (form-bounds ast) (make-bounds (make-results 'null) (make-results 'null))))))
+
 ;;; CONTROL FLOW
 
 (defclass flow-finder (exit-finder)
@@ -3480,11 +3511,14 @@ Then call FORM-FUNCTION on the forms that are beneath BINDING: the first paramet
     (assert-infer '(labels ((f (x) x)) (f 1) (f 1.0)) '(the-ul (single-float single-float)))
     (assert-infer '(labels ((f (x) 1.0) (g (x) (f x))) (g 1)) '(the-ul (single-float single-float)))
     (assert-infer '(labels ((f (x) (if 1 (g x) x)) (g (x) (f x))) (g 1) (g 1.0)) '(the-ul (single-float single-float)))
+    ;; BLOCK and RETURN-FROM
+    (assert-infer '(block nil 2.0 (return-from nil 1)) '(the-ul (fixnum fixnum)))
+    (assert-infer '(block nil (if 1 (return-from nil 1)) 2.0) '(the-ul (real real)))
     ;; check that detecting dead forms works: the NILs should be dead
     (assert-infer '(tagbody (go a) (capture a nil) a) '(the-ul (null null)) '(a))
     (assert-infer '(tagbody a (go a) (capture a nil) a) '(the-ul (null null)) '(a))
-    ;;(assert-infer '(block a 1 (return-from a) (capture a nil)) '(the-ul (null null)) '(a))
-    ;;(assert-infer '(block a 1 (return-from a 1) (capture a nil)) '(the-ul (fixnum fixnum)) '(a))
+    (assert-infer '(block a 1 (return-from a) (capture a nil)) '(the-ul (null null)) '(a))
+    (assert-infer '(block a 1 (return-from a 1) (capture a nil)) '(the-ul (fixnum fixnum)) '(a))
     ;; check that function application works
     (assert-infer '(tagbody a (if 1 (labels ((f () (go b))) (f)) (go a)) b) '(the-ul (null null)))
     (assert-infer '(tagbody a (if 1 (labels ((f () (go b)) (g () (f))) (g)) (go a)) b) '(the-ul (null null)))
