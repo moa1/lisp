@@ -3402,6 +3402,7 @@ Then call FORM-FUNCTION on the forms that are beneath BINDING: the first paramet
       (dolist (dead dead-forms)
 	(let ((original (gethash dead virtual-to-original dead)))
 	  (warn-dead-form original)
+	  ;; We have to set the result of the dead form to 0, otherwise result propagation and annotation is wrong.
 	  (setf (form-bounds original) (make-bounds (make-results-0) (make-results-0)))))
       evaluated-forms)))
 
@@ -3474,7 +3475,7 @@ Then call FORM-FUNCTION on the forms that are beneath BINDING: the first paramet
     ;; check that the GO inside the LET correctly aborts the LET
     (assert-infer '(tagbody a (if 1 (let ((x 1)) (go b) (capture a 2)) (go a)) b) '(the-ul (null null)) '(a))
     (assert-infer '(tagbody a (if 1 (let ((x (go b))) (capture a 2)) (go a)) b) '(the-ul (null null)) '(a))
-    ;; check that labels works
+    ;; check that LABELS works
     (assert-infer '(tagbody a (if 1 (labels ((f () 1)) (go b)) (go a)) b) '(the-ul (null null)))
     (assert-infer '(labels ((f (x) x)) (f 1) (f 1.0)) '(the-ul (single-float single-float)))
     (assert-infer '(labels ((f (x) 1.0) (g (x) (f x))) (g 1)) '(the-ul (single-float single-float)))
