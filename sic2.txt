@@ -1,0 +1,8 @@
+sic2:
+
+possible experiment:
+record all states of the memory until a loop is detected. ("state-recording")
+find all state-recordings for all possible inputs.
+find state-recordings that are a supremum of other state-recordings (ex. 123 is a supremum of 1243 and 1234).
+these supremums have to exist (at least for a SIC with more bits) because otherwise SIC would not be turing-equivalent.
+is detecting these supremums interesting? no, I can't think of anything.
