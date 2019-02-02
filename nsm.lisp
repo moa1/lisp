@@ -206,4 +206,30 @@ SM3: 3->2, 2->1, 1->0, 0->3
 SM4: 3->2, 2->1, 1->0, 0->0.
 These two pairs are equivalent, when the states (0,1,2,3) of pair1 are re-ordered as (3,2,1,0).
 The "normalization function" SMNORM(SMx, SMy, ..., SMn) should find a re-ordering of states, so that e.g. SMNORM(SM1,SM2) == SMNORM(SM3,SM4).
+
+how to think about this: the state-transitions of the state-machines are a set of graphs, where each state-transition is an edge in the graph of the respective state-machine.
+e.g.
+SMa: 0->1, 1->2, 2->1, 3->2
+SMb: 0->2, 1->2, 2->3, 3->3
+is represented by the graphs
+             /->\              0b ->-\      /->\
+  a: 0a -> 1a    2a <- 3a   b:       2b -> 3b  |
+             \<-/              1b ->-/      \->/
+If another set of graphs SMc, and SMd have the following graphs
+             /->\              2c ->-\      /->\
+  d: 2d -> 1d    3d <- 0d   c:       3c -> 0c  |
+             \<-/              1c ->-/      \->/
+then these two sets of graphs are equivalent under the translations
+    0a    1a    2a    3a       0b    1b    2b    3b
+    ||    ||    ||    ||       ||    ||    ||    ||
+    2d    1d    3d    0d   ,   2c    1c    3c    0c
+where "||" is a single sign and means "=", i.e. equals, read vertically.
+
+Thus, all the following state-machines SMc and SMd would be equal to SMa,SMb, after normalization:
+SMc: 0->0, 1->3, 2->3, 3->0  (=:SMc1)
+SMd: 0->3, 1->3, 2->1, 3->1  (=:SMd1)
+or
+SMc: =SMc1
+SMd: 0->1, 1->3, 2->3, 3->1  (=:SMd2)
+(or any permutations of the numbers 0,1,2,3.)
 #|
