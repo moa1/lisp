@@ -91,10 +91,13 @@
 	 (min (apply #'min loop)))
     min))
 
+(defun last1 (list)
+  (car (last list)))
+
 (defun sm-loop-circle (sm loop)
   "Return the circle portion of a LOOP."
   (let ((ht (make-hash-table)))
-    (loop for e in loop collect e until (gethash (sm-next sm e) ht) do (setf (gethash e ht) t))))
+    (loop for e in loop collect e until (let ((n (gethash (sm-next sm e) ht))) (and n (= e (last1 loop)))) do (setf (gethash e ht) t))))
 
 (defun sm-loop-non-circle (sm loop)
   "Return the non-circle portion of a LOOP."
@@ -103,11 +106,20 @@
 	 (let ((e (car el)))
 	   (when (gethash (sm-next sm e) ht)
 	     (return (cdr el)))
-	   (setf (gethash e ht) t)))))
+	   (setf (gethash (sm-next sm e) ht) t)))))
+
+(defun test-sm-loop ()
+  (let* (                       ;0 1 2 3
+	 (sm (make-sm 4 :trans '(2 2 3 3)))
+	 (loop (sm-loop sm 1)))
+    (assert (equal loop '(3 2 1)))
+    (assert (equal (sm-loop-circle sm loop) '(3)))
+    (assert (equal (sm-loop-non-circle sm loop) '(2 1)))))
+(test-sm-loop)
 
 (defun sm-loops (sm)
   "Return a list of circles of states that state-machine SM goes through when starting at all possible states."
-  )
+  (declare (ignore sm)))
 
 #|
 1. Possible nestings:
@@ -162,9 +174,9 @@ This specifies NSM1, which will compute the cumsum-array for all inputs I.
 
 Example invocation, for I0=3,I1=1,I2=0,I3=1:
 after NSM1, M:=
-#|
-
 |#
+
+#|
 NSM1 definition : [
 M:=0 initially,
 SM0 definition: M:=O:=M+I,
@@ -183,9 +195,9 @@ NSM2(SMs=SM2,I=2):  O:=4
 (this computes the square. )
 
 ... (interrupted by longer and longer thinking pauses) ... I think I first want to find so-called "base"-state-machines, i.e. state-machines which are useful for a wide range of machine-learning tasks, for, example, one state-machine could compute the addition of its inputs (where I1:=I&0xF, I2:=(I2>>4)&0xF, and O:=I1+I2), another could compute the cumsum of succesive inputs (where M:=(M+I)&0xFF, O:=M), and so on.
-#|
-
 |#
+
+#|
 to this end,
 probably I should first make the sex-experiment, where different SMs interpret the output of each other:
 states M1,M2, where each Mx has a low number of bits, say 4.
@@ -230,6 +242,43 @@ SMc: 0->0, 1->3, 2->3, 3->0  (=:SMc1)
 SMd: 0->3, 1->3, 2->1, 3->1  (=:SMd1)
 or
 SMc: =SMc1
-SMd: 0->1, 1->3, 2->3, 3->1  (=:SMd2)
-(or any permutations of the numbers 0,1,2,3.)
-#|
+SMd: 0->1, 1->3, 2->3, 3->1  (=:SMd2) (i.e. swapping of 2d with 0d)
+(or any permutations of the numbers 0,1,2,3 in both pairs above.)
+|#
+
+(defun sm-trans-norm (sm)
+  (let* ((length (length (sm-trans sm)))
+	 (inputs (let ((inputs (make-array length :element-type 'list :initial-element nil)))
+		   (loop for s across (sm-trans sm) for e from 0 do
+			(push e (aref inputs s)))
+		   inputs))
+	 (inputs-count (loop for e from 0
+			  for i across inputs
+			  collect
+			    (let* ((loop (sm-loop sm e))
+				   (circle (sm-loop-circle sm loop))
+				   (non-circle (sm-loop-non-circle sm loop))
+				   (count (+ (* (length circle) length) (length non-circle))))
+			      (prind e loop i circle non-circle count)
+			      (list e count))))
+	 (inputs-sorted (sort inputs-count #'< :key #'cadr))
+	 (inputs-reverse (let ((array (make-array length)))
+			   (loop for s from 0 for e in inputs-sorted do
+				;;(prind s (car e))
+				(setf (aref array (car e)) s))
+			   array))
+	 (trans-ordered (loop for pair in inputs-sorted collect
+			     (let* ((next (sm-next sm (car pair))))
+			       (aref inputs-reverse next)))))
+    ;; Sort states by cumulative STATE-INPUTS, e.g. (MAKE-SM 4 :TRANS '(1 2 1 2)) should have cumulative input-weights: '(0 3 3 0), because a circle counts
+    (prind inputs-count inputs-sorted inputs-reverse)
+    trans-ordered))
+
+(defun test-sm-trans-norm ()
+  (let* (                       ;0 1 2 3
+	 (sm (make-sm 4 :trans '(1 2 1 2)))
+	 (loop (sm-loop sm 1)))
+    (assert (equal (sm-trans-norm sm) '(1 0 0 1)))
+    (values (sm-loop-circle sm loop) (sm-loop-non-circle sm loop) loop
+	    (sm-trans-norm sm))))
+(test-sm-norm)
