@@ -282,3 +282,16 @@ SMd: 0->1, 1->3, 2->3, 3->1  (=:SMd2) (i.e. swapping of 2d with 0d)
     (values (sm-loop-circle sm loop) (sm-loop-non-circle sm loop) loop
 	    (sm-trans-norm sm))))
 (test-sm-norm)
+
+#|
+How to input/output:
+1. A state-machine has an input and an output state, i.e. the state the machine goes into on the given input state.
+2. Every state-machine has thus a output state
+3. The containing NSM has, let's say 4 SMs. Each SM is run in turn, once. Each SM's output state is interpreted as the array element index that it should jump into.
+4. The containing NSM has, for each of its SMs, a index. use it as the output of the NSM.
+5. The input of the NSM is interpreted as the input for the SMs.
+6. Thus, the NSM has input and output, and we can encapsulate it in an NNSM (NSM of level 2).
+
+Example:
+NSM with 4 SMs, and 4 elements in the one-dimensional array. Let's say the input is 3,2,3,0. Then SM1 has as input state 3, SM2 2, SM3 3, SM4 0. Let's say SM1 goes into output state 0, SM2 3, SM3 3, SM4 1. Then the output of the NSM is 0,3,3,1. As easy as that. How to do while loops is left as an excercise for the Genetic Algorithm, that should evolve suitable SMs, and NSMs. I don't have a clue how to do loops, BUT, are they really necessary? Start with the basics. And the basics are NESTED STATE MACHINES.
+|#
