@@ -34,6 +34,16 @@
 	  value
 	  default-value))))
 
+(defun last1 (list)
+  (car (last list)))
+
+(defun make-hash-table-const-value (n value &optional (start 0))
+  "Fill a hash-table with keys from START below N with value VALUE"
+  (let ((ht (make-hash-table)))
+    (loop for i from start below n do
+	 (setf (gethash i ht) value))
+    ht))
+
 (defclass sm ()
   ((states :initform 0 :initarg :states :type (and unsigned-byte integer) :accessor sm-states :documentation "The maximal number of states.")
    (trans :initform (make-array 0 :element-type '(and unsigned-byte integer) :initial-element 0) :initarg :trans :type (array (and unsigned-byte integer)) :accessor sm-trans :documentation "The state transition array")))
@@ -54,72 +64,35 @@
 (defun sm-next (sm state)
   (aref (sm-trans sm) state))
 
-(defun make-hash-table-const-value (n value &optional (start 0))
-  "Fill a hash-table with keys from START below N with value VALUE"
-  (let ((ht (make-hash-table)))
-    (loop for i from start below n do
-	 (setf (gethash i ht) value))
-    ht))
-
-#|
-(defun sm-loop (sm state &key (visited (make-hash-table-const-value (sm-states sm) 1)))
-  "Return the loop of states - in reverse order - that state-machine SM goes through when starting at STATE (and VISITED, a hash-table containing the visited elements)."
-  (let ((order nil))
+(defun sm-path-circle (sm state)
+  "Return two values: the non-circle part of a path starting at STATE and the circle part."
+  (let ((ht (make-hash-table))
+	(path nil)
+	(circle nil))
     (loop do
-	 (push state order)
-	 (decf (gethash state visited))
-	 (let* ((next (sm-next sm state)))
-	   (when (= 0 (gethash next visited))
-	     (return (values order visited)))
-	   (setf state next)))))
-|#
+	 (let ((c (gethash state ht 0)))
+	   (cond
+	     ((= c 0)
+	      (push state path)
+	      (setf (gethash state ht) 1))
+	     ((= c 1)
+	      (incf (gethash state ht))
+	      (push state circle))
+	     ((>= c 2)
+	      (return))))
+	 (setf state (sm-next sm state)))
+    ;; remove CIRCLE from PATH
+    (loop for e in circle do
+	 (pop path))
+    (values (nreverse path) (nreverse circle))))
 
-(defun sm-loop (sm state &key (visited (make-hash-table)))
-  "Return the loop of states - in reverse order - that state-machine SM goes through when starting at STATE (and VISITED, a hash-table containing the visited elements)."
-  (let ((order nil))
-    (loop do
-	 (push state order)
-	 (setf (gethash state visited) t)
-	 (let* ((next (sm-next sm state)))
-	   (when (gethash next visited)
-	     (return (values order visited)))
-	   (setf state next)))))
-
-(defun sm-loop-min (sm loop)
-  "Return the least state that LOOP goes through when it is caught in a loop."
-  (let* ((loop (sm-loop sm (car loop))) ;(CAR LOOP), since LOOP is in reverse order
-	 (min (apply #'min loop)))
-    min))
-
-(defun last1 (list)
-  (car (last list)))
-
-(defun sm-loop-circle (sm loop)
-  "Return the circle portion of a LOOP."
-  (let ((ht (make-hash-table)))
-    (loop for e in loop collect e until (let ((n (gethash (sm-next sm e) ht))) (and n (= e (last1 loop)))) do (setf (gethash e ht) t))))
-
-(defun sm-loop-non-circle (sm loop)
-  "Return the non-circle portion of a LOOP."
-  (let ((ht (make-hash-table)))
-    (loop for el on loop do
-	 (let ((e (car el)))
-	   (when (gethash (sm-next sm e) ht)
-	     (return (cdr el)))
-	   (setf (gethash (sm-next sm e) ht) t)))))
-
-(defun test-sm-loop ()
+(defun test-sm-path-circle ()
   (let* (                       ;0 1 2 3
-	 (sm (make-sm 4 :trans '(2 2 3 3)))
-	 (loop (sm-loop sm 1)))
-    (assert (equal loop '(3 2 1)))
-    (assert (equal (sm-loop-circle sm loop) '(3)))
-    (assert (equal (sm-loop-non-circle sm loop) '(2 1)))))
-(test-sm-loop)
-
-(defun sm-loops (sm)
-  "Return a list of circles of states that state-machine SM goes through when starting at all possible states."
-  (declare (ignore sm)))
+	 (sm (make-sm 4 :trans '(2 2 3 3))))
+    (multiple-value-bind (path circle) (sm-path-circle sm 1)
+      (assert (equal path '(1 2)))
+      (assert (equal circle '(3))))))
+(test-sm-path-circle)
 
 #|
 1. Possible nestings:
@@ -255,12 +228,9 @@ SMd: 0->1, 1->3, 2->3, 3->1  (=:SMd2) (i.e. swapping of 2d with 0d)
 	 (inputs-count (loop for e from 0
 			  for i across inputs
 			  collect
-			    (let* ((loop (sm-loop sm e))
-				   (circle (sm-loop-circle sm loop))
-				   (non-circle (sm-loop-non-circle sm loop))
-				   (count (+ (* (length circle) length) (length non-circle))))
-			      (prind e loop i circle non-circle count)
-			      (list e count))))
+			    (multiple-value-bind (path circle)
+				(sm-path-circle sm e)
+			      (list e (+ (* (length circle) length) (length path))))))
 	 (inputs-sorted (sort inputs-count #'< :key #'cadr))
 	 (inputs-reverse (let ((array (make-array length)))
 			   (loop for s from 0 for e in inputs-sorted do
@@ -271,17 +241,15 @@ SMd: 0->1, 1->3, 2->3, 3->1  (=:SMd2) (i.e. swapping of 2d with 0d)
 			     (let* ((next (sm-next sm (car pair))))
 			       (aref inputs-reverse next)))))
     ;; Sort states by cumulative STATE-INPUTS, e.g. (MAKE-SM 4 :TRANS '(1 2 1 2)) should have cumulative input-weights: '(0 3 3 0), because a circle counts
-    (prind inputs-count inputs-sorted inputs-reverse)
+    ;;(prind inputs-count inputs-sorted inputs-reverse)
     trans-ordered))
 
 (defun test-sm-trans-norm ()
   (let* (                       ;0 1 2 3
-	 (sm (make-sm 4 :trans '(1 2 1 2)))
-	 (loop (sm-loop sm 1)))
+	 (sm (make-sm 4 :trans '(1 2 1 2))))
     (assert (equal (sm-trans-norm sm) '(1 0 0 1)))
-    (values (sm-loop-circle sm loop) (sm-loop-non-circle sm loop) loop
-	    (sm-trans-norm sm))))
-(test-sm-norm)
+    (multiple-value-call #'values (sm-path-circle sm 1) (sm-trans-norm sm))))
+(test-sm-trans-norm)
 
 #|
 How to input/output:
