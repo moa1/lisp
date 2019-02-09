@@ -44,6 +44,30 @@
 	 (setf (gethash i ht) value))
     ht))
 
+(defun make-hash-table-from-alist (alist &key (overwrite nil))
+  "Make and return the hash-table with the same values as ALIST. Duplicates are warned and overwriten if OVERWRITE is non-NIL."
+  (let ((ht (make-hash-table)))
+    (loop for pair in alist do
+	 (let ((key (car pair))
+	       (value (cdr pair)))
+	   (cond
+	     ((gethash key ht)
+	      (warn "duplicate KEY ~S in alist, previous value is ~S" key (gethash key ht))
+	      (when overwrite
+		(setf (gethash key ht) value)))
+	     (t
+	      (setf (gethash key ht) value)))))
+    ht))
+
+(defun make-alist-from-hash-table (ht)
+  (let ((alist))
+    (with-hash-table-iterator (next ht)
+      (do () (nil)
+	(multiple-value-bind (present key value) (next)
+	  (unless present
+	    (return alist))
+	  (push (cons key value) alist))))))
+
 (defclass sm ()
   ((states :initform 0 :initarg :states :type (and unsigned-byte integer) :accessor sm-states :documentation "The maximal number of states.")
    (trans :initform (make-array 0 :element-type '(and unsigned-byte integer) :initial-element 0) :initarg :trans :type (array (and unsigned-byte integer)) :accessor sm-trans :documentation "The state transition array")))
@@ -64,35 +88,146 @@
 (defun sm-next (sm state)
   (aref (sm-trans sm) state))
 
+(defun sm-trace (sm state function)
+  "Trace state-machine SM, starting at STATE, calling FUNCTION with STATE and (SM-NEXT STATE).
+This function returns the FUNCTIONS's values, iff FUNCTION returns non-NIL."
+  (do () (nil)
+    (let* ((next (sm-next sm state))
+	   (values (multiple-value-list (funcall function state next))))
+      (when (car values)
+	(return (apply #'values values)))
+      (setf state next))))
+
+(defun sm-trace* (sm state)
+  (let* ((ht (make-hash-table))
+	 (trace nil))
+    (sm-trace sm state
+	      (lambda (state next)
+		(declare (ignore next))
+		(let ((c (gethash state ht)))
+		  (setf (gethash state ht) t)
+		  (if c
+		      (nreverse (cons state trace))
+		      (progn (push state trace) nil)))))))
+
 (defun sm-path-circle (sm state)
   "Return two values: the non-circle part of a path starting at STATE and the circle part."
   (let ((ht (make-hash-table))
 	(path nil)
 	(circle nil))
-    (loop do
-	 (let ((c (gethash state ht 0)))
-	   (cond
-	     ((= c 0)
-	      (push state path)
-	      (setf (gethash state ht) 1))
-	     ((= c 1)
-	      (incf (gethash state ht))
-	      (push state circle))
-	     ((>= c 2)
-	      (return))))
-	 (setf state (sm-next sm state)))
+    (sm-trace sm state
+	      (lambda (state next)
+		(declare (ignore next))
+		(let ((c (gethash state ht 0)))
+		  (cond
+		    ((= c 0)
+		     (push state path)
+		     (setf (gethash state ht) 1)
+		     nil)
+		    ((= c 1)
+		     (incf (gethash state ht))
+		     (push state circle)
+		     nil)
+		    ((>= c 2)
+		     (loop for e in circle do (pop path))
+		     t)))))
+    ;; remove CIRCLE from PATH
+    (values (nreverse path) (nreverse circle))))
+
+(defun trace-to-path-circle (trace)
+  "Return two values: the non-circle part of TRACE and the circle part."
+  (let ((ht (make-hash-table))
+	(path nil)
+	(circle nil))
+    (do* ((nexttrace trace (cdr nexttrace))
+	  (state (car nexttrace) (car nexttrace)))
+	(nil)
+      (let ((c (gethash state ht 0)))
+	;;(prind state c path circle)
+	(cond
+	  ((= c 0)
+	   (push state path)
+	   (setf (gethash state ht) 1))
+	  ((= c 1)
+	   (incf (gethash state ht))
+	   (push state circle)
+	   (setf nexttrace (member state trace)))
+	  ((>= c 2)
+	   (return)))))
     ;; remove CIRCLE from PATH
     (loop for e in circle do
 	 (pop path))
     (values (nreverse path) (nreverse circle))))
 
 (defun test-sm-path-circle ()
-  (let* (                       ;0 1 2 3
-	 (sm (make-sm 4 :trans '(2 2 3 3))))
-    (multiple-value-bind (path circle) (sm-path-circle sm 1)
-      (assert (equal path '(1 2)))
-      (assert (equal circle '(3))))))
+  (flet ((test (trans path circle)
+	   (let* ((sm (make-sm 4 :trans trans)))
+	     (multiple-value-bind (path* circle*) (sm-path-circle sm 0)
+	       (assert (equal path path*) () "PATH*=~S should be ~S for TRANS=~S" path* path trans)
+	       (assert (equal circle circle*) () "CIRCLE*=~S should be ~S for TRANS=~S" circle* circle trans))
+	     (let ((trace (sm-trace* sm 0)))
+	       (multiple-value-bind (path* circle*) (trace-to-path-circle trace)
+		 (assert (equal path path*) () "PATH*=~S should be ~S for TRACE=~S" path* path trace)
+		 (assert (equal circle circle*) () "CIRCLE*=~S should be ~S for TRACE=~S" circle* circle trace))))))
+    ;;      0 1 2 3 4 5 6 7 8
+    (test '(2 2 3 3) '(0 2) '(3))
+    (test '(1 2 3 2) '(0 1) '(2 3))))
 (test-sm-path-circle)
+
+(defun sm-circles (sm)
+  "The states form a GRAPH, where each node has only one outgoing edge. We start with any node and follow its outgoing edges along the path. All these nodes belong to a circle. When the next (target node of the outgoing edge) node already belongs to a circle, there are two possibilities:
+1. it belongs to the same circle: store the circle in a list, store the path in a list, and continue with the next unvisited node.
+2. it belongs to nother circle: join the two circles, store the path in a list, and continue with the next unvisited node.
+Joining of two circles is done by tracing the current path to its origin and correcting the circle identifier in the STATE-TO-ID hash-table."
+  (let* ((circles-list nil)
+	 (paths-list nil)
+	 (state-to-id (make-hash-table)) ;map from state to circle identifier
+	 (this-circle 0) ;current circle identifier
+	 (states (make-hash-table-from-alist (loop for s below (sm-states sm) collect (cons s nil))))
+	 (state 0)
+	 (this-path nil))
+    (flet ((next-path ()
+	     (prind circles-list paths-list)
+	     (incf this-circle)
+	     (setf state (any-hash-table-key states)
+		   this-path nil)
+	     (unless state
+	       (return-from sm-circles (values circles-list paths-list)))))
+      (do () (nil)
+	(push state this-path)
+	(remhash state states)
+	(let* ((next (sm-next sm state))
+	       (next-id (gethash next state-to-id nil)))
+	  (prind state next next-id this-path this-circle)
+	  (cond
+	    ((null next-id) ;mark STATE to belong to THIS-CIRCLE
+	     (setf (gethash state state-to-id) this-circle
+		   state next))
+	    ((= next-id this-circle) ;disect path into PATH and CIRCLE
+	     (multiple-value-bind (path circle)
+		 (trace-to-path-circle (cons next this-path))
+	       (prind path circle)
+	       (push (cons (nconc path (list next)) this-circle) paths-list)
+	       (push (cons this-circle (list (nreverse circle))) circles-list))
+	     (next-path))
+	    (t
+	     (assert (/= next-id this-circle))
+	     (loop for state in this-path do
+		  (setf (gethash state state-to-id) next-id))
+	     (push (cons (nreverse this-path) next-id) paths-list)
+	     (next-path))))))))
+
+(defun test-sm-circles ()
+  (flet ((test (trans circles paths)
+	   (let* ((sm (make-sm 6 :trans '(4 5 2 3 0 4))))
+	     (multiple-value-bind (circles* paths*) (sm-circles sm)
+	       (assert (equal circles circles*) () "CIRCLES*=~S should be ~S for TRANS=~S~%~S~%~S" circles* circles trans circles* paths*)
+	       (assert (equal paths paths*) () "PATHS*=~S should be ~S for TRANS=~S~%~S~%~S" paths* paths trans circles* paths*)))))
+    ;;      0 1 2 3 4 5
+    (test '(4 5 2 3 0 4) '((3 (3)) (2 (2)) (0 (4 0))) '(((3) . 3) ((2) . 2) ((1 5 4) . 0) ((0) . 0)))
+    ;; TODO: More tests.
+    ))
+(test-sm-circles)
 
 #|
 1. Possible nestings:
@@ -242,13 +377,15 @@ SMd: 0->1, 1->3, 2->3, 3->1  (=:SMd2) (i.e. swapping of 2d with 0d)
 			       (aref inputs-reverse next)))))
     ;; Sort states by cumulative STATE-INPUTS, e.g. (MAKE-SM 4 :TRANS '(1 2 1 2)) should have cumulative input-weights: '(0 3 3 0), because a circle counts
     ;;(prind inputs-count inputs-sorted inputs-reverse)
-    trans-ordered))
+    (values trans-ordered inputs-reverse)))
 
 (defun test-sm-trans-norm ()
   (let* (                       ;0 1 2 3
 	 (sm (make-sm 4 :trans '(1 2 1 2))))
-    (assert (equal (sm-trans-norm sm) '(1 0 0 1)))
-    (multiple-value-call #'values (sm-path-circle sm 1) (sm-trans-norm sm))))
+    (assert (equal (sm-trans-norm sm) '(1 0 0 1))))
+  (let* (                       ;0 1 2 3 4 5
+	 (sm (make-sm 6 :trans '(1 2 1 4 5 4))) )
+    (assert (equal (sm-trans-norm sm) '(1 0 3 2 0 2)))))
 (test-sm-trans-norm)
 
 #|
