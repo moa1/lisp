@@ -68,18 +68,34 @@
 	    (return alist))
 	  (push (cons key value) alist))))))
 
+(defun array-= (array &rest arrays)
+  "Check that ARRAY has equal dimensions as all arrays in ARRAYS and equal elements under #'=."
+  (let* ((dims (array-dimensions array))
+	 (rmdims (apply #'* dims)))
+    (loop for array2 in arrays for array2index from 1 do
+	 (assert (equal dims (array-dimensions array2)) nil "ARRAY and ARRAY~S have different dimensions: ~S and ~S." array2index dims (array-dimensions array2))
+	 (loop for i below rmdims do
+	      (unless (= (row-major-aref array i) (row-major-aref array2 i))
+		(return-from array-= nil)))))
+  t)
+
+;; State Machines
+
 (defclass sm ()
   ((states :initform 0 :initarg :states :type (and unsigned-byte integer) :accessor sm-states :documentation "The maximal number of states.")
    (trans :initform (make-array 0 :element-type '(and unsigned-byte integer) :initial-element 0) :initarg :trans :type (array (and unsigned-byte integer)) :accessor sm-trans :documentation "The state transition array")))
 
 (defun make-sm (states &key (trans (loop for i below states collect i)))
-  (let ((len (length trans)))
+  (let ((len (etypecase trans (list (length trans)) (array (array-dimension trans 0)))))
     (when (/= len states)
       (warn "overwriting STATES=~A with (LENGTH TRANS)=~A" states len)
       (setf states len)))
-  (make-instance 'sm
-		 :states states
-		 :trans (make-array states :element-type '(and unsigned-byte integer) :initial-contents trans)))
+  (let ((trans (etypecase trans
+		 (list trans)
+		 (array (loop for e across trans collect e)))))
+    (make-instance 'sm
+		   :states states
+		   :trans (make-array states :element-type '(and unsigned-byte integer) :initial-contents trans))))
 
 (defmethod print-object ((sm sm) stream)
   (print-unreadable-object (sm stream :type t :identity t)
@@ -260,7 +276,38 @@ In the two resulting lists, every STATE appears exactly once, either as head of 
     ))
 (test-sm-circles-paths)
 
-;; TODO: add (DEFUN CIRCLES-PATHS-TO-SM (CL PL) "compute from the output of SM-CIRCLES the original SM." ...).
+(defun circles-paths-sm (cl pl)
+  "Compute from the output of #'SM-CIRCLES-PATHS the original SM."
+  (let ((states 0))
+    (loop for (cid circle) in cl do
+	 (loop for el in circle do
+	      (incf states)))
+    (loop for (path . cid) in pl do
+	 (incf states))
+    (let ((trans (make-array states :element-type t :initial-element nil)))
+      (loop for (cid circle) in cl do
+	   (let ((lc (length circle)))
+	     ;;(prind circle lc)
+	     (loop for i below lc do
+		  (let ((c1 (elt circle i))
+			(c2 (elt circle (mod (1+ i) lc))))
+		    (setf (aref trans c1) c2)))))
+      (loop for (path . cid) in pl do
+	   (let ((p1 (elt path 0))
+		 (p2 (elt path 1)))
+	     (setf (aref trans p1) p2)))
+      (make-sm states :trans trans))))
+
+(defun test-circles-paths-sm ()
+  (flet ((test (states)
+	   (let* ((trans ;;(loop repeat states collect (random states)))
+		   '(3 3 5 4 2 0))
+		  (sm (make-sm states :trans trans)))
+	     (multiple-value-bind (cl pl) (sm-circles-paths sm)
+	       (let ((sm* (circles-paths-sm cl pl)))
+		 (assert (array-= (sm-trans sm*) (sm-trans sm)) nil "(SM-TRANS SM*)=~S should be~%(SM-TRANS SM)=~S" (sm-trans sm*) (sm-trans sm)))))))
+    (test 6)))
+
 
 #|
 1. Possible nestings:
