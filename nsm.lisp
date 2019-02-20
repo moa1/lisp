@@ -161,7 +161,7 @@ This function returns the FUNCTIONS's values, iff FUNCTION returns non-NIL."
 
 (defun test-sm-path-circle ()
   (flet ((test (trans path circle)
-	   (let* ((sm (make-sm 4 :trans trans)))
+	   (let* ((sm (make-sm (length trans) :trans trans)))
 	     (multiple-value-bind (path* circle*) (sm-path-circle sm 0)
 	       (assert (equal path path*) () "PATH*=~S should be ~S for TRANS=~S" path* path trans)
 	       (assert (equal circle circle*) () "CIRCLE*=~S should be ~S for TRANS=~S" circle* circle trans))
@@ -169,65 +169,98 @@ This function returns the FUNCTIONS's values, iff FUNCTION returns non-NIL."
 	       (multiple-value-bind (path* circle*) (trace-to-path-circle trace)
 		 (assert (equal path path*) () "PATH*=~S should be ~S for TRACE=~S" path* path trace)
 		 (assert (equal circle circle*) () "CIRCLE*=~S should be ~S for TRACE=~S" circle* circle trace))))))
-    ;;      0 1 2 3 4 5 6 7 8
+    ;;      0 1 2 3
     (test '(2 2 3 3) '(0 2) '(3))
-    (test '(1 2 3 2) '(0 1) '(2 3))))
+    (test '(1 2 3 0) '() '(0 1 2 3))
+    (test '(1 2 3 1) '(0) '(1 2 3))
+    (test '(1 2 3 2) '(0 1) '(2 3))
+    (test '(1 2 3 3) '(0 1 2) '(3))))
 (test-sm-path-circle)
 
-(defun sm-circles (sm)
+(defun sm-circles-paths (sm &optional (compute-paths t))
   "The states form a GRAPH, where each node has only one outgoing edge. We start with any node and follow its outgoing edges along the path. All these nodes belong to a circle. When the next (target node of the outgoing edge) node already belongs to a circle, there are two possibilities:
 1. it belongs to the same circle: store the circle in a list, store the path in a list, and continue with the next unvisited node.
-2. it belongs to nother circle: join the two circles, store the path in a list, and continue with the next unvisited node.
-Joining of two circles is done by tracing the current path to its origin and correcting the circle identifier in the STATE-TO-ID hash-table."
+2. it belongs to another circle: join the two circles, store the path in a list, and continue with the next unvisited node.
+Joining of two circles is done by tracing the current path to its origin and correcting the circle identifier in the STATE-TO-ID hash-table.
+CIRCLE-LIST is of the format ((CIRCLE-ID1 CIRCLE-LIST1) (CIRCLE-ID2 CIRCLE-LIST2) ...) where CIRCLE-ID is a non-negative integer, and CIRCLE-LIST is a list of nodes participating in the circle.
+PATHS-lIST is of the format ((PATH-LIST1 . CIRCLE-ID1) (PATH-LIST2 . CIRCLE-ID2) ...) where PATH-LIST1 is a list of nodes that leads into CIRCLE-ID, and the last state of PATH-LIST is the first of CIRCLE-ID.
+Returns as value the CIRCLE-LIST, which contains every node and a circle identifier, and as second value, (only if COMPUTE-PATHS is non-NIL), the PATHS-LIST.
+In the two resulting lists, every STATE appears exactly once, either as head of the PATHS-LIST, or as element of CIRCLE-LIST."
   (let* ((circles-list nil)
 	 (paths-list nil)
 	 (state-to-id (make-hash-table)) ;map from state to circle identifier
+	 (state-to-path (make-hash-table)) ;map from state to path
 	 (this-circle 0) ;current circle identifier
 	 (states (make-hash-table-from-alist (loop for s below (sm-states sm) collect (cons s nil))))
 	 (state 0)
 	 (this-path nil))
     (flet ((next-path ()
-	     (prind circles-list paths-list)
+	     ;;(prind circles-list paths-list)
 	     (incf this-circle)
 	     (setf state (any-hash-table-key states)
 		   this-path nil)
 	     (unless state
-	       (return-from sm-circles (values circles-list paths-list)))))
+	       (return-from sm-circles-paths (values circles-list paths-list)))))
       (do () (nil)
 	(push state this-path)
 	(remhash state states)
 	(let* ((next (sm-next sm state))
 	       (next-id (gethash next state-to-id nil)))
-	  (prind state next next-id this-path this-circle)
+	  ;;(prind state next next-id this-path this-circle)
 	  (cond
 	    ((null next-id) ;mark STATE to belong to THIS-CIRCLE
 	     (setf (gethash state state-to-id) this-circle
 		   state next))
-	    ((= next-id this-circle) ;disect path into PATH and CIRCLE
+	    ((= next-id this-circle) ;disect trace into PATH and CIRCLE
+	     (setf (gethash state state-to-id) this-circle)
 	     (multiple-value-bind (path circle)
-		 (trace-to-path-circle (cons next this-path))
-	       (prind path circle)
-	       (push (cons (nconc path (list next)) this-circle) paths-list)
+		 (trace-to-path-circle (nreverse (cons next this-path)))
+	       (when compute-paths
+		 ;; update STATE-TO-PATH: PATH to remainder plus head of CIRCLE
+		 ;;(prind path circle)
+		 (loop for srest on path
+		    for rest on (append path (list (car circle))) do
+		      (let ((head (car rest))
+			    (tail (cdr rest)))
+			(setf (gethash head state-to-path) tail)
+			(push (cons rest next-id) paths-list))))
 	       (push (cons this-circle (list (nreverse circle))) circles-list))
 	     (next-path))
-	    (t
+	    (t ;trace leads into an already existing CIRCLE
 	     (assert (/= next-id this-circle))
-	     (loop for state in this-path do
-		  (setf (gethash state state-to-id) next-id))
-	     (push (cons (nreverse this-path) next-id) paths-list)
+	     (push next this-path)
+	     ;; append the PATH of STATE (leading to THIS-CIRCLE) to THIS-PATH
+	     (when compute-paths
+	       (let* ((rthis-path (nreverse this-path))
+		      (known-path (gethash next state-to-path))
+		      (whole-path (append rthis-path known-path)))
+		 ;; set STATE-TO-PATH to the correct value in RTHIS-PATH
+		 (loop for head in rthis-path
+		    for restw on whole-path
+		    for tail on (cdr whole-path) do
+		      (unless (gethash head state-to-path)
+			(setf (gethash head state-to-path) tail)
+			(push (cons restw next-id) paths-list)))))
 	     (next-path))))))))
 
-(defun test-sm-circles ()
+(defun test-sm-circles-paths ()
   (flet ((test (trans circles paths)
-	   (let* ((sm (make-sm 6 :trans '(4 5 2 3 0 4))))
-	     (multiple-value-bind (circles* paths*) (sm-circles sm)
-	       (assert (equal circles circles*) () "CIRCLES*=~S should be ~S for TRANS=~S~%~S~%~S" circles* circles trans circles* paths*)
-	       (assert (equal paths paths*) () "PATHS*=~S should be ~S for TRANS=~S~%~S~%~S" paths* paths trans circles* paths*)))))
+	   (let* ((sm (make-sm (length trans) :trans trans)))
+	     (multiple-value-bind (circles* paths*) (sm-circles-paths sm)
+	       (assert (equal circles circles*) () "CIRCLES*=~S~%should be ~S~%for TRANS=~S" circles* circles trans)
+	       (assert (equal paths paths*) () "PATHS*=~S~%should be ~S~%for TRANS=~S" paths* paths trans)))))
     ;;      0 1 2 3 4 5
-    (test '(4 5 2 3 0 4) '((3 (3)) (2 (2)) (0 (4 0))) '(((3) . 3) ((2) . 2) ((1 5 4) . 0) ((0) . 0)))
+    (test '(5 4 2 3 1 4) '((2 (3)) (1 (2)) (0 (1 4))) '(((5 4) . 0) ((0 5 4) . 0)))
+    (test '(0 1 3 2 3 4) '((2 (3 2)) (1 (1)) (0 (0))) '(((5 4 3) . 2) ((4 3) . 2)))
+    (test '(4 5 2 3 0 4) '((3 (3)) (2 (2)) (0 (4 0))) '(((5 4) . 0) ((1 5 4) . 0)))
     ;; TODO: More tests.
+    (test '(1 2 3 4 5 0) '((0 (5 4 3 2 1 0))) '())
+    (test '(1 2 3 4 5 1) '((0 (5 4 3 2 1))) '(((0 1) . 0)))
+    (test '(1 2 3 4 5 2) '((0 (5 4 3 2))) '(((1 2) . 0) ((0 1 2) . 0)))
     ))
-(test-sm-circles)
+(test-sm-circles-paths)
+
+;; TODO: add (DEFUN CIRCLES-PATHS-TO-SM (CL PL) "compute from the output of SM-CIRCLES the original SM." ...).
 
 #|
 1. Possible nestings:
@@ -308,7 +341,7 @@ NSM2(SMs=SM2,I=2):  O:=4
 #|
 to this end,
 probably I should first make the sex-experiment, where different SMs interpret the output of each other:
-states M1,M2, where each Mx has a low number of bits, say 4.
+(memory) states M1,M2, where each Mx has a low number of bits, say 4.
 SM1(O2=0,I1,M1):=O1
 SM2(I1=O1,M2):=O2
 SM1(I1=O2,M1):=O3
