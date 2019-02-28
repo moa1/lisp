@@ -79,6 +79,18 @@
 		(return-from array-= nil)))))
   t)
 
+(defmacro collect-array (length (i &body for-statements) aref element &optional (element-type t))
+  (let ((arraysym (gensym "ARRAY"))
+	(lengthsym (gensym "LENGTH"))
+	(element-typesym (gensym "ELEMENT-TYPE")))
+    (assert (symbolp i))
+    `(let* ((,lengthsym ,length)
+	    (,element-typesym ,element-type)
+	    (,arraysym (make-array ,lengthsym :element-type ,element-typesym)))
+       (loop for ,i from 0 below ,lengthsym ,@for-statements do
+	    (setf (aref ,arraysym ,aref) ,element))
+       ,arraysym)))
+
 ;; State Machines
 
 (defclass sm ()
@@ -446,14 +458,8 @@ SMd: 0->1, 1->3, 2->3, 3->1  (=:SMd2) (i.e. swapping of 2d with 0d)
 				(sm-path-circle sm e)
 			      (list e (+ (* (length circle) length) (length path))))))
 	 (inputs-sorted (sort inputs-count #'< :key #'cadr))
-	 (inputs-reverse (let ((array (make-array length)))
-			   (loop for s from 0 for e in inputs-sorted do
-				;;(prind s (car e))
-				(setf (aref array (car e)) s))
-			   array))
-	 (trans-ordered (loop for pair in inputs-sorted collect
-			     (let* ((next (sm-next sm (car pair))))
-			       (aref inputs-reverse next)))))
+	 (inputs-reverse (collect-array length (s for e in inputs-sorted) (car e) s))
+	 (trans-ordered (collect-array length (i for pair in inputs-sorted) i (aref inputs-reverse (sm-next sm (car pair))))))
     ;; Sort states by cumulative STATE-INPUTS, e.g. (MAKE-SM 4 :TRANS '(1 2 1 2)) should have cumulative input-weights: '(0 3 3 0), because a circle counts
     ;;(prind inputs-count inputs-sorted inputs-reverse)
     (values trans-ordered inputs-reverse)))
