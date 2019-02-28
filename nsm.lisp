@@ -194,7 +194,7 @@ This function returns the FUNCTIONS's values, iff FUNCTION returns non-NIL."
 (test-sm-path-circle)
 
 (defun sm-circles-paths (sm &optional (compute-paths t))
-  "The states form a GRAPH, where each node has only one outgoing edge. We start with any node and follow its outgoing edges along the path. All these nodes belong to a circle. When the next (target node of the outgoing edge) node already belongs to a circle, there are two possibilities:
+  "The states form a GRAPH, where each node has only one outgoing edge. We start with any node and follow its outgoing edges along the path. All these nodes belong to a circle. When the next node (target node of the outgoing edge) already belongs to a circle, there are two possibilities:
 1. it belongs to the same circle: store the circle in a list, store the path in a list, and continue with the next unvisited node.
 2. it belongs to another circle: join the two circles, store the path in a list, and continue with the next unvisited node.
 Joining of two circles is done by tracing the current path to its origin and correcting the circle identifier in the STATE-TO-ID hash-table.
@@ -240,7 +240,7 @@ In the two resulting lists, every STATE appears exactly once, either as head of 
 			    (tail (cdr rest)))
 			(setf (gethash head state-to-path) tail)
 			(push (cons rest next-id) paths-list))))
-	       (push (cons this-circle (list (nreverse circle))) circles-list))
+	       (push (cons this-circle (list circle)) circles-list))
 	     (next-path))
 	    (t ;trace leads into an already existing CIRCLE
 	     (assert (/= next-id this-circle))
@@ -266,13 +266,13 @@ In the two resulting lists, every STATE appears exactly once, either as head of 
 	       (assert (equal circles circles*) () "CIRCLES*=~S~%should be ~S~%for TRANS=~S" circles* circles trans)
 	       (assert (equal paths paths*) () "PATHS*=~S~%should be ~S~%for TRANS=~S" paths* paths trans)))))
     ;;      0 1 2 3 4 5
-    (test '(5 4 2 3 1 4) '((2 (3)) (1 (2)) (0 (1 4))) '(((5 4) . 0) ((0 5 4) . 0)))
-    (test '(0 1 3 2 3 4) '((2 (3 2)) (1 (1)) (0 (0))) '(((5 4 3) . 2) ((4 3) . 2)))
-    (test '(4 5 2 3 0 4) '((3 (3)) (2 (2)) (0 (4 0))) '(((5 4) . 0) ((1 5 4) . 0)))
+    (test '(5 4 2 3 1 4) '((2 (3)) (1 (2)) (0 (4 1))) '(((5 4) . 0) ((0 5 4) . 0)))
+    (test '(0 1 3 2 3 4) '((2 (2 3)) (1 (1)) (0 (0))) '(((5 4 3) . 2) ((4 3) . 2)))
+    (test '(4 5 2 3 0 4) '((3 (3)) (2 (2)) (0 (0 4))) '(((5 4) . 0) ((1 5 4) . 0)))
     ;; TODO: More tests.
-    (test '(1 2 3 4 5 0) '((0 (5 4 3 2 1 0))) '())
-    (test '(1 2 3 4 5 1) '((0 (5 4 3 2 1))) '(((0 1) . 0)))
-    (test '(1 2 3 4 5 2) '((0 (5 4 3 2))) '(((1 2) . 0) ((0 1 2) . 0)))
+    (test '(1 2 3 4 5 0) '((0 (0 1 2 3 4 5))) '())
+    (test '(1 2 3 4 5 1) '((0 (1 2 3 4 5))) '(((0 1) . 0)))
+    (test '(1 2 3 4 5 2) '((0 (2 3 4 5))) '(((1 2) . 0) ((0 1 2) . 0)))
     ))
 (test-sm-circles-paths)
 
@@ -298,15 +298,14 @@ In the two resulting lists, every STATE appears exactly once, either as head of 
 	     (setf (aref trans p1) p2)))
       (make-sm states :trans trans))))
 
-(defun test-circles-paths-sm ()
+(defun test-circles-paths-sm (&optional (tests 1000))
   (flet ((test (states)
-	   (let* ((trans ;;(loop repeat states collect (random states)))
-		   '(3 3 5 4 2 0))
+	   (let* ((trans (loop repeat states collect (random states)))
 		  (sm (make-sm states :trans trans)))
 	     (multiple-value-bind (cl pl) (sm-circles-paths sm)
 	       (let ((sm* (circles-paths-sm cl pl)))
 		 (assert (array-= (sm-trans sm*) (sm-trans sm)) nil "(SM-TRANS SM*)=~S should be~%(SM-TRANS SM)=~S" (sm-trans sm*) (sm-trans sm)))))))
-    (test 6)))
+    (loop repeat tests do (test 10))))
 
 
 #|
