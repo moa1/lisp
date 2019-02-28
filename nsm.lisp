@@ -446,7 +446,7 @@ SMd: 0->1, 1->3, 2->3, 3->1  (=:SMd2) (i.e. swapping of 2d with 0d)
 |#
 
 (defun sm-trans-norm (sm)
-  (let* ((length (length (sm-trans sm)))
+  (let* ((length (array-dimension (sm-trans sm) 0))
 	 (inputs (let ((inputs (make-array length :element-type 'list :initial-element nil)))
 		   (loop for s across (sm-trans sm) for e from 0 do
 			(push e (aref inputs s)))
@@ -456,10 +456,21 @@ SMd: 0->1, 1->3, 2->3, 3->1  (=:SMd2) (i.e. swapping of 2d with 0d)
 			  collect
 			    (multiple-value-bind (path circle)
 				(sm-path-circle sm e)
-			      (list e (+ (* (length circle) length) (length path))))))
-	 (inputs-sorted (sort inputs-count #'< :key #'cadr))
+			      (prind path circle)
+			      (list e
+				    (length circle)
+				    (or (position e circle) (position e path)) ;doesn't work yet
+				    (length path)))))
+	 (inputs-sorted (sort inputs-count
+			      (lambda (a b)
+				(let ((r nil))
+				  (loop for x in a for y in b do (unless (eql x y)
+								   (setf r (< x y))))
+				  r))
+			      :key #'cdr))
 	 (inputs-reverse (collect-array length (s for e in inputs-sorted) (car e) s))
 	 (trans-ordered (collect-array length (i for pair in inputs-sorted) i (aref inputs-reverse (sm-next sm (car pair))))))
+    (prind inputs-count)
     ;; Sort states by cumulative STATE-INPUTS, e.g. (MAKE-SM 4 :TRANS '(1 2 1 2)) should have cumulative input-weights: '(0 3 3 0), because a circle counts
     ;;(prind inputs-count inputs-sorted inputs-reverse)
     (values trans-ordered inputs-reverse)))
@@ -467,10 +478,14 @@ SMd: 0->1, 1->3, 2->3, 3->1  (=:SMd2) (i.e. swapping of 2d with 0d)
 (defun test-sm-trans-norm ()
   (let* (                       ;0 1 2 3
 	 (sm (make-sm 4 :trans '(1 2 1 2))))
-    (assert (equal (sm-trans-norm sm) '(1 0 0 1))))
+    (assert (array-= (sm-trans-norm sm) #(1 0 0 1))))
   (let* (                       ;0 1 2 3 4 5
 	 (sm (make-sm 6 :trans '(1 2 1 4 5 4))) )
-    (assert (equal (sm-trans-norm sm) '(1 0 3 2 0 2)))))
+    (assert (array-= (sm-trans-norm sm) #(1 0 3 2 0 2))))
+  ;;(let* (                       ;0 1 2 3 4 5
+  ;;       (sm (make-sm 6 :trans '(3 3 5 4 2 0))))
+  ;;  (assert (equal (sm-trans-norm sm) ' ;this is a circle, with one element outside the circle. TODO: Make it so that the element goes into the circle at the top (or bottom) of the circle-list, as reported by #'SM-CIRCLES-PATHS.
+  )
 (test-sm-trans-norm)
 
 #|
@@ -484,4 +499,21 @@ How to input/output:
 
 Example:
 NSM with 4 SMs, and 4 elements in the one-dimensional array. Let's say the input is 3,2,3,0. Then SM1 has as input state 3, SM2 2, SM3 3, SM4 0. Let's say SM1 goes into output state 0, SM2 3, SM3 3, SM4 1. Then the output of the NSM is 0,3,3,1. As easy as that. How to do while loops is left as an excercise for the Genetic Algorithm, that should evolve suitable SMs, and NSMs. I don't have a clue how to do loops, BUT, are they really necessary? Start with the basics. And the basics are NESTED STATE MACHINES.
+|#
+
+#|
+How to find out how to nest SMs:
+just make it so to be able to write simple programs with all neccesary ingredients for turing-completeness: for example, provide the state machines
+IF: (a,b,c)->(if (== a 0) (list c) (list b))
+SWAP: (a,b)->(list b a)
+NOT: (a)->(if (== a 0) (1) (0))
+MINUS: (a,b)->(list (- a b))
+PLUS: (a,b)->(list (+ a b))
+=: (a,b)->(== a b)
+etc...
+
+The nesting mechanism must provide ways to combine the outputs of state machines, so that e.g. the following nested state machines can be put together
+(IF (= INPUT1 23) 1 INPUT2)
+(SWAP (+ INPUT1 2) INPUT2)
+or something like that.
 |#
