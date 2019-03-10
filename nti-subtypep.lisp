@@ -452,41 +452,44 @@ Return the type relations of the supertypes."
 		  (format t "(IS-SUBTYPEP '~A '~A)=~A but (SUBTYPEP '~A '~A)=~A~%" t1 t2 (is-subtypep t1 t2 typehash) t1 t2 (subtypep t1 t2)))))))
 ;;(test1)
 
-#|
-NIMBLE-TYPE-INFERENCER> (SUBTYPES-OF-ALL +builtin-types+ :PRINT T)
-(ARRAY SINGLE-FLOAT) is a supertype of (NIL)
-(ARRAY FIXNUM) is a supertype of (NIL)
-ARRAY is a supertype of (NIL (ARRAY FIXNUM) (ARRAY SINGLE-FLOAT))
-V4S-FLOAT is a supertype of (NIL)
-SYMBOL is a supertype of (NIL NULL BOOLEAN)
-(AND UNSIGNED-BYTE FIXNUM) is a supertype of (NIL)
-SINGLE-FLOAT is a supertype of (NIL)
-UNSIGNED-BYTE is a supertype of (NIL (AND UNSIGNED-BYTE FIXNUM))
-FIXNUM is a supertype of (NIL (AND UNSIGNED-BYTE FIXNUM))
-INTEGER is a supertype of (NIL FIXNUM UNSIGNED-BYTE (AND UNSIGNED-BYTE FIXNUM))
-NUMBER is a supertype of (NIL INTEGER FIXNUM UNSIGNED-BYTE SINGLE-FLOAT
-                          (AND UNSIGNED-BYTE FIXNUM))
-LIST is a supertype of (NIL NULL)
-BOOLEAN is a supertype of (NIL NULL)
-NULL is a supertype of (NIL)
-T is a supertype of (NIL NULL BOOLEAN LIST NUMBER INTEGER FIXNUM UNSIGNED-BYTE
-                     SINGLE-FLOAT (AND UNSIGNED-BYTE FIXNUM) SYMBOL V4S-FLOAT
-                     ARRAY (ARRAY FIXNUM) (ARRAY SINGLE-FLOAT))
-NIL is a supertype of NIL
+;;(defun type-to-bittype ()
 
-implies the following graph:
+;; NIMBLE-TYPE-INFERENCER> (SUBTYPES-OF-ALL +builtin-types+ :PRINT T)
+;; (ARRAY SINGLE-FLOAT) is a supertype of (NIL)
+;; (ARRAY FIXNUM) is a supertype of (NIL)
+;; ARRAY is a supertype of (NIL (ARRAY FIXNUM) (ARRAY SINGLE-FLOAT))
+;; V4S-FLOAT is a supertype of (NIL)
+;; SYMBOL is a supertype of (NIL NULL BOOLEAN)
+;; (AND UNSIGNED-BYTE FIXNUM) is a supertype of (NIL)
+;; SINGLE-FLOAT is a supertype of (NIL)
+;; UNSIGNED-BYTE is a supertype of (NIL (AND UNSIGNED-BYTE FIXNUM))
+;; FIXNUM is a supertype of (NIL (AND UNSIGNED-BYTE FIXNUM))
+;; INTEGER is a supertype of (NIL FIXNUM UNSIGNED-BYTE (AND UNSIGNED-BYTE FIXNUM))
+;; NUMBER is a supertype of (NIL INTEGER FIXNUM UNSIGNED-BYTE SINGLE-FLOAT
+;;                           (AND UNSIGNED-BYTE FIXNUM))
+;; LIST is a supertype of (NIL NULL)
+;; BOOLEAN is a supertype of (NIL NULL)
+;; NULL is a supertype of (NIL)
+;; T is a supertype of (NIL NULL BOOLEAN LIST NUMBER INTEGER FIXNUM UNSIGNED-BYTE
+;;                      SINGLE-FLOAT (AND UNSIGNED-BYTE FIXNUM) SYMBOL V4S-FLOAT
+;;                      ARRAY (ARRAY FIXNUM) (ARRAY SINGLE-FLOAT))
+;; NIL is a supertype of NIL
+;;
+;; implies the following graph:
+;;
+;;                            T
+;;                    _______/|\___________________________________________
+;;                   /       /               \                     | \     \
+;;               NUMBER  SYMBOL            ARRAY                   |  \  V4S-FLOAT
+;;             _/     \     |              /   |                   |  |    |
+;; SINGLE-FLOAT     INTEGER \  (ARRAY FIXNUM) (ARRAY SINGLE-FLOAT) |  |    |
+;;  |              /     \   \             |   |                   |  |    |
+;;  | UNSIGNED-BYTE  FIXNUM   \__         /    |             BOOLEAN  LIST |
+;;  |             \ /            \       /    /                    | /    /
+;;  |  (AND UNSIGNED-BYTE FIXNUM) \     /    /                    NULL   /
+;;   \             |              |    /    /                    /      /
+;;    \____________\_____________ | __/____/____________________/______/
+;;                               NIL
 
-                           T
-                   _______/|\___________________________________________
-                  /       /               \                     | \     \
-              NUMBER  SYMBOL            ARRAY                   |  \  V4S-FLOAT
-            _/     \     |              /   |                   |  |    |
-SINGLE-FLOAT     INTEGER \  (ARRAY FIXNUM) (ARRAY SINGLE-FLOAT) |  |    |
- |              /     \   \             |   |                   |  |    |
- | UNSIGNED-BYTE  FIXNUM   \__         /    |             BOOLEAN  LIST |
- |             \ /            \       /    /                    | /    /
- |  (AND UNSIGNED-BYTE FIXNUM) \     /    /                    NULL   /
-  \             |              |    /    /                    /      /
-   \____________\_____________ | __/____/____________________/______/
-                              NIL
-|#
+
+;; "4.9. Determining the Type of an Object" in "Common Lisp the Language, 2nd Edition" says that "TYPE-OF never returns T and never uses a SATISFIES, AND, OR, NOT, or VALUES type specifier in its result." This means that an implementation always has a specific elementary type for a lisp object, and not, for example, a (AND UNSIGNED-BYTE FIXNUM), which could be an elementary object of type BIT, or non-negative FIXNUM.
