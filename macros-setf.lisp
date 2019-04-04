@@ -14,6 +14,119 @@
 		       (princ " ")))))
        (format t "~%"))))
 
+;;; functions from ALEXANDRIA
+
+;; taken from quicklisp's ALEXANDRIA package.
+(defun parse-body (body &key documentation whole)
+  "Parses BODY into (values remaining-forms declarations doc-string).
+Documentation strings are recognized only if DOCUMENTATION is true.
+Syntax errors in body are signalled and WHOLE is used in the signal
+arguments when given."
+  (let ((doc nil)
+        (decls nil)
+        (current nil))
+    (tagbody
+     :declarations
+       (setf current (car body))
+       (when (and documentation (stringp current) (cdr body))
+         (if doc
+             (error "Too many documentation strings in ~S." (or whole body))
+             (setf doc (pop body)))
+         (go :declarations))
+       (when (and (listp current) (eql (first current) 'declare))
+         (push (pop body) decls)
+         (go :declarations)))
+    (values body (nreverse decls) doc)))
+
+;;; misc functions
+
+(defun last1 (list)
+  (car (last list)))
+
+(defun (setf last1) (list new)
+  (setf (car (last list)) new))
+
+;;; LLET
+
+;; TODO: support all features of quicklisp packages:
+;;cletris-20151031-git                formlets-20161204-git         map-bind-20120811-git
+;;cl-singleton-mixin-20150505-git     let-over-lambda-20150923-git  metabang-bind-20171130-git
+;;cl-string-complete-20120107-hg      let-plus-20171130-git         shuffletron-20150608-git
+;;enhanced-multiple-value-bind-1.0.1  letrec-20131111-hg            x.let-star-20150709-git
+
+(defparameter *llet-binders* (make-hash-table) "The defined LLET binders.")
+
+(defmacro define-llet-binder (keyword lambda-list &body body)
+  (check-type keyword keyword)
+  `(setf (gethash ,keyword *llet-binders*)
+	 (lambda ,lambda-list ,@body)))
+
+(define-llet-binder :gensym (name)
+  (check-type name symbol)
+  `(,name (gensym ,(format nil "~S" name))))
+
+(defun expand-llet (bindings body)
+  (check-type bindings list)
+  (labels ((bindings (binding rest-bindings forms)
+	     (check-type binding list)
+	     (let* ((length (length binding))
+		    (first (car binding))
+		    (rest (cdr binding))
+		    (result-form
+		     (cond
+		       ((null binding)
+			forms)
+		       ((listp first)
+			(assert (null (cdr binding)) () "Not a single form: ~S" binding)
+			(cons (car binding) forms))
+		       ((keywordp first)
+			(let ((binder-fn (gethash first *llet-binders*)))
+			  (assert binder-fn () "Unknown LLET binder ~S" first)
+			  `((let (,(apply binder-fn rest)) ,@forms))))
+		       ((= length 2)
+			`((let ((,first ,@rest))
+			    ,@forms)))
+		       (t
+			(mapc (lambda (var) (check-type var symbol)) (butlast binding))
+			`((multiple-value-bind (,@(butlast binding)) ,(last1 binding)
+			    ,@forms))))))
+	       (if (null binding)
+		   result-form
+		   (bindings (car rest-bindings) (cdr rest-bindings) result-form)))))
+    (let ((reverse-bindings (reverse bindings)))
+      (bindings (car reverse-bindings) (cdr reverse-bindings) body))))
+
+(defmacro llet (bindings &body body)
+  "LLET is like LET*, but besides the normal (NAME VALUE)-bindings, it can handle multiple-value-bindings (VARS... FORM), intermediate expressions that are not bound to a variable (EXPRESSION), and user-definable llet-macros which expand to a let-binding.
+An example is:
+(llet ((normal-assignment 'as-in-LET-or-LET*)
+       (whole remainder (truncate 10 7)) ;multiple-value-bind
+       ((format t \"This is an intermediate form without assignment\"))
+       (:gensym name) ;this can be defined like (DEFINE-LLET-BINDER :GENSYM (NAME) `(,NAME (GENSYM)))
+       )
+  (values normal-assignment whole remainder name))
+== 'as-in-LET-or-LET* 1 3 #:NAME505."
+  (let ((forms (expand-llet bindings body)))
+    (if (null (cdr forms))
+	(car forms)
+	forms)))
+
+(defun test-llet ()
+  (let ((x 0))
+    (llet ((a (incf x))
+	   (i r (truncate (+ x 9) 7))
+	   (b (incf x))
+	   ((setf x 0))
+	   (c x)
+	   (:gensym name))
+      (assert (= a 1))
+      (assert (and (= i 1) (= r 3)))
+      (assert (= b 2))
+      (assert (= c 0))
+      (check-type name symbol))))
+
+;;;
+
 #|
 ;; trying to get the inner representation after the reader of SBCL parsed a string...
 (defun showexpr (expr &optional (sep " "))
@@ -53,16 +166,40 @@
 (defun macro-function-eval (fun &rest args)
   (apply fun args))
 
-(defstruct setf-expander
-  access-fn
-  lambda-list
-  temporary
-  value
-  store
-  storing
-  accessing)
+(defparameter *setf-expander-functions* (make-hash-table) "The defined setf-expander functions.")
 
-;;(defmacro my-define-setf-expander (access-fn lambda-list)
+(defmacro my-define-setf-expander (access-fn lambda-list &body body)
+  (check-type access-fn symbol)
+  `(eval-when (:compile-toplevel :load-toplevel :execute)
+     (setf (gethash ',access-fn *setf-expander-functions*)
+	   (lambda ,lambda-list (block ,access-fn ,@body)))
+     ',access-fn))
+
+(my-define-setf-expander car (list)
+  (llet ((:gensym slist)
+	 (:gensym store))
+    (values `(,slist)
+	    `(,list)
+	    `(store)
+	    `(rplaca ,slist ,store)
+	    `(car ,slist))))
+
+(defun my-get-setf-expansion (form &optional environment)
+  (cond
+    ((atom form)
+     (llet ((:gensym store))
+       (values nil
+	       nil
+	       `(,store)
+	       `(setq ,form ,store)
+	       form)))
+    (t
+     (let ((access-fn (car form)))
+       (check-type access-fn symbol)
+       (let ((expander (gethash access-fn *setf-expander-functions*)))
+	 (assert (not (null expander)) () "Undefined setf-expansion for ~S" form)
+	 ;; TODO: FIXME: We have to pass ENVIRONMENT iff ACCESS-FN accepts it!
+	 (apply access-fn (cdr form)))))))
 
 (define-modify-macro nreversef () nreverse "Reverse SEQUENCE in-place.")
 
@@ -110,4 +247,4 @@
 (defmacro my-setf (&rest pairs)
   (setf-expand pairs nil nil))
 
-;; TODO: macros SHIFTF ROTATEF
+;; TODO: macros SHIFTF ROTATEF INCF DECF DEFINE-MODIFY-MACRO DEFSETF DEFINE-SETF-METHOD
