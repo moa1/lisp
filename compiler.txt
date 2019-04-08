@@ -1,0 +1,26 @@
+Type System
+===========
+
+Type checking
+-------------
+
+A Type should have a routine that automatically checks, for every use of a variable of that type, whether a user-defined property holds. For this, a parsed AST is passed to the checking routine, and a pointer to the currently to be checked used variable. Thus, a type can be more restrictive and allowing than currently existing type systems. In addition, the type checks can be done at COMPILE-TIME, instead of RUN-TIME.
+For example:
+(DEFTYPE BLA `integer)
+(DEFTYPE-INVARIANT (AST)
+  (WHEN (EQUAL (PREDICTED-TYPE (CALCULATION-PREVIOUS-ELEMENT AST)) 'STRING)
+    (ERROR-TYPE "Type BLA cannot be used in a calculation with strings")))
+
+This type system is neither static nor dynamic.
+
+Type conversion
+---------------
+
+Furthermore, the type system should facilitate type conversion. For this, methods should be defineable that emit code depending on the predicted type of the variable to be converted and the context.
+For example:
+(DEFTYPE BLA `integer)
+(DEFMETHOD ((NUMBER BLA) CONTEXT)
+  (WHEN (EQUAL (PREDICTED-TYPE CONTEXT) 'STRING)
+    `(FORMAT NIL "~S" NUMBER)))
+In this example, usages of variables of type BLA are automatically converted to strings in a string context.
+
