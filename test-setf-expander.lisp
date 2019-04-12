@@ -188,3 +188,38 @@
       (let ((cons (cons 1 2)))
 	(setf (lastguy cons) 5) ;CLHS on MACROLET says "Within the body of macrolet, global setf expander definitions of the names defined by the macrolet do not apply; rather, setf expands the macro form and recursively process the resulting form.", thus (LASTGUY CONS) is expanded to CONS2.
 	(values cons cons2))))) ;returns (VALUES (1 . 2) 5)
+
+#|
+(defun firsttwo (list)
+  (values (car list) (cadr list)))
+
+(defun listmatrix (list i j)
+  (nth j (nth i list)))
+
+(define-setf-expander listmatrix (list i j &environment env)
+  (multiple-value-bind (temps values stores setter getter)
+      (get-setf-expansion list env)
+    (declare (ignore stores setter))
+    (let ((store (gensym "STORE")))
+      (values temps
+	      values
+	      `(,store)
+	      `(setf (nth ,j (nth ,i ,getter)) ,store)
+	      `(listmatrix ,list ,i ,j)))))
+
+(defun setf-all-form (places value env)
+  (multiple-value-bind (vars vals stores setter getter)
+      (get-setf-expansion places env)
+    (prind stores)
+    `(let ((,stores ,value)
+	   ,@(mapcar #'list vars vals))
+       ,setter)))
+
+(defmacro setf-all (places value &environment env)
+  (setf-all-form places value env))
+|#
+
+(defun setf-values ()
+  (let (i r)
+    (setf (values i r) (truncate 10 7))
+    (values i r)))
