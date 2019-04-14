@@ -511,3 +511,40 @@ In the two resulting lists, every STATE appears exactly once, either as head of 
 ;; (SWAP (+ INPUT1 2) INPUT2)
 ;; or something like that.
 
+;; How far to explore INFINITE CHAOS STRUCTURES.
+;;
+;; Let's say there are 2 variables (A B), each with 2 possible states (0 or 1).
+;; And there are 2 (possibly nested) state machines:
+;; The first machine does this: (A,B)= (0,x) -> (1,x); (A,B)= (1,x) -> (0,x). I.e. A is flipped between 0 and 1, irrespective of the value of B.
+;; The second machine does this: (A,B)= (a,b) -> ((a*2+b+1)&2,(a*2+b+1)&1). I.e. A and B are regarded as a 2-bit number, which is counted upwards.
+;;
+;; The starting state of the 2 variables (A,B)=(0,0). What happens, when we apply machines 1 and 2 alternatingly? Which states of A and B can we reach? Let's see:
+;; step stateA,B machine comment
+;; 1 0,0 1 (start)
+;; 2 1,0 2
+;; 3 1,1 1
+;; 4 0,1 2
+;; 5 1,0 1
+;; 6 0,0 2
+;; 7 0,1 1
+;; 8 1,1 2
+;; 9 0,0 1 (circle to start)
+;;
+;; Now that we have determined which states we can reach, we can do one of the following:
+;; 1. start from a different starting state: assign A and B another value, or use a different ordering of applying the machines. For example, use the machines in one of the following (circular) orders: 1,... or 2,... or 1,1,... or 1,2,... or 2,1,... or 2,2,... or 1,1,1,... or 1,1,2,... or 1,2,1 or 1,2,2,... or 2,1,1,... or 2,1,2,... or 2,2,1,... or 2,2,2,... etc. Mind that 1,1,1,... and 1,1,... are equivalent to 1,... and 1,2,1,2,... is equivalent to 1,2,... .
+;; 2. add a variable. For example, add variable C with 2 states.
+;; 3. add a state to a variable. For example, let A have 3 states.
+;; 4. alter an existing state machine. For example, machine 1 could be altered that it doesn't flip A, but flips B. Or only flip A if B is 1. Etc... In summary, try all possible state machines for machine 1.
+;; 5. add a (nested?) state machine. For example, machine 3 could swap A and B: (A,B)= (a,b) -> (b,a).
+;; Different combinations of starting state, variables, states of variables, (nested?) state machines are called "configurations".
+;;
+;; As you will have anticipated, there are pretty many possible reachable states soon. We do not want to explore too many similar state sequences.
+;;
+;; We could define a pairwise distance between two state sequences: For example, use the manhattan distance:
+;; d_state( (A1,B1), (A2,B2) ) = d_state(S1, S2)= |A1-A2| + |B1-B2|, where Ax is the state of variable A in configuration 1, and Sx are different states.
+;; Let the sequence of states of a configuration Cx be called Qx = ( (Ax1,Bx1), (Ax2,Bx2), (Ax3,Bx3), (Ax4,Bx4), ...), where A1y is the state of variable A at step y when using configuration x.
+;; d_sequence( Q1, Q2 ) = d_sequence( ((A11,B11),(A12,B12),(A13,B13),...), ((A21,B21),(A22,B22),(A23,B23),...) ) = d_state( (A11,B11), (A21,B21) ) + d_state( (A12,B12), (A22,B22) ) + d_state( (A13,B13), (A23,B23) ) + ... .
+;;
+;; Then start with, let's say 3 different configurations: C1, C2, C3. Evaluate all configurations for 10 steps. If a sequence Qx of a configuration Cx is too similar to another sequence Qy, then do not explore one of the configurations further. Instead, add another configuration Cz, which is created from Cy by modifying it. (I.e. modify Cy's starting state, variables, states of variables, or (nested?) state machines and call it Cz.)
+;;
+;; I have the following image in my mind: Let's call each of the defining components of a configuration C, that is, starting state, variables, states of variables, and (nested?) state machines, a "dimension". Then we could visualize the exploration of the universe by running several configurations by drawing a line between successive steps of a configuration. What happens when you run the configurations for a while is that there are "worms" that squirm through the space of possible dimension states. When a worm (i.e. a configuration) follows another worm (i.e. another configuration) for too long, then it gets replaced by another configuration by altering the replaced configuration slightly. The event "configuration x follows configurtion y for too long" takes place if d_sequence(Qx,Qy) < threshold.
