@@ -1,4 +1,5 @@
-;; The 5 fields of #'GET-SETF-EXPANSION are necessary to be able to implement PSETF. See "DEFINE-SETF-EXPANDER LASTGUY-example" below for a rationale of the 5th field, GETTER.
+;; The 5 fields of #'GET-SETF-EXPANSION are necessary to be able to implement PSETF. See "DEFINE-SETF-EXPANDER LASTGUY-example" below for a rationale of the 5th field, GETTER. Another example where it's needed is (SETF LDB), see CLHS 5.1.1.2.1 Examples of Setf Expansions, and Macro DEFINE-SETF-EXPANDER.
+
 ;; DEFINE-SETF-EXPANDER is the more general form of DEFSETF.
 
 (defmacro prind (&rest args)
@@ -89,6 +90,21 @@
 (defun lastguy (x) (car (last x)))
 
 ;; The DEFINE-SETF-EXPANDER LASTGUY-example demonstrates why the fifth field, GETTER, is required in #'GET-SETF-EXPANSION and #'DEFINE-SETF-EXPANDER.
+;; (Note that it is impossible to define (SETF LDB) using DEFSETF, because the place, i.e. INTEGER in the case of LDB, is bound by DEFSETF to a local variable:
+;; CL-USER> (defsetf ldb1 (bytespec integer) (new-value)
+;; 	   (let ((int (gensym "INT")))
+;; 	     (prind int integer)
+;; 	     `(let ((,int ,integer))
+;; 		(prind ,int ,new-value ,bytespec)
+;; 		(setf ,integer (dpb ,new-value ,bytespec ,int)))))
+;; LDB1
+;; CL-USER> (let ((a 127))
+;; 	   (setf (ldb1 (byte 2 1) a) 0)
+;; 	   a)
+;; INT:#:INT0 INTEGER:#:INTEGER ;WRONG: this should be INTEGER:A (but that's the way DEFSETF is defined, see CLHS Macro DEFSETF: "During the evaluation of the forms, the variables in the lambda-list and [...] are bound to names of temporary variables")
+;; INT0:127 NEW1:0 (BYTE 2 1):(2 . 1)
+;; 127) ;;WRONG: this should be 121
+
 (define-setf-expander lastguy (x &environment env)
   "Set the last element in a list to the given value."
   (multiple-value-bind (dummies vals newval setter getter)
