@@ -79,11 +79,13 @@
 
 (defmacro my-define-setf-expander (access-fn lambda-list &body body)
   "DEFINE-SETF-EXPANDER"
-  (check-type access-fn symbol)
-  (let ((has-environment-arg (find '&environment lambda-list)))
+  (let* ((has-environment-arg (find '&environment lambda-list))
+	 (is-function (and (consp access-fn) (eql (car access-fn) 'function) (typep (cadr access-fn) 'symbol) (null (cddr access-fn))))
+	 (access-fn-symbol (if is-function (cadr access-fn) access-fn)))
+    (assert (or (typep access-fn 'symbol) is-function) () "ACCESS-FN must be a function, but is ~S" access-fn)
     `(eval-when (:compile-toplevel :load-toplevel :execute)
        (setf (gethash ',access-fn *setf-expander-functions*)
-	     (cons (lambda ,lambda-list (block ,access-fn ,@body))
+	     (cons (lambda ,lambda-list (block ,access-fn-symbol ,@body))
 		   ,has-environment-arg))
        ',access-fn)))
 
@@ -227,7 +229,29 @@ Signals a PROGRAM-ERROR if the lambda-list is malformed."
 (defmacro my-defsetf (access-fn &body rest)
   "Long and short forms of #'DEFSETF."
   (cond
-    ((listp (car rest)) ;long form
+    ((let ((update-fn (car rest))) ;short form
+       (and (consp update-fn) (find (car update-fn) '(function lambda))))
+     ;; CLHS: DEFSETF ACCESS-FN UPDATE-FN [DOCUMENTATION]
+     ;; It doesn't require looking up the signature of ACCESS-FN, to know the function arguments, since I just can insert the NEW-VALUE and the end of the required arguments (since the short form cannot allow &OPTIONAL arguments to ACCESS-FN, since otherwise there's no way to know whether an optional argument is the NEW-VALUE or not.
+     (let ((update-fn (car rest)))
+       `(my-define-setf-expander ,access-fn (&rest arguments)
+	  (alexandria:with-gensyms (arguments-local store modify-args!)
+	    (values `(,arguments-local)
+		    `(,arguments)
+		    `(,store)
+		    `(flet ((,modify-args! (args)
+			      (let ((first-keyword (member-if #'keywordp args)))
+				(if (null first-keyword)
+				    (append args (list ,store))
+				    (progn
+				      (rplacd first-keyword (cons (car first-keyword) (cdr first-keyword)))
+				      (rplaca first-keyword ,store)
+				      args)))))
+		       (setf ,arguments-local (,modify-args! ,arguments-local))
+		       ,(list 'apply ,update-fn arguments-local))
+		    (list 'apply ,access-fn arguments-local))))))
+    (t ;long form
+     ;; CLHS: DEFSETF ACCESS-FN LAMBDA-LIST (STORE-VARIABLE*) [[DECLARATION* | DOCUMENTATION]] FORM*
      (assert (>= (length rest) 2) () "The long form of #'DEFSETF has at least the three arguments~%(ACCESS-FN LAMBDA-LIST (STORE-VARIABLE*), but has only ~S~%" (cons access-fn rest))
      (let ((lambda-list (car rest))
 	   (store-vars (cadr rest))
@@ -265,9 +289,7 @@ Signals a PROGRAM-ERROR if the lambda-list is malformed."
 				       (append required-local
 					       optional-local
 					       (when keyp `(&keys ,@(loop for ((kn n) &rest r) in keys-local collect `(kn n))))
-					       (when allow-other-keys `(allow-other-keys)))))))))))))
-    (t ;short form
-     'bla)))
+					       (when allow-other-keys `(allow-other-keys)))))))))))))))
 
 (my-defsetf car (list) (store)
   `(progn (rplaca ,list ,store) ,store))
@@ -365,4 +387,4 @@ Signals a PROGRAM-ERROR if the lambda-list is malformed."
   "SETF"
   (setf-expand pairs nil nil))
 
-;; TODO: macros SHIFTF ROTATEF INCF DECF DEFINE-MODIFY-MACRO DEFSETF DEFINE-SETF-METHOD
+;; TODO: macros SHIFTF ROTATEF INCF DECF DEFINE-MODIFY-MACRO DEFINE-SETF-METHOD
