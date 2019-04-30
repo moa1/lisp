@@ -387,4 +387,28 @@ Signals a PROGRAM-ERROR if the lambda-list is malformed."
   "SETF"
   (setf-expand pairs nil nil))
 
-;; TODO: macros SHIFTF ROTATEF INCF DECF DEFINE-MODIFY-MACRO DEFINE-SETF-METHOD
+(defmacro my-shiftf (&rest args)
+  "SHIFTF"
+  (let ((places (butlast args))
+	(newvalue (last1 args)))
+    (let ((vars (alexandria:make-gensym-list (length places) "VALUE")))
+      `(let (,@(mapcar (lambda (var place) `(,var ,place)) vars places))
+	 ,@(mapcar (lambda (place var) `(setf ,place ,var)) places (append (cdr vars) (list newvalue)))
+	 ,(car vars)))))
+
+(defmacro my-rotatef (&rest places)
+  "ROTATEF"
+  (let ((vars (alexandria:make-gensym-list (length places) "VALUE")))
+    `(let (,@(mapcar (lambda (var place) `(,var ,place)) vars places))
+       ,@(mapcar (lambda (place var) `(setf ,place ,var)) places (append (cdr vars) (list (car vars))))
+       nil)))
+
+(defmacro my-incf (place &optional (delta 1))
+  "INCF"
+  `(setf ,place (+ ,place ,delta)))
+
+(defmacro my-decf (place &optional (delta 1))
+  "DECF"
+  `(setf ,place (- ,place ,delta)))
+
+;; TODO: macros DEFINE-MODIFY-MACRO DEFINE-SETF-METHOD
